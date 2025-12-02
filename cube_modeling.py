@@ -1,8 +1,68 @@
 #! python 3
+import Rhino
+import scriptcontext as sc
 import rhinoscriptsyntax as rs
 import json
 import os
 import numpy as np
+
+def create_cube_faces():
+    """
+    Create a cube from -CUBE_LENGTH to +CUBE_LENGTH in all axes,
+    explode it into 6 surfaces, and return a dict mapping
+    { "+x": id, "-x": id, "+y": id, "-y": id, "+z": id, "-z": id }.
+    All returned ids are surfaces (Brep).
+    """
+    half = CUBE_LENGTH / 2
+
+    corners = [
+        (-half, -half, -half),
+        ( half, -half, -half),
+        ( half,  half, -half),
+        (-half,  half, -half),
+        (-half, -half,  half),
+        ( half, -half,  half),
+        ( half,  half,  half),
+        (-half,  half,  half),
+    ]
+
+    box_id = rs.AddBox(corners)  # polysurface (type 32)
+    srfs = rs.ExplodePolysurfaces(box_id, delete_input=True)  # 6 surfaces (type 16)
+
+    faces = {}
+    tol = 1e-3
+
+    for s in srfs:
+        bbox = rs.BoundingBox(s)
+        if not bbox:
+            continue
+        cx = sum(p[0] for p in bbox) / 8.0
+        cy = sum(p[1] for p in bbox) / 8.0
+        cz = sum(p[2] for p in bbox) / 8.0
+
+        if abs(cx - half) < tol:
+            faces["+x"] = s
+        elif abs(cx + half) < tol:
+            faces["-x"] = s
+        elif abs(cy - half) < tol:
+            faces["+y"] = s
+        elif abs(cy + half) < tol:
+            faces["-y"] = s
+        elif abs(cz - half) < tol:
+            faces["+z"] = s
+        elif abs(cz + half) < tol:
+            faces["-z"] = s
+
+    # sanity check
+    for name, gid in faces.items():
+        print("Face", name,
+              "id:", gid,
+              "exists:", rs.IsObject(gid),
+              "type:", rs.ObjectType(gid))
+
+    return faces
+
+
 
 # CUBE_LENGTH is the distance from origin to each face.
 # So the cube spans from -CUBE_LENGTH to +CUBE_LENGTH (edge length = 2 * CUBE_LENGTH).
@@ -133,32 +193,108 @@ def add_polygon_curve(points_3d, close_curve=True):
     return poly_id
 
 
+def split_face_and_keep_outer(base_srf_id, cutters):
+    """
+    Use RhinoCommon Brep.Split with *all* cutters at once,
+    then keep only the largest area piece (outer face).
+    base_srf_id : GUID of the face surface to split
+    cutters     : list of GUIDs (planar surfaces on the same plane)
+    """
+    if not cutters:
+        return base_srf_id
+
+    tol = sc.doc.ModelAbsoluteTolerance
+
+    # Coerce base surface to Brep
+    base_brep = rs.coercebrep(base_srf_id)
+    if not base_brep:
+        print("Base surface is not a valid Brep:", base_srf_id)
+        return base_srf_id
+
+    # Coerce all cutters to Breps
+    cutter_breps = []
+    for cid in cutters:
+        if not cid:
+            continue
+        b = rs.coercebrep(cid)
+        if b:
+            cutter_breps.append(b)
+        else:
+            print("Skipping non-brep cutter:", cid, "type:", rs.ObjectType(cid))
+
+    if not cutter_breps:
+        print("No valid cutter Breps found.")
+        return base_srf_id
+
+    # Do a single split in RhinoCommon
+    split_breps = base_brep.Split(cutter_breps, tol)
+    if not split_breps:
+        print("Brep.Split failed or produced no pieces.")
+        return base_srf_id
+
+    # Add split pieces to the document
+    piece_ids = []
+    for b in split_breps:
+        pid = sc.doc.Objects.AddBrep(b)
+        piece_ids.append(pid)
+
+    # Delete original base surface and cutters
+    rs.DeleteObject(base_srf_id)
+    for cid in cutters:
+        if rs.IsObject(cid):
+            rs.DeleteObject(cid)
+
+    # Compute areas and keep largest
+    areas = []
+    for pid in piece_ids:
+        brep = rs.coercebrep(pid)
+        if not brep:
+            areas.append(0.0)
+            continue
+        amp = Rhino.Geometry.AreaMassProperties.Compute(brep)
+        areas.append(amp.Area if amp else 0.0)
+
+    if not areas:
+        print("No valid areas from split pieces.")
+        return None
+
+    idx_max = areas.index(max(areas))
+    outer_id = piece_ids[idx_max]
+
+    # Delete all smaller pieces
+    for i, pid in enumerate(piece_ids):
+        if i != idx_max and rs.IsObject(pid):
+            rs.DeleteObject(pid)
+
+    return outer_id
+
+
 # ----------------------------------------------------
 # 5) Main
 # ----------------------------------------------------
 def main():
-    # Faces and their order
-    faces = ["+x", "-x", "+y", "-y", "+z", "-z"]
-    filter_str = "JSON files (*.json)|*.json||"
+    faces = create_cube_faces()
 
     start_folder = r"C:\Users\shh\Documents\ShunHsiangHsu\DefectSynthetic\rhino_modeling\defect_refs\crack_cube_maps"
     filenames = [e for e in os.listdir(start_folder) if e.endswith(".json")]
     filepaths = [os.path.join(start_folder, filename) for filename in filenames[:6]]
 
     created_ids = []
-
     # Process each file / face
-    for face, filepath in zip(faces, filepaths):
+    for face_dir, filepath in zip(faces.keys(), filepaths):
+        face = faces[face_dir]
+
         try:
             contours = read_contour_json(filepath)
         except Exception as e:
             rs.MessageBox(
-                "Error reading JSON for face {}:\n{}\nFile: {}".format(face, e, filepath),
+                "Error reading JSON for face {}:\n{}\nFile: {}".format(face_dir, e, filepath),
                 0,
                 "Error"
             )
             return
 
+        cutters = []
         for i, contour in enumerate(contours):
             # contour["points"] is a numpy array in mm, shape (N, 2)
             pts_mm = contour["points"]
@@ -170,13 +306,22 @@ def main():
             pts_mm_centered = center_2d_points(pts_mm_list)
 
             # Map to cube face (3D)
-            pts_3d = map_2d_to_cube_face(pts_mm_centered, face)
+            pts_3d = map_2d_to_cube_face(pts_mm_centered, face_dir)
 
             # Create polyline in Rhino
             poly_id = add_polygon_curve(pts_3d, close_curve=True)
             if poly_id:
                 created_ids.append(poly_id)
-                rs.ObjectName(poly_id, "contour_{}_{}".format(face, i))
+                rs.ObjectName(poly_id, "contour_{}_{}".format(face_dir, i))
+                
+                # planar surface from polyline (the cutter)
+                srf_ids = rs.AddPlanarSrf(poly_id)
+                if srf_ids:
+                    cutters.extend(srf_ids)
+            # clean up
+            rs.DeleteObject(poly_id)
+
+        split_face_and_keep_outer(face, cutters)
 
     print("Created {} contour polygon(s).".format(len(created_ids)))
 
