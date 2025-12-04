@@ -1,8 +1,6 @@
 #! python3
-from materials import import_materials
-from layers import create_layers
+from utils_loc.pipeline import run
 
 
-if __name__ == '__main__':
-    import_materials()
-    create_layers()
+if __name__ == "__main__":
+    run()

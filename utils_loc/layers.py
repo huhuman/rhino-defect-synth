@@ -6,7 +6,7 @@ import rhinoscriptsyntax as rs
 import os
 import time
 
-component_material_dict = {
+BRDIGE_COMPONENT_MATERIAL_DICT = {
     "slab": "/Concrete Weathered 300cm",
     "beam": "Concrete light",
     "parapet": "/Concrete Weathered 300cm",
@@ -14,7 +14,7 @@ component_material_dict = {
     "pier": "/Concrete Simple G01 400cm"
 }
 
-component_color_dict = {
+BRIDGE_COMPONENT_COLOR_DICT = {
     "slab": System.Drawing.Color.Red,
     "beam": System.Drawing.Color.Blue,
     "parapet": System.Drawing.Color.Green,
@@ -22,8 +22,14 @@ component_color_dict = {
     "pier": System.Drawing.Color.Brown
 }
 
-def create_single_layer(name):
-    color = component_color_dict[name]
+CUBE_COMPONENT_COLOR_DICT = {
+    "cube": System.Drawing.Color.Red,
+    "crack_CS1": System.Drawing.Color.Green,
+    "crack_CS2": System.Drawing.Color.Yellow,
+    "crack_CS3": System.Drawing.Color.Orange,
+}
+
+def create_single_layer(name, color):
     layer = sc.doc.Layers.FindByFullPath(name, True)
     if layer>=0: return sc.doc.Layers[layer]
     layer_index = sc.doc.Layers.Add(name, color)
@@ -31,7 +37,7 @@ def create_single_layer(name):
     return layer
 
 
-def create_layers():
+def create_layers(component_material_dict=None, component_color_dict=None):
     render_materials = [mat.DisplayName for mat in sc.doc.RenderMaterials]
     for layer in sc.doc.Layers:
         if layer.Name and layer != rs.CurrentLayer():
@@ -41,7 +47,7 @@ def create_layers():
             rs.DeleteLayer(layer.Name)
 
     for comp, mat in component_material_dict.items():
-        layer = create_single_layer(comp)
+        layer = create_single_layer(comp, component_color_dict[comp])
         layer.RenderMaterial = sc.doc.RenderMaterials[render_materials.index(mat)]
 
 
