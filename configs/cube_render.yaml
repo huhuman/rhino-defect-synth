@@ -1,0 +1,4 @@
+extends: cube_base.yaml
+modeling:
+  strategy: cube
+  cube_map_dir: "C:/Users/shh/Documents/ShunHsiangHsu/DefectSynthetic/rhino_modeling/defect_refs/crack_cube_maps"

@@ -1,0 +1,8 @@
+preparation:
+  materials:
+    cube: Conc dark gray
+  colors:
+    cube: Black
+    crack_CS1: Green
+    crack_CS2: Yellow
+    crack_CS3: Orange

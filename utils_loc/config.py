@@ -1,23 +1,12 @@
-"""Minimal preset containers for materials, rendering, and modeling."""
+from pathlib import Path
+import yaml
 
-MATERIAL_PRESETS = {
-    "default": {
-        "import": ["vray_corpus"],
-        "layers": "bridge_components",
-    }
-}
+root = Path(__file__).resolve().parent.parent / "configs"
 
-RENDER_PRESETS = {
-    "turntable": {
-        "step_degrees": 18,
-        "frames": 20,
-        "width": 1442,
-        "height": 879,
-    }
-}
 
-MODELING_PRESETS = {
-    "strategy_a": {},
-    "strategy_b": {},
-}
-
+def load_config(config_name):
+    cfg = yaml.safe_load((root / config_name).read_text()) or {}
+    base_path = root / cfg.get("extends", "cube_base.yaml")
+    base = yaml.safe_load(base_path.read_text()) or {}
+    merged = {**base, **{k: v for k, v in cfg.items() if k != "extends"}}
+    return merged

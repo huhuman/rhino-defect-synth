@@ -1,0 +1,13 @@
+preparation:
+  materials:
+    slab: "/Concrete Weathered 300cm"
+    beam: "Concrete light"
+    parapet: "/Concrete Weathered 300cm"
+    bearing: "/Rubber Rough 001"
+    pier: "/Concrete Simple G01 400cm"
+  colors:
+    slab: Red
+    beam: Blue
+    parapet: Green
+    bearing: AliceBlue
+    pier: Brown

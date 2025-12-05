@@ -21,10 +21,10 @@ Vray_Material_Metadata = {
     "/Concrete Grey 03 100cm": ["1639468414", "c6515288-34c2-49d8-b32e-1a5eb30c5c4b"],
     "/Concrete Grey 06 100cm": ["1639468424", "d83b8f99-c819-4ad2-83e5-0a921279af79"],
 }
-
 All_Render_Materials = [mat.DisplayName for mat in sc.doc.RenderMaterials]
 
-def import_materials():
+
+def import_Vray_materials():
     for mat, info in Vray_Material_Metadata.items():
         is_exist = False
         for render_mat in All_Render_Materials:
@@ -35,13 +35,15 @@ def import_materials():
             print(f'Importing material: {mat}')
             rs.Command(f"-_vrayCosmos _Import _Revision={info[0]} _Triplanar=On {info[1]}")
 
-    material_root = "C:\\Users\shh\AppData\Roaming\McNeel\Rhinoceros\8.0\Localization\en-US\Render Content\Architectural\Wall\Concrete"
+
+def import_materials(category="Architectural", subcategory1="Wall", subcategory2="Concrete"):
+    user_root = os.path.expanduser("~")
+    material_root = os.path.join(user_root, "AppData", "Roaming", "McNeel", "Rhinoceros", "8.0", "Localization", "en-US", "Render Content", category, subcategory1, subcategory2)
+    if not os.path.exists(material_root):
+        print(f'Material path does not exist: {material_root}')
+        return
     for filename in os.listdir(material_root):
         if filename[:-5] not in All_Render_Materials:
             filepath = os.path.join(material_root, filename)
             Rhino.Render.RenderMaterial.ImportMaterialAndAssignToLayers(sc.doc, filepath, [])
             print(f'Importing material: {filename[:-5]}')
-
-# if __name__ == '__main__':
-#     print(All_Render_Materials)
-#     import_materials()

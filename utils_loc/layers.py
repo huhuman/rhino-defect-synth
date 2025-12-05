@@ -1,35 +1,26 @@
 import System
-import Rhino
+from typing import Optional
 import scriptcontext as sc
 import rhinoscriptsyntax as rs
 
-import os
-import time
 
-BRDIGE_COMPONENT_MATERIAL_DICT = {
-    "slab": "/Concrete Weathered 300cm",
-    "beam": "Concrete light",
-    "parapet": "/Concrete Weathered 300cm",
-    "bearing": "/Rubber Rough 001",
-    "pier": "/Concrete Simple G01 400cm"
-}
+def __color_from_name(name: str) -> System.Drawing.Color:
+    color = getattr(System.Drawing.Color, name, None)
+    if color is None:
+        raise ValueError(f"Unknown color: {name}")
+    return color
 
-BRIDGE_COMPONENT_COLOR_DICT = {
-    "slab": System.Drawing.Color.Red,
-    "beam": System.Drawing.Color.Blue,
-    "parapet": System.Drawing.Color.Green,
-    "bearing": System.Drawing.Color.AliceBlue,
-    "pier": System.Drawing.Color.Brown
-}
-
-CUBE_COMPONENT_COLOR_DICT = {
-    "cube": System.Drawing.Color.Red,
-    "crack_CS1": System.Drawing.Color.Green,
-    "crack_CS2": System.Drawing.Color.Yellow,
-    "crack_CS3": System.Drawing.Color.Orange,
-}
 
 def create_single_layer(name, color):
+    """Create or get a single layer by name and color.
+    Args:
+        name: layer name
+        color: System.Drawing.Color
+    Returns:
+        the created or existing layer
+    """
+    if isinstance(color, str):
+        color = __color_from_name(color)
     layer = sc.doc.Layers.FindByFullPath(name, True)
     if layer>=0: return sc.doc.Layers[layer]
     layer_index = sc.doc.Layers.Add(name, color)
@@ -37,19 +28,35 @@ def create_single_layer(name, color):
     return layer
 
 
-def create_layers(component_material_dict=None, component_color_dict=None):
+def create_layers(
+    layer_color_dict,
+    layer_material_dict: Optional[dict] = None,
+):
+    """Create layers for each component with specified material and color.
+    Args:
+        component_material_dict: dict mapping component names to material names
+        component_color_dict: dict mapping component names to System.Drawing.Color
+    """
+    if not layer_color_dict:
+        raise ValueError("Layer color dictionary is required to create layers.")
+
     render_materials = [mat.DisplayName for mat in sc.doc.RenderMaterials]
+
+    currnt_layer = rs.CurrentLayer()
     for layer in sc.doc.Layers:
-        if layer.Name and layer != rs.CurrentLayer():
+        if layer.Name and layer != currnt_layer:
             objects = rs.ObjectsByLayer(layer.Name)
             if objects:
                 rs.DeleteObjects(objects)  # Delete all objects on the layer
             rs.DeleteLayer(layer.Name)
 
-    for comp, mat in component_material_dict.items():
-        layer = create_single_layer(comp, component_color_dict[comp])
-        layer.RenderMaterial = sc.doc.RenderMaterials[render_materials.index(mat)]
+    for layer_name, color in layer_color_dict.items():
+        layer = create_single_layer(layer_name, color)
+        if layer_material_dict and layer_name in layer_material_dict:
+            layer.RenderMaterial = sc.doc.RenderMaterials[render_materials.index(layer_material_dict[layer_name])]
 
-
-if __name__ == '__main__':
-    create_layers()
+    first_layer = list(layer_color_dict.keys())[0]
+    first_layer_index = sc.doc.Layers.FindByFullPath(first_layer, True)
+    if first_layer_index >= 0:
+        sc.doc.Layers.SetCurrentLayerIndex(first_layer_index, True)
+    rs.DeleteLayer(currnt_layer)
