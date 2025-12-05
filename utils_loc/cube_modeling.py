@@ -6,7 +6,12 @@ import json
 import os
 import numpy as np
 
-def create_cube_faces():
+# CUBE_LENGTH is the distance from origin to each face.
+# So the cube spans from -CUBE_LENGTH to +CUBE_LENGTH (edge length = 2 * CUBE_LENGTH).
+CUBE_LENGTH = 500.0  # mm
+
+
+def __create_cube_faces():
     """
     Create a cube from -CUBE_LENGTH to +CUBE_LENGTH in all axes,
     explode it into 6 surfaces, and return a dict mapping
@@ -53,20 +58,14 @@ def create_cube_faces():
         elif abs(cz + half) < tol:
             faces["-z"] = s
 
-    # sanity check
-    for name, gid in faces.items():
-        print("Face", name,
-              "id:", gid,
-              "exists:", rs.IsObject(gid),
-              "type:", rs.ObjectType(gid))
+    # # sanity check
+    # for name, gid in faces.items():
+    #     print("Face", name,
+    #           "id:", gid,
+    #           "exists:", rs.IsObject(gid),
+    #           "type:", rs.ObjectType(gid))
 
     return faces
-
-
-
-# CUBE_LENGTH is the distance from origin to each face.
-# So the cube spans from -CUBE_LENGTH to +CUBE_LENGTH (edge length = 2 * CUBE_LENGTH).
-CUBE_LENGTH = 500.0  # mm
 
 
 # ----------------------------------------------------
@@ -89,6 +88,7 @@ def read_contour_json(filepath):
             { "parent": "...", "points": [[x_px, y_px], ...] },
             ...
         ]
+        "severity": "CS1" | "CS2" | "CS3"
     }
     """
     if not os.path.isfile(filepath):
@@ -102,21 +102,32 @@ def read_contour_json(filepath):
         pixel_size_mm = float(data["pixel_size_cm"]) * 10.0
     except KeyError:
         raise KeyError('JSON must contain "pixel_size_cm".')
+    
+    try:
+        global CUBE_LENGTH
+        CUBE_LENGTH = float(data["cube_length_mm"])
+    except KeyError:
+        # TODO: Update legacy data files to include "cube_length_mm" field
+        print("WARNING: Legacy data detected - JSON does not contain 'cube_length_mm'.")
+        print('Using default CUBE_LENGTH = {} mm.'.format(CUBE_LENGTH))
+        print("Please update data files to include cube_length_mm field for better accuracy.")
 
     if "contours" not in data:
         raise KeyError('JSON must contain "contours".')
 
     contours = []
+    severities = []
     for item in data["contours"]:
         pts_px = np.array(item["points"], dtype=float)  # shape (N, 2)
         pts_mm = pts_px * pixel_size_mm                # now in mm
 
         contours.append({
-            "parent": item.get("parent", None),
+            "parent": item["parent"],
             "points": pts_mm
         })
+        severities.append(item["severity"])
 
-    return contours
+    return contours, severities
 
 
 # ----------------------------------------------------
@@ -238,11 +249,8 @@ def split_face_and_keep_outer(base_srf_id, cutters):
         pid = sc.doc.Objects.AddBrep(b)
         piece_ids.append(pid)
 
-    # Delete original base surface and cutters
+    # Delete original base surface
     rs.DeleteObject(base_srf_id)
-    for cid in cutters:
-        if rs.IsObject(cid):
-            rs.DeleteObject(cid)
 
     # Compute areas and keep largest
     areas = []
@@ -272,12 +280,11 @@ def split_face_and_keep_outer(base_srf_id, cutters):
 # ----------------------------------------------------
 # 5) Main
 # ----------------------------------------------------
-def main():
-    faces = create_cube_faces()
+def create_cube(cube_map_dir):
+    faces = __create_cube_faces()
 
-    start_folder = r"C:\Users\shh\Documents\ShunHsiangHsu\DefectSynthetic\rhino_modeling\defect_refs\crack_cube_maps"
-    filenames = [e for e in os.listdir(start_folder) if e.endswith(".json")]
-    filepaths = [os.path.join(start_folder, filename) for filename in filenames[:6]]
+    filenames = [e for e in os.listdir(cube_map_dir) if e.endswith(".json")]
+    filepaths = [os.path.join(cube_map_dir, filename) for filename in filenames[:6]]
 
     created_ids = []
     # Process each file / face
@@ -285,7 +292,7 @@ def main():
         face = faces[face_dir]
 
         try:
-            contours = read_contour_json(filepath)
+            contours, severities = read_contour_json(filepath)
         except Exception as e:
             rs.MessageBox(
                 "Error reading JSON for face {}:\n{}\nFile: {}".format(face_dir, e, filepath),
@@ -296,6 +303,13 @@ def main():
 
         cutters = []
         for i, contour in enumerate(contours):
+            severity = severities[i] 
+            layer_name = "crack_{}".format(severity)
+            
+            # ensure the layer exists
+            if not rs.IsLayer(layer_name):
+                raise ValueError("Layer '{}' does not exist. Please run preparation step first.".format(layer_name))
+
             # contour["points"] is a numpy array in mm, shape (N, 2)
             pts_mm = contour["points"]
 
@@ -317,6 +331,8 @@ def main():
                 # planar surface from polyline (the cutter)
                 srf_ids = rs.AddPlanarSrf(poly_id)
                 if srf_ids:
+                    for s in srf_ids:
+                        rs.ObjectLayer(s, layer_name)
                     cutters.extend(srf_ids)
             # clean up
             rs.DeleteObject(poly_id)
@@ -324,8 +340,3 @@ def main():
         split_face_and_keep_outer(face, cutters)
 
     print("Created {} contour polygon(s).".format(len(created_ids)))
-
-
-# Run automatically when script is executed in Rhino
-if __name__ == "__main__":
-    main()
