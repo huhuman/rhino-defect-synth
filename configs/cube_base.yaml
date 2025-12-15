@@ -1,8 +1,10 @@
 preparation:
   materials:
-    cube: Conc dark gray
+    cube: Concrete light
+    crack_extrusion: Concrete rusty
   colors:
     cube: Black
+    crack_extrusion: Red
     crack_CS1: Green
     crack_CS2: Yellow
     crack_CS3: Orange

@@ -4,7 +4,9 @@ import scriptcontext as sc
 import rhinoscriptsyntax as rs
 import json
 import os
+import random
 import numpy as np
+import random
 
 # CUBE_LENGTH is the distance from origin to each face.
 # So the cube spans from -CUBE_LENGTH to +CUBE_LENGTH (edge length = 2 * CUBE_LENGTH).
@@ -58,19 +60,9 @@ def __create_cube_faces():
         elif abs(cz + half) < tol:
             faces["-z"] = s
 
-    # # sanity check
-    # for name, gid in faces.items():
-    #     print("Face", name,
-    #           "id:", gid,
-    #           "exists:", rs.IsObject(gid),
-    #           "type:", rs.ObjectType(gid))
-
     return faces
 
 
-# ----------------------------------------------------
-# 1) Read JSON and convert pixel coords → mm
-# ----------------------------------------------------
 def read_contour_json(filepath):
     """
     Read one JSON file and return a list of contours:
@@ -103,36 +95,35 @@ def read_contour_json(filepath):
     except KeyError:
         raise KeyError('JSON must contain "pixel_size_cm".')
     
+    global CUBE_LENGTH
     try:
-        global CUBE_LENGTH
-        CUBE_LENGTH = float(data["cube_length_mm"])
-    except KeyError:
-        # TODO: Update legacy data files to include "cube_length_mm" field
-        print("WARNING: Legacy data detected - JSON does not contain 'cube_length_mm'.")
-        print('Using default CUBE_LENGTH = {} mm.'.format(CUBE_LENGTH))
-        print("Please update data files to include cube_length_mm field for better accuracy.")
+        map_pixel = float(data.get("width_px", 0) or data.get("height_px", 0))
+        if map_pixel == 0:
+            raise ValueError("Both width_px and height_px are missing or zero")
+    except (ValueError, TypeError):
+        raise KeyError('JSON must contain valid "width_px" or "height_px".')
+    CUBE_LENGTH = map_pixel * pixel_size_mm
 
     if "contours" not in data:
         raise KeyError('JSON must contain "contours".')
 
-    contours = []
-    severities = []
-    for item in data["contours"]:
-        pts_px = np.array(item["points"], dtype=float)  # shape (N, 2)
-        pts_mm = pts_px * pixel_size_mm                # now in mm
-
-        contours.append({
+    def _contour_conversion(item):
+        pts_px = np.array(item["points"], dtype=float)
+        pts_mm = pts_px * pixel_size_mm
+        return {
             "parent": item["parent"],
             "points": pts_mm
-        })
-        severities.append(item["severity"])
+        }
 
-    return contours, severities
+    contours = [[_contour_conversion(item) for item in cnt_list] for cnt_list in data["contours"]]
+    severities = data["severities"]
+    erode_contours = [_contour_conversion(item) for item in data["expanded_contours"]]
+    base_contours = [_contour_conversion(item) for item in data["base_contours"]]
+    diff_contours = [[_contour_conversion(item) for item in cnt_list] for cnt_list in data["difference_contours"]]
+
+    return contours, base_contours, erode_contours, diff_contours, severities
 
 
-# ----------------------------------------------------
-# 2) Center 2D points
-# ----------------------------------------------------
 def center_2d_points(points_2d):
     """
     Center the 2D points around (0,0) using their bounding box center.
@@ -143,9 +134,6 @@ def center_2d_points(points_2d):
     return centered
 
 
-# ----------------------------------------------------
-# 3) Map 2D mm coords onto a given cube face
-# ----------------------------------------------------
 def map_2d_to_cube_face(points_2d_mm, face):
     """
     Map 2D points (in mm) to 3D coordinates on a cube face.
@@ -162,32 +150,23 @@ def map_2d_to_cube_face(points_2d_mm, face):
     pts_3d = []
 
     for (u, v) in points_2d_mm:
-        if face in ["+x", "x+", "px", "posx"]:
-            # Face at X = +CUBE_LENGTH, polygon lies in YZ-plane
+        if face == "+x":
             pts_3d.append((CUBE_LENGTH/2, u, v))
-        elif face in ["-x", "x-", "nx", "negx"]:
-            # Face at X = -CUBE_LENGTH
+        elif face == "-x":
             pts_3d.append((-CUBE_LENGTH/2, u, v))
-        elif face in ["+y", "y+", "py", "posy"]:
-            # Face at Y = +CUBE_LENGTH, polygon lies in XZ-plane
+        elif face == "+y":
             pts_3d.append((u, CUBE_LENGTH/2, v))
-        elif face in ["-y", "y-", "ny", "negy"]:
-            # Face at Y = -CUBE_LENGTH
+        elif face == "-y":
             pts_3d.append((u, -CUBE_LENGTH/2, v))
-        elif face in ["+z", "z+", "pz", "posz"]:
-            # Face at Z = +CUBE_LENGTH, polygon lies in XY-plane
+        elif face == "+z":
             pts_3d.append((u, v, CUBE_LENGTH/2))
-        elif face in ["-z", "z-", "nz", "negz"]:
-            # Face at Z = -CUBE_LENGTH
+        elif face == "-z":
             pts_3d.append((u, v, -CUBE_LENGTH/2))
         else:
             raise ValueError('Unknown face "{}". Use +x, -x, +y, -y, +z, -z.'.format(face))
     return pts_3d
 
 
-# ----------------------------------------------------
-# 4) Create polyline in Rhino
-# ----------------------------------------------------
 def add_polygon_curve(points_3d, close_curve=True):
     """
     Create a polyline (and optionally close it) from 3D points in Rhino.
@@ -202,6 +181,19 @@ def add_polygon_curve(points_3d, close_curve=True):
 
     poly_id = rs.AddPolyline(pts)
     return poly_id
+
+
+def face_dir_normal(face_dir):
+    """Return a unit normal vector for a cube face direction string."""
+    mapping = {
+        "+x": (1, 0, 0),
+        "-x": (-1, 0, 0),
+        "+y": (0, 1, 0),
+        "-y": (0, -1, 0),
+        "+z": (0, 0, 1),
+        "-z": (0, 0, -1),
+    }
+    return mapping.get(face_dir.lower())
 
 
 def split_face_and_keep_outer(base_srf_id, cutters):
@@ -277,66 +269,95 @@ def split_face_and_keep_outer(base_srf_id, cutters):
     return outer_id
 
 
-# ----------------------------------------------------
-# 5) Main
-# ----------------------------------------------------
-def create_cube(cube_map_dir):
+def create_cube(cube_map_dir, start_face_index=0):
     faces = __create_cube_faces()
 
-    filenames = [e for e in os.listdir(cube_map_dir) if e.endswith(".json")]
-    filepaths = [os.path.join(cube_map_dir, filename) for filename in filenames[:6]]
+    filenames = sorted([e for e in os.listdir(cube_map_dir) if e.endswith(".json")])
+    filepaths = [os.path.join(cube_map_dir, filename) for filename in filenames[start_face_index:start_face_index+6]]
 
-    created_ids = []
     # Process each file / face
+    face_cracks = {}
     for face_dir, filepath in zip(faces.keys(), filepaths):
         face = faces[face_dir]
+        rs.HideObject(face)
 
-        try:
-            contours, severities = read_contour_json(filepath)
-        except Exception as e:
-            rs.MessageBox(
-                "Error reading JSON for face {}:\n{}\nFile: {}".format(face_dir, e, filepath),
-                0,
-                "Error"
-            )
-            return
+        contours, base_contours, erode_contours, diff_contours, severities = read_contour_json(filepath)
 
+        assert len(contours) == len(severities) == len(erode_contours) == len(base_contours) == len(diff_contours), \
+            f"Mismatch in number of contours ({len(contours)}), severities ({len(severities)}), erode contours ({len(erode_contours)}), base contours ({len(base_contours)}), or diff contours ({len(diff_contours)})."
+        n_bases = len(erode_contours)
         cutters = []
-        for i, contour in enumerate(contours):
-            severity = severities[i] 
-            layer_name = "crack_{}".format(severity)
+        crack_items = []
+        
+        for i in range(n_bases):
+            erode_pts_mm_centered = center_2d_points(erode_contours[i]["points"])
+            erode_pts_3d = map_2d_to_cube_face(erode_pts_mm_centered, face_dir)
+            erode_poly_id = add_polygon_curve(erode_pts_3d, close_curve=True)
+            if not erode_poly_id:
+                print("Skipping empty erode contour at index {} on face {}".format(i, face_dir))
+                continue
             
-            # ensure the layer exists
+            base_pts_mm_centered = center_2d_points(base_contours[i]["points"])
+            base_pts_3d = map_2d_to_cube_face(base_pts_mm_centered, face_dir)
+            base_poly_id = add_polygon_curve(base_pts_3d, close_curve=True)
+            if not base_poly_id:
+                print("Skipping empty base contour at index {} on face {}".format(i, face_dir))
+                continue
+            
+            diff_poly_ids = []
+            for diff_cnt in diff_contours[i]:
+                diff_pts_mm_centered = center_2d_points(diff_cnt["points"])
+                diff_pts_3d = map_2d_to_cube_face(diff_pts_mm_centered, face_dir)
+                diff_poly_id = add_polygon_curve(diff_pts_3d, close_curve=True)
+                if diff_poly_id:
+                    diff_poly_ids.append(diff_poly_id)
+
+            severity = severities[i]
+            layer_name = "crack_{}".format(severity)
             if not rs.IsLayer(layer_name):
                 raise ValueError("Layer '{}' does not exist. Please run preparation step first.".format(layer_name))
 
-            # contour["points"] is a numpy array in mm, shape (N, 2)
-            pts_mm = contour["points"]
+            crack_poly_ids = []
+            noncrack_poly_ids = []
+            for contour in contours[i]:
+                pts_mm_centered = center_2d_points(contour["points"])
+                pts_3d = map_2d_to_cube_face(pts_mm_centered, face_dir)
+                if len(pts_3d) < 3:
+                    continue
+                poly_id = add_polygon_curve(pts_3d, close_curve=True)
+                if poly_id:
+                    if contour["parent"] != -1:
+                        noncrack_poly_ids.append(poly_id)
+                    else:
+                        crack_poly_ids.append(poly_id)
 
-            # Convert to plain Python list of tuples (for center function)
-            pts_mm_list = [(float(p[0]), float(p[1])) for p in pts_mm]
-
-            # Center each contour on its face
-            pts_mm_centered = center_2d_points(pts_mm_list)
-
-            # Map to cube face (3D)
-            pts_3d = map_2d_to_cube_face(pts_mm_centered, face_dir)
-
-            # Create polyline in Rhino
-            poly_id = add_polygon_curve(pts_3d, close_curve=True)
-            if poly_id:
-                created_ids.append(poly_id)
-                rs.ObjectName(poly_id, "contour_{}_{}".format(face_dir, i))
-                
-                # planar surface from polyline (the cutter)
-                srf_ids = rs.AddPlanarSrf(poly_id)
-                if srf_ids:
-                    for s in srf_ids:
-                        rs.ObjectLayer(s, layer_name)
-                    cutters.extend(srf_ids)
-            # clean up
-            rs.DeleteObject(poly_id)
+            if not crack_poly_ids:
+                print("Skipping empty contour at index {} on face {}".format(i, face_dir))
+                continue
+            
+            for poly_id in crack_poly_ids:
+                rs.ObjectLayer(poly_id, layer_name)
+            rs.ObjectLayer(erode_poly_id, layer_name)
+            offset_srf_id = rs.AddPlanarSrf(erode_poly_id)[0]
+            if offset_srf_id:
+                rs.ObjectLayer(offset_srf_id, layer_name)
+                cutters.append(offset_srf_id)
+                crack_items.append({
+                    "offset_surface": offset_srf_id,
+                    "crack_polys": crack_poly_ids,
+                    "inside_polys": noncrack_poly_ids,
+                    "base_poly": base_poly_id,
+                    "offset_poly": erode_poly_id,
+                    "diff_polys": diff_poly_ids,
+                })
 
         split_face_and_keep_outer(face, cutters)
+        rs.ShowObject(face)
+        face_cracks[face_dir] = crack_items
+        print("Processed face {}: {} contours.".format(face_dir, len(cutters)))
+    
+    for face in faces.values():
+        if rs.IsObject(face):
+            rs.DeleteObject(face)
 
-    print("Created {} contour polygon(s).".format(len(created_ids)))
+    return face_cracks
