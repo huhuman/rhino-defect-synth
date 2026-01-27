@@ -2,3 +2,17 @@ extends: cube_base.yaml
 modeling:
   strategy: cube
   cube_map_dir: "C:/Users/shh/Documents/ShunHsiangHsu/DefectSynthetic/rhino_modeling/defect_refs/crack_cube_maps"
+rendering:
+  background_wallpaper_dir: "C:/Users/shh/Documents/ShunHsiangHsu/DefectSynthetic/rhino_modeling/defect_refs/concrete_background"
+  lighting:
+    # Sun is still configurable; face lights are randomized in code.
+    sun:
+      enabled: true
+      time_of_day: null       # null -> random 5–19 inside code
+      intensity: 0.25
+  camera:
+    points_per_side: 4
+    distance_multiplier_min: 1.2
+    distance_multiplier_max: 1.5
+    transition_frames: 5
+    smooth_path: true

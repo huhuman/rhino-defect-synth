@@ -176,6 +176,9 @@ def add_polygon_curve(points_3d, close_curve=True):
         return None
 
     pts = list(points_3d)
+    if len(pts) < 15:
+        return None
+
     if close_curve and pts[0] != pts[-1]:
         pts.append(pts[0])
 

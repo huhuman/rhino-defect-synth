@@ -23,8 +23,8 @@ def _poly_inward_direction(curve_id):
 
 
 def create_crack(crack_polys, crack_inside_polys, base_poly, offset_poly, diff_polys, inward_dir=None):
-    cleanup_ids = []
     crack_polys = [bp for bp in crack_polys or [] if bp and rs.IsPolyline(bp)]
+    cleanup_ids = crack_polys
     crack_inside_polys = [sp for sp in crack_inside_polys or [] if sp and rs.IsPolyline(sp)]
     if not crack_polys or not base_poly or not offset_poly or not rs.IsPolyline(offset_poly):
         print("create_crack: crack_polys, base_poly, and offset_poly must be polylines.")
