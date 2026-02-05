@@ -1,16 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net48;net7.0-windows</TargetFrameworks>
+    <TargetFrameworks>net7.0-windows</TargetFrameworks>
     <RootNamespace>RhinoChannelsPlugin</RootNamespace>
     <AssemblyName>RhinoChannelsPlugin</AssemblyName>
     <LangVersion>latest</LangVersion>
-    <Nullable highlight="true">enable</Nullable>
+    <Nullable>enable</Nullable>
     <Platforms>AnyCPU</Platforms>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
   <PropertyGroup>
-    <RhinoCommonPath Condition="'$(RhinoCommonPath)' == ''">C:\Program Files\Rhino 7\System\RhinoCommon.dll</RhinoCommonPath>
+    <RhinoCommonPath Condition="'$(RhinoCommonPath)' == ''">C:\Program Files\Rhino 8\System\RhinoCommon.dll</RhinoCommonPath>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
