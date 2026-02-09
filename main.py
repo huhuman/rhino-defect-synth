@@ -1,6 +1,8 @@
 #! python3
 from time import perf_counter
 
+import Rhino
+import scriptcontext as sc
 import rhinoscriptsyntax as rs
 
 from utils_loc.config import load_config
@@ -13,12 +15,6 @@ STAGE_ORDER = (
     "view_setup",
     "modeling",
     "rendering",
-)
-DEFAULT_STAGES = (
-    "load_config",
-    "preparation",
-    "view_setup",
-    "modeling",
 )
 STAGE_ALIASES = {
     "prepare": "preparation",
@@ -48,9 +44,6 @@ def reset():
 
 def setup_render_view():
     """Set active view to Rendered mode and hide crack section layers."""
-    import scriptcontext as sc
-    import Rhino
-
     render_view = sc.doc.Views.ActiveView
     mode = Rhino.Display.DisplayModeDescription.FindByName("Rendered")
     if mode:
@@ -79,16 +72,12 @@ def _normalize_stage_name(name):
     return stage_name
 
 
-def _resolve_stage_list(stages=None, include_reset=False, include_render=False, skip=None):
-    if stages:
+def _resolve_stage_list(stages=None, skip=None):
+    if stages is None:
+        selected = []
+    else:
         requested = set(_normalize_stage_name(stage) for stage in stages)
         selected = [stage for stage in STAGE_ORDER if stage in requested]
-    else:
-        selected = list(DEFAULT_STAGES)
-        if include_reset and "reset" not in selected:
-            selected.insert(0, "reset")
-        if include_render and "rendering" not in selected:
-            selected.append("rendering")
 
     skip = set(skip or [])
     for stage in selected:
@@ -104,16 +93,12 @@ def _resolve_stage_list(stages=None, include_reset=False, include_render=False, 
             required.add(dep)
     selected = [stage for stage in STAGE_ORDER if stage in required and stage not in skip]
 
-    if not selected:
-        raise ValueError("No stages selected after filters.")
     return selected
 
 
 def run(
     config_name="cube_render.yaml",
     stages=None,
-    include_reset=False,
-    include_render=False,
     skip=None,
     start_face_index=0,
     show_cameras=False,
@@ -122,11 +107,12 @@ def run(
     """Run selected pipeline stages."""
     selected_stages = _resolve_stage_list(
         stages=stages,
-        include_reset=include_reset,
-        include_render=include_render,
         skip=skip,
     )
-    print("Selected stages:", ", ".join(selected_stages))
+    if selected_stages:
+        print("Selected stages:", ", ".join(selected_stages))
+    else:
+        print("Selected stages: (none)")
 
     stage_times = []
     context = {"cfg": None}
@@ -176,12 +162,29 @@ def run(
 
 
 if __name__ == "__main__":
-    # Rhino Python entrypoint: edit these for quick debug runs.
+    # Rhino Python entrypoint.
+    # Edit `run(...)` below for debug presets.
+    #
+    # Parameter guide:
+    # - config_name: YAML filename under `configs/`.
+    # - stages: explicit stage list in execution order subset.
+    #   Valid: reset, load_config, preparation, view_setup, modeling, rendering
+    #   Use None or [] to run no stages.
+    # - skip: remove stages from the selected set (dependencies are validated).
+    # - start_face_index: forwarded to modeling stage (cube face debug).
+    # - show_cameras: for rendering stage, draw camera gizmos and exit.
+    # - print_timings: print per-stage timing summary.
+    #
+    # Common presets:
+    # 1) Modeling only from face 3:
+    #    run(stages=["modeling"], start_face_index=3)
+    # 2) Full run with cleanup + rendering:
+    #    run(stages=["reset", "load_config", "preparation", "view_setup", "modeling", "rendering"])
+    # 3) Preparation only:
+    #    run(stages=["preparation"])
     run(
         config_name="cube_render.yaml",
-        stages=["load_config", "preparation", "view_setup", "modeling"],
-        include_reset=False,
-        include_render=False,
+        stages=["load_config", "preparation", "view_setup", "modeling", "rendering"],
         skip=[],
         start_face_index=0,
         show_cameras=False,

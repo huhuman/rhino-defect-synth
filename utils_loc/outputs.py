@@ -8,8 +8,6 @@ import rhinoscriptsyntax as rs
 import scriptcontext as sc
 import System.Drawing as Drawing
 import System.Drawing.Imaging as Imaging
-from System import Array, Single
-from Rhino.Render import ComponentOrders
 
 
 def _ensure_out_dir(path):
@@ -64,67 +62,32 @@ def _write_pfm(out_path, width, height, channel_count, data):
     return out_path
 
 
-def _capture_render_channels(rhino_view, need_depth=True, need_normal=True):
+def _capture_render_channels_to_files(rhino_view, depth_path, normal_path, width=None, height=None, renderer_id=None):
     """
-    Use RenderPipeline -> RenderWindow channels to pull linear depth and normal buffers.
-    Returns dict label -> (width, height, channel_count, bytes) or {} on failure.
+    Use the CaptureRenderChannels Rhino command (from the C# plugin) to write PFM files.
     """
-    try:
-        pipeline_to_window = getattr(Rhino.Render.RenderPipeline, "RenderToWindow", None)
-        if pipeline_to_window is None:
-            return {}
+    if not depth_path or not normal_path:
+        raise ValueError("depth_path and normal_path are required.")
+    view_name = rhino_view.ActiveViewport.Name
+    width_value = int(width) if width else 0
+    height_value = int(height) if height else 0
 
-        rw = pipeline_to_window(sc.doc, rhino_view)
-        if rw is None:
-            return {}
+    cmd_parts = [
+        "-CaptureRenderChannels",
+        f'"{depth_path}"',
+        f'"{normal_path}"',
+        f'"{view_name}"',
+        str(width_value),
+        str(height_value),
+    ]
+    if renderer_id:
+        cmd_parts.append(f'"{renderer_id}"')
+    else:
+        cmd_parts.append("_Enter")
 
-        # Wait for the render to finish if the API exposes a waiter.
-        for waiter_name in ("WaitForRender", "WaitForFinished", "Wait"):
-            waiter = getattr(rw, waiter_name, None)
-            if callable(waiter):
-                try:
-                    waiter()
-                except Exception:
-                    pass
-                break
-
-        size = rw.Size() if hasattr(rw, "Size") else rhino_view.ActiveViewport.Size
-        rect = Drawing.Rectangle(0, 0, size.Width, size.Height)
-
-        # Resolve enum values defensively; names vary slightly across Rhino versions.
-        std = Rhino.Render.RenderWindow.StandardChannels
-        distance_enum = None
-        normal_enum = None
-        for name in ("DistanceFromCamera", "ZDepth"):
-            distance_enum = getattr(std, name, distance_enum)
-        for name in ("NormalTowardsCamera", "NormalXYZ", "Normals"):
-            normal_enum = getattr(std, name, normal_enum)
-
-        results = {}
-        if need_depth and distance_enum is not None:
-            ch = rw.OpenChannel(distance_enum) if hasattr(rw, "OpenChannel") else None
-            if ch:
-                arr = Array.CreateInstance(Single, size.Width * size.Height)
-                ch.GetValues(rect, size.Width, ComponentOrders.Irrelevant, arr)
-                results["depth"] = (size.Width, size.Height, 1, arr)
-                ch.Dispose()
-
-        if need_normal and normal_enum is not None:
-            ch = rw.OpenChannel(normal_enum) if hasattr(rw, "OpenChannel") else None
-            if ch:
-                arr = Array.CreateInstance(Single, size.Width * size.Height * 3)
-                ch.GetValues(rect, size.Width * 3, ComponentOrders.XYZ, arr)
-                results["normal"] = (size.Width, size.Height, 3, arr)
-                ch.Dispose()
-
-        try:
-            rw.Dispose()
-        except Exception:
-            pass
-
-        return results
-    except Exception:
-        return {}
+    ok = rs.Command(" ".join(cmd_parts), echo=False)
+    if not ok:
+        raise RuntimeError("CaptureRenderChannels command failed. Is the plugin loaded?")
 
 
 def render_image(rhino_view, out_path=None, preset=None, width=None, height=None):
@@ -266,15 +229,14 @@ def render_all_outputs(view=None, out_dir=None, basename="frame", width=None, he
 
     render_mask(rhino_view=render_view, out_path=outputs["mask"], width=width, height=height)
 
-    # Attempt to pull linear depth/normal from the render pipeline; fall back silently if unavailable.
-    channel_data = _capture_render_channels(render_view, need_depth=True, need_normal=True)
-    if "depth" in channel_data:
-        w, h, c, buf = channel_data["depth"]
-        _write_pfm(outputs["depth_linear"], w, h, c, buf)
-    if "normal" in channel_data:
-        w, h, c, buf = channel_data["normal"]
-        _write_pfm(outputs["normal_linear"], w, h, c, buf)
+    _capture_render_channels_to_files(
+        render_view,
+        depth_path=outputs["depth_linear"],
+        normal_path=outputs["normal_linear"],
+        width=width,
+        height=height,
+    )
 
     render_view.ActiveViewport.SetWallpaper(prev_wallpaper_file, False)
 
-    return outputs
+    return outputs 
