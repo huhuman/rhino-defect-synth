@@ -4,7 +4,8 @@ from utils_loc.crack_modeling import create_crack
 from utils_loc.materials import import_materials
 from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
-import utils_loc.render as render_steps
+import utils_loc.render as render
+
 
 
 def prepare(params=None):
@@ -68,36 +69,36 @@ def create_model(params):
         raise ValueError(f"Unknown strategy: {strategy}")
 
 
-def render(params, show_cameras=False):
+def run_render(params, show_cameras=False):
     """Pipeline render stage."""
-    render_steps.setup_render_environment(params)
-    context = render_steps.build_render_context(params)
+    render.setup_render_environment(params)
+    context = render.build_render_context(params)
     if context is None:
         return
 
-    render_steps.redraw_views()
-    poses = render_steps.generate_render_poses(context)
+    render.redraw_views()
+    poses = render.generate_render_poses(context)
     print(f"Generated {len(poses)} camera poses for rendering.")
 
     if show_cameras:
         print("show_cameras=True; drawing camera gizmos and exiting.")
-        render_steps.preview_camera_gizmos(poses, context["lengths"])
+        render.preview_camera_gizmos(poses, context["lengths"])
         return
 
-    return render_steps.capture_pose_sequence(poses, context)
+    return render.capture_pose_sequence(poses, context)
 
 
-def render_demo(base_out_dir, params=None):
+def run_render_demo(base_out_dir, params=None):
     """Pipeline demo stage for sweeping render settings."""
-    context = render_steps.build_render_demo_context(base_out_dir=base_out_dir, params=params)
+    context = render.build_render_demo_context(base_out_dir=base_out_dir, params=params)
     captured_paths = []
     try:
-        for case_idx, case in enumerate(render_steps.iterate_render_demo_cases(context)):
-            if render_steps.should_stop_render_demo(case_idx, context):
+        for case_idx, case in enumerate(render.iterate_render_demo_cases(context)):
+            if render.should_stop_render_demo(case_idx, context):
                 break
-            captured_paths.append(render_steps.capture_render_demo_case(case_idx, case, context))
+            captured_paths.append(render.capture_render_demo_case(case_idx, case, context))
     finally:
-        render_steps.restore_render_demo_context(context)
+        render.restore_render_demo_context(context)
 
-    print(f"render_demo: captured {len(captured_paths)} images to '{context['base_out_dir']}'.")
+    print(f"run_render_demo: captured {len(captured_paths)} images to '{context['base_out_dir']}'.")
     return captured_paths

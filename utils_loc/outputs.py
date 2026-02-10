@@ -38,6 +38,172 @@ def _capture_bitmap(rhino_view, width=None, height=None, transparent=False):
     return bitmap
 
 
+def _try_set_attr(target, name, value):
+    """Best-effort setter for RhinoCommon attributes across Rhino versions."""
+    if not hasattr(target, name):
+        return
+    try:
+        setattr(target, name, value)
+    except Exception:
+        pass
+
+
+def _clone_display_attributes(attrs):
+    """Create a mutable copy of display attributes with compatibility fallbacks."""
+    if attrs is None:
+        return Rhino.Display.DisplayPipelineAttributes()
+
+    try:
+        return Rhino.Display.DisplayPipelineAttributes(attrs)
+    except Exception:
+        pass
+
+    if hasattr(attrs, "Duplicate"):
+        try:
+            return attrs.Duplicate()
+        except Exception:
+            pass
+
+    cloned = Rhino.Display.DisplayPipelineAttributes()
+    if hasattr(cloned, "CopyContentsFrom"):
+        try:
+            cloned.CopyContentsFrom(attrs)
+            return cloned
+        except Exception:
+            pass
+    return cloned
+
+
+def _mask_display_mode():
+    return (
+        Rhino.Display.DisplayModeDescription.FindByName("Flat Shade")
+        or Rhino.Display.DisplayModeDescription.FindByName("Base Color")
+    )
+
+
+def _build_mask_display_attributes(viewport):
+    """
+    Build display attributes for segmentation-like masks:
+    no shadows/edges/transparency/post effects; preserve object/layer display colors.
+    """
+    mode = _mask_display_mode()
+    base_mode = mode or viewport.DisplayMode
+    attrs = _clone_display_attributes(getattr(base_mode, "DisplayAttributes", None))
+
+    bool_overrides = {
+        "CastShadows": False,
+        "DisableTransparency": True,
+        "FlatShade": True,
+        "IgnoreHighlights": True,
+        "PostProcessFrameBuffer": False,
+        "ShadowsOn": False,
+        "ShowAnnotations": False,
+        "ShowClippingPlanes": False,
+        "ShowConduits": False,
+        "ShowCurves": False,
+        "ShowIsocurves": False,
+        "ShowLights": False,
+        "ShowMeshEdges": False,
+        "ShowMeshNakedEdges": False,
+        "ShowMeshWires": False,
+        "ShowPoints": False,
+        "ShowSurfaceEdges": False,
+        "ShowText": False,
+        "UseAssignedObjectMaterial": False,
+        "UseCustomObjectColor": False,
+        "UseCustomObjectColorBackfaces": False,
+        "UseCustomObjectMaterial": False,
+        "UseCustomObjectMaterialBackfaces": False,
+        "UseObjectMaterial": False,
+        "UseObjectMaterialBackfaces": False,
+        "UseSingleObjectColor": False,
+    }
+    for name, value in bool_overrides.items():
+        _try_set_attr(attrs, name, value)
+
+    _try_set_attr(attrs, "ShadowEdgeBlur", 0)
+
+    if hasattr(attrs, "SetFill"):
+        try:
+            attrs.SetFill(Drawing.Color.Black)
+        except Exception:
+            pass
+
+    return attrs
+
+
+def _capture_mask_bitmap(rhino_view, width=None, height=None):
+    """Capture mask bitmap with dedicated display attributes and AA disabled."""
+    viewport = rhino_view.ActiveViewport
+    size = viewport.Size
+    out_size = Drawing.Size(
+        int(width) if width else size.Width,
+        int(height) if height else size.Height,
+    )
+    attrs = _build_mask_display_attributes(viewport)
+
+    prev_aa = None
+    aa_changed = False
+    try:
+        ogl = Rhino.ApplicationSettings.OpenGLSettings
+        prev_aa = ogl.AntialiasLevel
+        if prev_aa != 0:
+            ogl.AntialiasLevel = 0
+            aa_changed = True
+    except Exception:
+        prev_aa = None
+
+    try:
+        rhino_view.Redraw()
+        rs.Sleep(50)
+        bitmap = None
+        try:
+            bitmap = rhino_view.CaptureToBitmap(out_size, attrs)
+        except Exception:
+            try:
+                bitmap = rhino_view.CaptureToBitmap(attrs)
+            except Exception:
+                bitmap = None
+
+        if bitmap is None:
+            raise RuntimeError("RhinoView.CaptureToBitmap returned no bitmap for mask output.")
+        return bitmap
+    finally:
+        if aa_changed and prev_aa is not None:
+            try:
+                Rhino.ApplicationSettings.OpenGLSettings.AntialiasLevel = prev_aa
+                rhino_view.Redraw()
+            except Exception:
+                pass
+
+
+def _force_visible_objects_color_by_layer():
+    """
+    Temporarily force visible objects to use layer color source.
+    Returns list of (obj_id, previous_source) for restoration.
+    """
+    changed = []
+    for obj_id in rs.VisibleObjects() or []:
+        try:
+            prev_source = rs.ObjectColorSource(obj_id)
+            if prev_source is None or prev_source == 0:
+                continue
+            if rs.ObjectColorSource(obj_id, 0) is not None:
+                changed.append((obj_id, prev_source))
+        except Exception:
+            continue
+    return changed
+
+
+def _restore_object_color_sources(changed_items):
+    for obj_id, source in changed_items:
+        try:
+            if rs.IsObject(obj_id):
+                rs.ObjectColorSource(obj_id, source)
+        except Exception:
+            continue
+
+
 def _save_bitmap(bitmap, out_path):
     """Save a bitmap to disk as PNG."""
     if not out_path:
@@ -149,7 +315,7 @@ def render_normal(rhino_view, out_path=None, width=None, height=None):
 
 def render_mask(rhino_view, out_path=None, width=None, height=None):
     """
-    Render an object mask pass using Rhino's built-in "Flat Shade" display mode.
+    Render an object mask pass using explicit display attributes for crisp layer colors.
     """
     rs.CurrentView(rhino_view.ActiveViewport.Name)
     viewport = rhino_view.ActiveViewport
@@ -161,17 +327,20 @@ def render_mask(rhino_view, out_path=None, width=None, height=None):
         viewport.ConstructionGridVisible = False
     if prev_cplane is not None:
         viewport.ConstructionPlaneVisible = False
+    changed_sources = _force_visible_objects_color_by_layer()
     try:
-        flat_mode = (
-            Rhino.Display.DisplayModeDescription.FindByName("Flat Shade")
-            or Rhino.Display.DisplayModeDescription.FindByName("Base Color")
-        )
-        if flat_mode:
-            viewport.DisplayMode = flat_mode
-        rhino_view.Redraw()
-        bitmap = _capture_bitmap(rhino_view, width=width, height=height, transparent=False)
+        try:
+            bitmap = _capture_mask_bitmap(rhino_view, width=width, height=height)
+        except Exception:
+            # Compatibility fallback to previous behavior if custom capture fails.
+            flat_mode = _mask_display_mode()
+            if flat_mode:
+                viewport.DisplayMode = flat_mode
+            rhino_view.Redraw()
+            bitmap = _capture_bitmap(rhino_view, width=width, height=height, transparent=False)
         return _save_bitmap(bitmap, out_path)
     finally:
+        _restore_object_color_sources(changed_sources)
         viewport.DisplayMode = prev_mode
         rhino_view.Redraw()
 
@@ -187,8 +356,8 @@ def render_all_outputs(view=None, out_dir=None, basename="frame", width=None, he
         "color": os.path.abspath(os.path.join(out_dir, f"color/{basename}.png")),
         "depth": os.path.abspath(os.path.join(out_dir, f"depth/{basename}.png")),
         "normal": os.path.abspath(os.path.join(out_dir, f"normal/{basename}.png")),
-        "depth_linear": os.path.abspath(os.path.join(out_dir, f"depth/{basename}.pfm")),
-        "normal_linear": os.path.abspath(os.path.join(out_dir, f"normal/{basename}.pfm")),
+        "depth_linear": os.path.abspath(os.path.join(out_dir, f"depth_buffer/{basename}.pfm")),
+        "normal_linear": os.path.abspath(os.path.join(out_dir, f"normal_buffer/{basename}.pfm")),
         "mask": os.path.abspath(os.path.join(out_dir, f"mask/{basename}.png")),
     }
     for path in outputs.values():
@@ -214,12 +383,6 @@ def render_all_outputs(view=None, out_dir=None, basename="frame", width=None, he
 
     render_normal(rhino_view=render_view, out_path=outputs["normal"], width=width, height=height)
 
-    mode = (
-        Rhino.Display.DisplayModeDescription.FindByName("Flat Shade")
-        or Rhino.Display.DisplayModeDescription.FindByName("Base Color")
-    )
-    if mode:
-        render_view.ActiveViewport.DisplayMode = mode
     for layer in sc.doc.Layers:
         if layer.Name == "crack_extrusion":
             layer.IsVisible = False

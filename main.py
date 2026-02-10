@@ -6,7 +6,7 @@ import scriptcontext as sc
 import rhinoscriptsyntax as rs
 
 from utils_loc.config import load_config
-from utils_loc.pipeline import create_model, prepare, render
+from utils_loc.pipeline import create_model, prepare, run_render
 
 STAGE_ORDER = (
     "reset",
@@ -144,7 +144,7 @@ def run(
             raise ValueError("Selected 'rendering' stage but config has no 'rendering' section.")
         time_stage(
             "rendering",
-            render,
+            run_render,
             stage_times,
             params=rendering_params,
             show_cameras=show_cameras,
@@ -184,7 +184,7 @@ if __name__ == "__main__":
     #    run(stages=["preparation"])
     run(
         config_name="cube_render.yaml",
-        stages=["load_config", "preparation", "view_setup", "modeling", "rendering"],
+        stages=["rendering"],
         skip=[],
         start_face_index=0,
         show_cameras=False,
