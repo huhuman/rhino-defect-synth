@@ -84,6 +84,9 @@ def _build_render_context(params):
         "lens": camera_cfg.get("lens"),
         "transition_frames": int(camera_cfg.get("transition_frames", 0)),
         "smooth_path": bool(camera_cfg.get("smooth_path", False)),
+        "width": params.get("width"),
+        "height": params.get("height"),
+        "max_length": params.get("max_length"),
     }
 
 
@@ -95,7 +98,17 @@ def _generate_render_poses(context):
 
     points_per_side = max(2, int(camera_cfg["points_per_side"]))
     poses = generate_box_camera_grid(center, lengths, points_per_side)
-    position_jitter = min(lengths) / (points_per_side - 1) * 0.0
+
+    grid_spacing = min(lengths) / float(points_per_side - 1)
+    position_jitter_override = camera_cfg.get("position_jitter")
+    if position_jitter_override is None:
+        # Scale-based jitter keeps behavior proportional to scene/camera grid size.
+        position_jitter_scale = float(camera_cfg.get("position_jitter_scale", 0.25))
+        position_jitter = max(0.0, grid_spacing * position_jitter_scale)
+    else:
+        # Absolute jitter in model units takes precedence when explicitly configured.
+        position_jitter = max(0.0, float(position_jitter_override))
+
     direction_jitter_degrees = float(camera_cfg.get("direction_jitter_degrees", 10.0))
     poses = jitter_camera_poses(
         poses,
@@ -174,10 +187,16 @@ def _preview_camera_gizmos(poses, lengths):
     rs.Redraw()
 
 
-def _capture_pose(idx, pose, base_out_dir, lens):
+def _capture_pose(idx, pose, base_out_dir, lens, width=None, height=None, max_length=None):
     set_camera(position=pose["position"], target=pose["target"], lens=lens)
     basename = f"view_{idx:03d}"
-    render_all_outputs(out_dir=base_out_dir, basename=basename)
+    render_all_outputs(
+        out_dir=base_out_dir,
+        basename=basename,
+        width=width,
+        height=height,
+        max_length=max_length,
+    )
 
 
 def _capture_pose_sequence(poses, context):
@@ -186,12 +205,15 @@ def _capture_pose_sequence(poses, context):
     lens = context["lens"]
     smooth_path = context["smooth_path"]
     transition_frames = context["transition_frames"]
+    width = context["width"]
+    height = context["height"]
+    max_length = context["max_length"]
 
     if smooth_path and transition_frames > 0:
         frame_idx = 0
         for i, pose in enumerate(poses[:-1]):
             next_pose = poses[i + 1]
-            _capture_pose(frame_idx, pose, base_out_dir, lens)
+            _capture_pose(frame_idx, pose, base_out_dir, lens, width=width, height=height, max_length=max_length)
             frame_idx += 1
 
             for step in range(1, transition_frames + 1):
@@ -202,14 +224,22 @@ def _capture_pose_sequence(poses, context):
                     pose["position"][2] + (next_pose["position"][2] - pose["position"][2]) * t,
                 )
                 interp_pose = {"position": interp_pos, "target": pose["target"], "direction": pose.get("direction")}
-                _capture_pose(frame_idx, interp_pose, base_out_dir, lens)
+                _capture_pose(
+                    frame_idx,
+                    interp_pose,
+                    base_out_dir,
+                    lens,
+                    width=width,
+                    height=height,
+                    max_length=max_length,
+                )
                 frame_idx += 1
 
-        _capture_pose(frame_idx, poses[-1], base_out_dir, lens)
+        _capture_pose(frame_idx, poses[-1], base_out_dir, lens, width=width, height=height, max_length=max_length)
         return
 
     for idx, pose in enumerate(poses):
-        _capture_pose(idx, pose, base_out_dir, lens)
+        _capture_pose(idx, pose, base_out_dir, lens, width=width, height=height, max_length=max_length)
 
 
 def setup_render_environment(params):
@@ -352,6 +382,7 @@ def build_render_demo_context(base_out_dir, params=None):
 
     width = params.get("width")
     height = params.get("height")
+    max_length = params.get("max_length")
     max_cases = params.get("max_cases")
     max_cases = None if max_cases is None else max(1, int(max_cases))
 
@@ -367,6 +398,7 @@ def build_render_demo_context(base_out_dir, params=None):
         "wallpaper_dir": wallpaper_dir,
         "width": width,
         "height": height,
+        "max_length": max_length,
         "max_cases": max_cases,
         "prev_wallpaper_file": rhino_view.ActiveViewport.WallpaperFilename,
         "prev_layer_material": target_layer.RenderMaterial,
@@ -418,7 +450,12 @@ def capture_render_demo_case(case_idx, case, context):
         f"_bg-{wallpaper_tag}"
     )
     out_path = os.path.join(context["base_out_dir"], f"{basename}.png")
-    bitmap = _capture_bitmap(rhino_view, width=context["width"], height=context["height"])
+    bitmap = _capture_bitmap(
+        rhino_view,
+        width=context["width"],
+        height=context["height"],
+        max_length=context["max_length"],
+    )
     _save_bitmap(bitmap, out_path)
     return out_path
 
@@ -444,6 +481,7 @@ def render_demo(base_out_dir, params=None):
       - use_wallpaper (list[bool]): default [False]
       - background_wallpaper_dir (str): required when any use_wallpaper=True
       - width, height (int): optional capture size overrides
+      - max_length (int): optional longest-side resolution preserving viewport aspect ratio
       - max_cases (int): optional cap on number of combinations
       - seed (int): seed for deterministic random material sampling
     """

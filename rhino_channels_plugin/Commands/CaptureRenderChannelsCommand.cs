@@ -99,7 +99,8 @@ namespace RhinoChannelsPlugin.Commands
                     srcSize.Height,
                     outWidth,
                     outHeight,
-                    view.ActiveViewport.CameraLocation);
+                    view.ActiveViewport.CameraLocation,
+                    view.ActiveViewport.CameraDirection);
 
                 var sourceNormals = BuildSourceNormalBuffer(
                     worldPoints,
@@ -169,8 +170,12 @@ namespace RhinoChannelsPlugin.Commands
             int srcHeight,
             int outWidth,
             int outHeight,
-            Point3d cameraLocation)
+            Point3d cameraLocation,
+            Vector3d cameraDirection)
         {
+            if (!cameraDirection.Unitize())
+                cameraDirection = new Vector3d(0, 0, -1);
+
             var data = new float[outWidth * outHeight];
             for (var y = 0; y < outHeight; y++)
             {
@@ -181,7 +186,9 @@ namespace RhinoChannelsPlugin.Commands
                     var sidx = (sy * srcWidth) + sx;
                     if (validMask[sidx])
                     {
-                        data[(y * outWidth) + x] = (float)cameraLocation.DistanceTo(worldPoints[sidx]);
+                        var ray = worldPoints[sidx] - cameraLocation;
+                        var depth = ray * cameraDirection;
+                        data[(y * outWidth) + x] = depth > 0.0 ? (float)depth : 0f;
                     }
                     else
                     {

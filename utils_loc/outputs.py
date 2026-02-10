@@ -1,5 +1,4 @@
 """Rendering outputs for color, depth, normal, and masks."""
-
 import os
 import struct
 
@@ -15,12 +14,49 @@ def _ensure_out_dir(path):
     os.makedirs(out_dir, exist_ok=True)
 
 
-def _capture_bitmap(rhino_view, width=None, height=None, transparent=False):
-    """Capture the given view to a bitmap with optional size override."""
+def _validate_dimension(value, name):
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer.")
+    return parsed
+
+
+def _resolve_capture_size(rhino_view, width=None, height=None, max_length=None):
+    """
+    Resolve capture size.
+    If max_length is provided (without explicit width/height), preserve viewport aspect ratio
+    and set the longest side to max_length.
+    """
     size = rhino_view.ActiveViewport.Size
+    default_width = max(1, int(size.Width))
+    default_height = max(1, int(size.Height))
+
+    if max_length is not None and width is None and height is None:
+        target = _validate_dimension(max_length, "max_length")
+        if default_width >= default_height:
+            out_width = target
+            out_height = max(1, int(round(target * float(default_height) / float(default_width))))
+        else:
+            out_height = target
+            out_width = max(1, int(round(target * float(default_width) / float(default_height))))
+        return out_width, out_height
+
+    out_width = _validate_dimension(width, "width") if width is not None else default_width
+    out_height = _validate_dimension(height, "height") if height is not None else default_height
+    return out_width, out_height
+
+
+def _capture_bitmap(rhino_view, width=None, height=None, max_length=None, transparent=False):
+    """Capture the given view to a bitmap with optional size override."""
+    resolved_width, resolved_height = _resolve_capture_size(
+        rhino_view=rhino_view,
+        width=width,
+        height=height,
+        max_length=max_length,
+    )
     capture = Rhino.Display.ViewCapture()
-    capture.Width = int(width) if width else size.Width
-    capture.Height = int(height) if height else size.Height
+    capture.Width = resolved_width
+    capture.Height = resolved_height
     capture.ScaleScreenItems = False
     capture.DrawAxes = False
     capture.DrawGrid = False
@@ -132,14 +168,16 @@ def _build_mask_display_attributes(viewport):
     return attrs
 
 
-def _capture_mask_bitmap(rhino_view, width=None, height=None):
+def _capture_mask_bitmap(rhino_view, width=None, height=None, max_length=None):
     """Capture mask bitmap with dedicated display attributes and AA disabled."""
-    viewport = rhino_view.ActiveViewport
-    size = viewport.Size
-    out_size = Drawing.Size(
-        int(width) if width else size.Width,
-        int(height) if height else size.Height,
+    resolved_width, resolved_height = _resolve_capture_size(
+        rhino_view=rhino_view,
+        width=width,
+        height=height,
+        max_length=max_length,
     )
+    out_size = Drawing.Size(resolved_width, resolved_height)
+    viewport = rhino_view.ActiveViewport
     attrs = _build_mask_display_attributes(viewport)
 
     prev_aa = None
@@ -238,11 +276,17 @@ def _capture_render_channels_to_files(rhino_view, depth_path, normal_path, width
     width_value = int(width) if width else 0
     height_value = int(height) if height else 0
 
+    # Force the same active view used by color capture and let the command
+    # consume active view with Enter to avoid accidental lookup mismatch.
+    rs.CurrentView(view_name)
+    rhino_view.Redraw()
+    rs.Sleep(50)
+
     cmd_parts = [
         "-CaptureRenderChannels",
         f'"{depth_path}"',
         f'"{normal_path}"',
-        f'"{view_name}"',
+        "_Enter",
         str(width_value),
         str(height_value),
     ]
@@ -256,7 +300,7 @@ def _capture_render_channels_to_files(rhino_view, depth_path, normal_path, width
         raise RuntimeError("CaptureRenderChannels command failed. Is the plugin loaded?")
 
 
-def render_image(rhino_view, out_path=None, preset=None, width=None, height=None):
+def render_image(rhino_view, out_path=None, preset=None, width=None, height=None, max_length=None):
     """
     Render the active/named view to an image file.
 
@@ -266,6 +310,7 @@ def render_image(rhino_view, out_path=None, preset=None, width=None, height=None
         preset: render preset name (display mode name).
         width: optional override width.
         height: optional override height.
+        max_length: optional longest-side resolution that preserves aspect ratio.
     """
     rs.CurrentView(rhino_view.ActiveViewport.Name)
     prev_mode = rhino_view.ActiveViewport.DisplayMode
@@ -275,21 +320,21 @@ def render_image(rhino_view, out_path=None, preset=None, width=None, height=None
             mode = Rhino.Display.DisplayModeDescription.FindByName(preset)
             if mode:
                 rhino_view.ActiveViewport.DisplayMode = mode
-        bitmap = _capture_bitmap(rhino_view, width=width, height=height)
+        bitmap = _capture_bitmap(rhino_view, width=width, height=height, max_length=max_length)
         return _save_bitmap(bitmap, out_path)
     finally:
         rhino_view.ActiveViewport.DisplayMode = prev_mode
         rhino_view.Redraw()
 
 
-def render_depth(rhino_view, out_path=None, width=None, height=None):
+def render_depth(rhino_view, out_path=None, width=None, height=None, max_length=None):
     """Render a depth pass for the view using Rhino's ZBuffer preview."""
     rs.CurrentView(rhino_view.ActiveViewport.Name)
     prev_mode = rhino_view.ActiveViewport.DisplayMode
 
     try:
         rs.Command("-ShowZBuffer _Enter", echo=False)
-        bitmap = _capture_bitmap(rhino_view, width=width, height=height)
+        bitmap = _capture_bitmap(rhino_view, width=width, height=height, max_length=max_length)
         return _save_bitmap(bitmap, out_path)
     finally:
         # Toggle back to the previous display and restore the original mode.
@@ -298,14 +343,14 @@ def render_depth(rhino_view, out_path=None, width=None, height=None):
         rhino_view.Redraw()
 
 
-def render_normal(rhino_view, out_path=None, width=None, height=None):
+def render_normal(rhino_view, out_path=None, width=None, height=None, max_length=None):
     """Render a normal pass for the view using the test normal map preview."""
     rs.CurrentView(rhino_view.ActiveViewport.Name)
     prev_mode = rhino_view.ActiveViewport.DisplayMode
 
     try:
         rs.Command("-TestShowNormalMap _Enter", echo=False)
-        bitmap = _capture_bitmap(rhino_view, width=width, height=height)
+        bitmap = _capture_bitmap(rhino_view, width=width, height=height, max_length=max_length)
         return _save_bitmap(bitmap, out_path)
     finally:
         rs.Command("-TestShowNormalMap _Enter", echo=False)
@@ -313,7 +358,7 @@ def render_normal(rhino_view, out_path=None, width=None, height=None):
         rhino_view.Redraw()
 
 
-def render_mask(rhino_view, out_path=None, width=None, height=None):
+def render_mask(rhino_view, out_path=None, width=None, height=None, max_length=None):
     """
     Render an object mask pass using explicit display attributes for crisp layer colors.
     """
@@ -330,14 +375,20 @@ def render_mask(rhino_view, out_path=None, width=None, height=None):
     changed_sources = _force_visible_objects_color_by_layer()
     try:
         try:
-            bitmap = _capture_mask_bitmap(rhino_view, width=width, height=height)
+            bitmap = _capture_mask_bitmap(rhino_view, width=width, height=height, max_length=max_length)
         except Exception:
             # Compatibility fallback to previous behavior if custom capture fails.
             flat_mode = _mask_display_mode()
             if flat_mode:
                 viewport.DisplayMode = flat_mode
             rhino_view.Redraw()
-            bitmap = _capture_bitmap(rhino_view, width=width, height=height, transparent=False)
+            bitmap = _capture_bitmap(
+                rhino_view,
+                width=width,
+                height=height,
+                max_length=max_length,
+                transparent=False,
+            )
         return _save_bitmap(bitmap, out_path)
     finally:
         _restore_object_color_sources(changed_sources)
@@ -345,7 +396,7 @@ def render_mask(rhino_view, out_path=None, width=None, height=None):
         rhino_view.Redraw()
 
 
-def render_all_outputs(view=None, out_dir=None, basename="frame", width=None, height=None):
+def render_all_outputs(view=None, out_dir=None, basename="frame", width=None, height=None, max_length=None):
     """
     Convenience helper to render color, depth, normal, and mask in one call.
     """
@@ -376,12 +427,36 @@ def render_all_outputs(view=None, out_dir=None, basename="frame", width=None, he
     prev_wallpaper_file = render_view.ActiveViewport.WallpaperFilename
     render_view.Redraw()
 
-    render_image(rhino_view=render_view, out_path=outputs["color"], width=width, height=height)
-    render_depth(rhino_view=render_view, out_path=outputs["depth"], width=width, height=height)
+    capture_width, capture_height = _resolve_capture_size(
+        rhino_view=render_view,
+        width=width,
+        height=height,
+        max_length=max_length,
+    )
+    view_size = render_view.ActiveViewport.Size
+    view_ratio = float(view_size.Width) / float(max(1, view_size.Height))
+    out_ratio = float(capture_width) / float(max(1, capture_height))
+    if abs(view_ratio - out_ratio) > 1e-6:
+        print(
+            "Warning: viewport/output aspect mismatch may cause buffer FOV mismatch "
+            f"(view={view_size.Width}x{view_size.Height}, out={capture_width}x{capture_height})."
+        )
+
+    render_image(rhino_view=render_view, out_path=outputs["color"], width=capture_width, height=capture_height)
+    # Capture linear channels in the same camera/display/layer state as color.
+    _capture_render_channels_to_files(
+        render_view,
+        depth_path=outputs["depth_linear"],
+        normal_path=outputs["normal_linear"],
+        width=capture_width,
+        height=capture_height,
+    )
+
+    render_depth(rhino_view=render_view, out_path=outputs["depth"], width=capture_width, height=capture_height)
 
     render_view.ActiveViewport.SetWallpaper("", False)
 
-    render_normal(rhino_view=render_view, out_path=outputs["normal"], width=width, height=height)
+    render_normal(rhino_view=render_view, out_path=outputs["normal"], width=capture_width, height=capture_height)
 
     for layer in sc.doc.Layers:
         if layer.Name == "crack_extrusion":
@@ -390,15 +465,7 @@ def render_all_outputs(view=None, out_dir=None, basename="frame", width=None, he
             layer.IsVisible = True
     render_view.Redraw()
 
-    render_mask(rhino_view=render_view, out_path=outputs["mask"], width=width, height=height)
-
-    _capture_render_channels_to_files(
-        render_view,
-        depth_path=outputs["depth_linear"],
-        normal_path=outputs["normal_linear"],
-        width=width,
-        height=height,
-    )
+    render_mask(rhino_view=render_view, out_path=outputs["mask"], width=capture_width, height=capture_height)
 
     render_view.ActiveViewport.SetWallpaper(prev_wallpaper_file, False)
 

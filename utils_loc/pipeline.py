@@ -4,8 +4,9 @@ from utils_loc.crack_modeling import create_crack
 from utils_loc.materials import import_materials
 from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
-import utils_loc.render as render
 
+import importlib
+render = importlib.import_module("utils_loc.render")
 
 
 def prepare(params=None):
