@@ -87,6 +87,11 @@ def _build_render_context(params):
         "width": params.get("width"),
         "height": params.get("height"),
         "max_length": params.get("max_length"),
+        "output_basename_pattern": params.get("output_basename_pattern"),
+        "output_basename_prefix": params.get("output_basename_prefix"),
+        "output_index_offset": int(params.get("output_index_offset", 0)),
+        "model_iter": params.get("model_iter"),
+        "render_iter": params.get("render_iter"),
     }
 
 
@@ -187,33 +192,50 @@ def _preview_camera_gizmos(poses, lengths):
     rs.Redraw()
 
 
-def _capture_pose(idx, pose, base_out_dir, lens, width=None, height=None, max_length=None):
-    set_camera(position=pose["position"], target=pose["target"], lens=lens)
-    basename = f"view_{idx:03d}"
+def _build_capture_basename(output_idx, context):
+    idx = int(output_idx) + int(context.get("output_index_offset", 0))
+    pattern = context.get("output_basename_pattern")
+    if pattern:
+        try:
+            return str(pattern).format(
+                output_idx=idx,
+                model_iter=context.get("model_iter"),
+                render_iter=context.get("render_iter"),
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid output_basename_pattern='{pattern}'. "
+                "Expected Python format placeholders such as {output_idx}."
+            ) from exc
+
+    prefix = context.get("output_basename_prefix")
+    if prefix is not None:
+        return f"{prefix}{idx}"
+    return f"view_{idx:03d}"
+
+
+def _capture_pose(idx, pose, context):
+    set_camera(position=pose["position"], target=pose["target"], lens=context["lens"])
+    basename = _build_capture_basename(idx, context)
     render_all_outputs(
-        out_dir=base_out_dir,
+        out_dir=context["base_out_dir"],
         basename=basename,
-        width=width,
-        height=height,
-        max_length=max_length,
+        width=context["width"],
+        height=context["height"],
+        max_length=context["max_length"],
     )
 
 
 def _capture_pose_sequence(poses, context):
     """Capture all frames based on smooth/direct path settings."""
-    base_out_dir = context["base_out_dir"]
-    lens = context["lens"]
     smooth_path = context["smooth_path"]
     transition_frames = context["transition_frames"]
-    width = context["width"]
-    height = context["height"]
-    max_length = context["max_length"]
 
     if smooth_path and transition_frames > 0:
         frame_idx = 0
         for i, pose in enumerate(poses[:-1]):
             next_pose = poses[i + 1]
-            _capture_pose(frame_idx, pose, base_out_dir, lens, width=width, height=height, max_length=max_length)
+            _capture_pose(frame_idx, pose, context)
             frame_idx += 1
 
             for step in range(1, transition_frames + 1):
@@ -224,22 +246,14 @@ def _capture_pose_sequence(poses, context):
                     pose["position"][2] + (next_pose["position"][2] - pose["position"][2]) * t,
                 )
                 interp_pose = {"position": interp_pos, "target": pose["target"], "direction": pose.get("direction")}
-                _capture_pose(
-                    frame_idx,
-                    interp_pose,
-                    base_out_dir,
-                    lens,
-                    width=width,
-                    height=height,
-                    max_length=max_length,
-                )
+                _capture_pose(frame_idx, interp_pose, context)
                 frame_idx += 1
 
-        _capture_pose(frame_idx, poses[-1], base_out_dir, lens, width=width, height=height, max_length=max_length)
+        _capture_pose(frame_idx, poses[-1], context)
         return
 
     for idx, pose in enumerate(poses):
-        _capture_pose(idx, pose, base_out_dir, lens, width=width, height=height, max_length=max_length)
+        _capture_pose(idx, pose, context)
 
 
 def setup_render_environment(params):
