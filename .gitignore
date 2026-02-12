@@ -1,3 +1,5 @@
 __pycache__/
 *bin
 *obj
+configs/*.local.yaml
+configs/*.local.yml

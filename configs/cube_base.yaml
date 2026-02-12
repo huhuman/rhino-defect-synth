@@ -1,4 +1,7 @@
 preparation:
+  texture_materials:
+    texture_root_dir: "C:/path/to/your/texture_root"
+    recursive: true
   materials:
     cube: Concrete light
     crack_extrusion: Concrete rusty
