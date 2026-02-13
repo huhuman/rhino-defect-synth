@@ -1,10 +1,34 @@
 #! python3
-import System
 import Rhino
 import scriptcontext as sc
 import rhinoscriptsyntax as rs
 import os
-import time
+
+
+_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".tga", ".exr")
+_MAP_SUFFIXES = {
+    "albedo": ("basecolor", "base_color", "albedo", "diffuse", "color", "col"),
+    "normal": ("normal", "norm", "nrm", "nor"),
+    "occlusion": ("ao", "oc", "ambientocclusion", "ambient_occlusion", "occlusion"),
+    "roughness": ("roughness", "rough", "rgh"),
+    "metallic": ("metallic", "metalness", "metal"),
+    "height": ("height", "displacement", "disp", "bump"),
+    "opacity": ("opacity", "alpha", "mask", "transparency"),
+    "specular": ("specular", "spec", "glossiness", "gloss"),
+}
+_ALL_SUFFIXES = tuple(
+    suffix for suffixes in _MAP_SUFFIXES.values() for suffix in suffixes
+)
+_PBR_ENUM_CANDIDATES = {
+    "albedo": ("PBR_BaseColor", "Diffuse", "Bitmap"),
+    "normal": ("PBR_Normal", "Bump"),
+    "roughness": ("PBR_Roughness",),
+    "occlusion": ("PBR_AmbientOcclusion",),
+    "metallic": ("PBR_Metallic",),
+    "height": ("PBR_Displacement", "Displacement"),
+    "opacity": ("PBR_Opacity", "Transparency"),
+    "specular": ("PBR_Specular",),
+}
 
 # Last update by 2025/02/13
 Vray_Material_Metadata = {
@@ -21,13 +45,17 @@ Vray_Material_Metadata = {
     "/Concrete Grey 03 100cm": ["1639468414", "c6515288-34c2-49d8-b32e-1a5eb30c5c4b"],
     "/Concrete Grey 06 100cm": ["1639468424", "d83b8f99-c819-4ad2-83e5-0a921279af79"],
 }
-All_Render_Materials = [mat.DisplayName for mat in sc.doc.RenderMaterials]
+
+
+def _get_render_material_names():
+    return [mat.DisplayName for mat in sc.doc.RenderMaterials]
 
 
 def import_Vray_materials():
+    all_render_materials = _get_render_material_names()
     for mat, info in Vray_Material_Metadata.items():
         is_exist = False
-        for render_mat in All_Render_Materials:
+        for render_mat in all_render_materials:
             if mat in render_mat:
                 is_exist = True
                 break
@@ -37,13 +65,257 @@ def import_Vray_materials():
 
 
 def import_materials(category="Architectural", subcategory1="Wall", subcategory2="Concrete"):
+    all_render_materials = _get_render_material_names()
     user_root = os.path.expanduser("~")
     material_root = os.path.join(user_root, "AppData", "Roaming", "McNeel", "Rhinoceros", "8.0", "Localization", "en-US", "Render Content", category, subcategory1, subcategory2)
     if not os.path.exists(material_root):
         print(f'Material path does not exist: {material_root}')
         return
     for filename in os.listdir(material_root):
-        if filename[:-5] not in All_Render_Materials:
+        if filename[:-5] not in all_render_materials:
             filepath = os.path.join(material_root, filename)
             Rhino.Render.RenderMaterial.ImportMaterialAndAssignToLayers(sc.doc, filepath, [])
             print(f'Importing material: {filename[:-5]}')
+
+
+def _guess_map_kind_from_stem(stem):
+    stem_lc = stem.lower()
+    for kind, suffixes in _MAP_SUFFIXES.items():
+        for suffix in suffixes:
+            if stem_lc.endswith("_" + suffix):
+                return kind
+    return None
+
+
+def _strip_known_suffix(stem):
+    stem_lc = stem.lower()
+    for suffix in sorted(_ALL_SUFFIXES, key=len, reverse=True):
+        token = "_" + suffix
+        if stem_lc.endswith(token):
+            return stem[:-len(token)]
+    return stem
+
+
+def _build_image_index(texture_dir):
+    index = {}
+    for filename in os.listdir(texture_dir):
+        stem, ext = os.path.splitext(filename)
+        if ext.lower() not in _IMAGE_EXTENSIONS:
+            continue
+        key = stem.lower()
+        if key not in index:
+            index[key] = os.path.abspath(os.path.join(texture_dir, filename))
+    return index
+
+
+def _find_map_from_index(image_index, root_stem, suffixes):
+    root_key = root_stem.lower()
+    for suffix in suffixes:
+        key = "{}_{}".format(root_key, suffix)
+        if key in image_index:
+            return image_index[key]
+    return None
+
+
+def find_texture_bitmaps(texture_jpg_path):
+    """Find companion bitmap maps next to a base texture path.
+
+    Expected texture naming pattern:
+        <root>.jpg, <root>_normal.png, <root>_ao.jpg, <root>_roughness.jpg, ...
+    """
+    texture_jpg_path = os.path.abspath(texture_jpg_path)
+    if not os.path.isfile(texture_jpg_path):
+        raise ValueError("Texture file does not exist: {}".format(texture_jpg_path))
+
+    texture_dir = os.path.dirname(texture_jpg_path)
+    stem = os.path.splitext(os.path.basename(texture_jpg_path))[0]
+    stem_kind = _guess_map_kind_from_stem(stem)
+    root_stem = _strip_known_suffix(stem)
+    image_index = _build_image_index(texture_dir)
+
+    bitmaps = {key: None for key in _MAP_SUFFIXES.keys()}
+    if stem_kind is None or stem_kind == "albedo":
+        bitmaps["albedo"] = texture_jpg_path
+    else:
+        bitmaps[stem_kind] = texture_jpg_path
+
+    for kind, suffixes in _MAP_SUFFIXES.items():
+        if bitmaps[kind]:
+            continue
+        bitmaps[kind] = _find_map_from_index(image_index, root_stem, suffixes)
+
+    # If caller passed *_normal.jpg, etc., still try to find root/albedo textures.
+    if not bitmaps["albedo"]:
+        root_key = root_stem.lower()
+        if root_key in image_index:
+            bitmaps["albedo"] = image_index[root_key]
+        else:
+            bitmaps["albedo"] = _find_map_from_index(image_index, root_stem, _MAP_SUFFIXES["albedo"])
+
+    bitmaps["root_stem"] = root_stem
+    return bitmaps
+
+
+def _get_texture_type(texture_type_name):
+    try:
+        return getattr(Rhino.DocObjects.TextureType, texture_type_name)
+    except Exception:
+        return None
+
+
+def _set_texture_by_type(material, texture_path, type_names):
+    if not texture_path:
+        return False
+
+    texture = Rhino.DocObjects.Texture()
+    texture.FileName = texture_path
+    texture.Enabled = True
+
+    for type_name in type_names:
+        texture_type = _get_texture_type(type_name)
+        if texture_type is None:
+            continue
+        try:
+            if material.SetTexture(texture, texture_type):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def build_material_from_texture_bitmaps(texture_bitmaps, material_name):
+    """Create a Rhino material from discovered texture bitmaps."""
+    material = Rhino.DocObjects.Material()
+    material.Name = material_name
+
+    albedo = texture_bitmaps.get("albedo")
+    normal = texture_bitmaps.get("normal")
+    opacity = texture_bitmaps.get("opacity")
+
+    if albedo:
+        try:
+            material.SetBitmapTexture(albedo)
+        except Exception:
+            pass
+    if normal:
+        try:
+            material.SetBumpTexture(normal)
+        except Exception:
+            pass
+    if opacity:
+        try:
+            material.SetTransparencyTexture(opacity)
+        except Exception:
+            pass
+
+    for key, type_names in _PBR_ENUM_CANDIDATES.items():
+        texture_path = texture_bitmaps.get(key)
+        if texture_path:
+            _set_texture_by_type(material, texture_path, type_names)
+
+    return material
+
+
+def _make_unique_material_name(base_name):
+    existing = {mat.DisplayName.lower() for mat in sc.doc.RenderMaterials}
+    if base_name.lower() not in existing:
+        return base_name
+    idx = 1
+    while True:
+        candidate = "{}_{:02d}".format(base_name, idx)
+        if candidate.lower() not in existing:
+            return candidate
+        idx += 1
+
+
+def add_material_to_render_table(material, material_name=None, make_unique=True):
+    """Add a Rhino material into the current document render material table."""
+    material_name = material_name or material.Name or "material_from_texture"
+    if make_unique:
+        material_name = _make_unique_material_name(material_name)
+
+    try:
+        render_material = Rhino.Render.RenderMaterial.CreateBasicMaterial(material, sc.doc)
+        render_material.Name = material_name
+        sc.doc.RenderMaterials.Add(render_material)
+        return render_material
+    except Exception:
+        # Fallback for Rhino versions where RenderMaterial creation differs.
+        material.Name = material_name
+        sc.doc.Materials.Add(material)
+        return material
+
+
+def create_material_from_texture_jpg(texture_jpg_path, material_name=None, add_to_doc=True):
+    """Create one material from a base texture JPG and companion maps.
+
+    Companion map examples:
+      *_oc, *_ao, *_normal, *_roughness, *_metallic, *_height, *_opacity
+    """
+    texture_bitmaps = find_texture_bitmaps(texture_jpg_path)
+    inferred_name = material_name or texture_bitmaps["root_stem"]
+    material = build_material_from_texture_bitmaps(texture_bitmaps, inferred_name)
+    if not add_to_doc:
+        return material
+    return add_material_to_render_table(material, material_name=inferred_name, make_unique=True)
+
+
+def _create_materials_from_single_texture_dir(texture_dir):
+    """Create multiple materials from one texture directory (non-recursive)."""
+    texture_dir = os.path.abspath(texture_dir)
+    if not os.path.isdir(texture_dir):
+        raise ValueError("Texture directory does not exist: {}".format(texture_dir))
+
+    created = []
+    processed_roots = set()
+
+    for filename in sorted(os.listdir(texture_dir)):
+        stem, ext = os.path.splitext(filename)
+        if ext.lower() not in (".jpg", ".jpeg"):
+            continue
+        kind = _guess_map_kind_from_stem(stem)
+        if kind and kind != "albedo":
+            continue
+
+        root_stem = _strip_known_suffix(stem).lower()
+        if root_stem in processed_roots:
+            continue
+        processed_roots.add(root_stem)
+
+        texture_path = os.path.join(texture_dir, filename)
+        try:
+            mat = create_material_from_texture_jpg(texture_path, material_name=_strip_known_suffix(stem), add_to_doc=True)
+            created.append(mat)
+        except Exception as exc:
+            print("Failed to create material from '{}': {}".format(texture_path, exc))
+
+    print("Created {} materials from '{}'".format(len(created), texture_dir))
+    return created
+
+
+def create_materials_from_texture_dir(texture_dir, recursive=False):
+    """Create materials from a texture directory.
+
+    Args:
+        texture_dir (str): Directory containing JPG/JPEG textures and companion maps.
+        recursive (bool): If True, walk subdirectories and process each one.
+    """
+    texture_dir = os.path.abspath(texture_dir)
+    if not texture_dir:
+        print("Texture material path is empty.")
+        return []
+    if not os.path.isdir(texture_dir):
+        print("Texture material path does not exist: {}".format(texture_dir))
+        return []
+
+    if not recursive:
+        return _create_materials_from_single_texture_dir(texture_dir)
+
+    created = []
+    for root, _, files in os.walk(texture_dir):
+        if not any(name.lower().endswith((".jpg", ".jpeg")) for name in files):
+            continue
+        created.extend(_create_materials_from_single_texture_dir(root))
+
+    print("Created {} materials under '{}' (recursive)".format(len(created), texture_dir))
+    return created

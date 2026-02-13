@@ -1,7 +1,7 @@
 """Simple entry point orchestrating material, modeling, and rendering steps."""
 
 from utils_loc.crack_modeling import create_crack
-from utils_loc.materials import import_materials
+from utils_loc.materials import create_materials_from_texture_dir, import_materials
 from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
 
@@ -17,10 +17,19 @@ def prepare(params=None):
     params = params or {}
     colors = params.get("colors", {})
     materials = params.get("materials", {})
+    texture_materials = params.get("texture_materials", {})
 
     # Materials
     import_materials()
     # import_Vray_materials()
+
+    # Optional: build materials from a user texture directory.
+    texture_root_dir = texture_materials.get("texture_root_dir")
+    if texture_root_dir:
+        create_materials_from_texture_dir(
+            texture_root_dir,
+            recursive=texture_materials.get("recursive", True),
+        )
     
     # Layers
     create_layers(
