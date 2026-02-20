@@ -63,6 +63,67 @@ def _linspace(start: float, stop: float, n: int) -> List[float]:
     return [start + i * step for i in range(n)]
 
 
+def _dot(a: Sequence[float], b: Sequence[float]) -> float:
+    """Dot product of two 3D vectors."""
+    return float(a[0]) * float(b[0]) + float(a[1]) * float(b[1]) + float(a[2]) * float(b[2])
+
+
+def _cross(a: Sequence[float], b: Sequence[float]) -> Vec3:
+    """Cross product of two 3D vectors."""
+    ax, ay, az = (float(v) for v in a)
+    bx, by, bz = (float(v) for v in b)
+    return (
+        ay * bz - az * by,
+        az * bx - ax * bz,
+        ax * by - ay * bx,
+    )
+
+
+def _random_unit_vector() -> Vec3:
+    """Generate a uniformly random unit vector on the sphere."""
+    while True:
+        vec = (
+            random.uniform(-1.0, 1.0),
+            random.uniform(-1.0, 1.0),
+            random.uniform(-1.0, 1.0),
+        )
+        length_sq = _dot(vec, vec)
+        if length_sq > 1e-12:
+            return _normalize(vec)
+
+
+def _jitter_unit_vector(direction: Sequence[float], max_angle_degrees: float) -> Vec3:
+    """Perturb a unit direction vector by up to a given angle."""
+    base = _normalize(direction)
+    max_angle = max(0.0, min(89.0, float(max_angle_degrees)))
+    if max_angle <= 0.0:
+        return base
+
+    random_axis = _random_unit_vector()
+    tangent = tuple(random_axis[i] - base[i] * _dot(random_axis, base) for i in range(3))
+    tangent_len_sq = _dot(tangent, tangent)
+    if tangent_len_sq <= 1e-12:
+        tangent = _cross(base, (0.0, 0.0, 1.0))
+        tangent_len_sq = _dot(tangent, tangent)
+        if tangent_len_sq <= 1e-12:
+            tangent = _cross(base, (0.0, 1.0, 0.0))
+    tangent = _normalize(tangent)
+
+    jitter_angle = random.uniform(0.0, max_angle)
+    tangent_scale = math.tan(math.radians(jitter_angle))
+    perturbed = tuple(base[i] + tangent[i] * tangent_scale for i in range(3))
+    return _normalize(perturbed)
+
+
+def _orthonormal_basis(normal: Sequence[float]) -> Tuple[Vec3, Vec3]:
+    """Build two tangent axes orthogonal to the provided normal."""
+    n = _normalize(normal)
+    ref = (0.0, 0.0, 1.0) if abs(n[2]) < 0.95 else (0.0, 1.0, 0.0)
+    tangent_u = _normalize(_cross(ref, n))
+    tangent_v = _normalize(_cross(n, tangent_u))
+    return tangent_u, tangent_v
+
+
 def set_camera(view_name=None, position=None, target=None, up=None, lens=None):
     """
     Position a camera in the active or named view.
@@ -160,6 +221,109 @@ def generate_box_camera_grid(center: Iterable[float], lengths: Iterable[float], 
                     "direction": dir_vec,
                 }
             )
+    return poses
+
+
+def generate_box_camera_spherical(
+    center: Iterable[float],
+    lengths: Iterable[float],
+    sample_count: int,
+    angle_jitter_degrees: float = 0.0,
+) -> List[Mapping[str, Vec3]]:
+    """
+    Generate camera positions on a sphere enclosing the box.
+
+    Args:
+        center: box center (x, y, z).
+        lengths: box side lengths (lx, ly, lz); defines enclosing sphere radius.
+        sample_count: number of samples on spherical surface (>=1).
+        angle_jitter_degrees: max angular perturbation per sample on sphere.
+    """
+    if sample_count < 1:
+        raise ValueError("sample_count must be >= 1.")
+
+    cx, cy, cz = (float(v) for v in center)
+    lx, ly, lz = (float(v) for v in lengths)
+    radius = math.sqrt((lx * 0.5) ** 2 + (ly * 0.5) ** 2 + (lz * 0.5) ** 2)
+    radius = max(radius, 1e-6)
+    center_pt: Vec3 = (cx, cy, cz)
+
+    golden_angle = math.pi * (3.0 - math.sqrt(5.0))
+    phase = random.uniform(0.0, math.tau)
+
+    poses = []
+    for idx in range(sample_count):
+        if sample_count == 1:
+            base_dir = (1.0, 0.0, 0.0)
+        else:
+            y = 1.0 - (2.0 * idx) / float(sample_count - 1)
+            radial = math.sqrt(max(0.0, 1.0 - y * y))
+            theta = idx * golden_angle + phase
+            base_dir = (math.cos(theta) * radial, y, math.sin(theta) * radial)
+
+        out_dir = _jitter_unit_vector(base_dir, angle_jitter_degrees)
+        pos = tuple(center_pt[i] + out_dir[i] * radius for i in range(3))
+        dir_vec = _normalize(center_pt[i] - pos[i] for i in range(3))
+        poses.append({"position": pos, "target": center_pt, "direction": dir_vec})
+
+    return poses
+
+
+def generate_defect_camera_poses(
+    defects: Iterable[Mapping[str, Sequence[float]]],
+    cameras_per_defect: int = 1,
+    distance_min: float = 1.0,
+    distance_max: float = 2.0,
+    normal_jitter_degrees: float = 10.0,
+    tangent_jitter: float = 0.0,
+    target_jitter: float = 0.0,
+) -> List[Mapping[str, Vec3]]:
+    """
+    Generate camera poses around defect points using outward normals.
+
+    Args:
+        defects: iterable of mappings with `point` and `normal` 3D vectors.
+        cameras_per_defect: number of camera samples generated per defect.
+        distance_min: minimum camera distance from defect point along normal.
+        distance_max: maximum camera distance from defect point along normal.
+        normal_jitter_degrees: max angular variation from outward normal.
+        tangent_jitter: max random tangential offset in the surface plane.
+        target_jitter: max random target offset around the defect point.
+    """
+    count_per_defect = max(1, int(cameras_per_defect))
+    d_min = float(distance_min)
+    d_max = float(distance_max)
+    if d_min > d_max:
+        d_min, d_max = d_max, d_min
+    tan_j = max(0.0, float(tangent_jitter))
+    tgt_j = max(0.0, float(target_jitter))
+
+    poses = []
+    for defect in defects:
+        point = tuple(float(v) for v in defect["point"])
+        normal = _normalize(defect["normal"])
+        tangent_u, tangent_v = _orthonormal_basis(normal)
+
+        for _ in range(count_per_defect):
+            out_dir = _jitter_unit_vector(normal, normal_jitter_degrees)
+            dist = random.uniform(d_min, d_max)
+            pos = tuple(point[i] + out_dir[i] * dist for i in range(3))
+
+            if tan_j > 0.0:
+                angle = random.uniform(0.0, math.tau)
+                mag = random.uniform(0.0, tan_j)
+                tan_dir = tuple(math.cos(angle) * tangent_u[i] + math.sin(angle) * tangent_v[i] for i in range(3))
+                pos = tuple(pos[i] + tan_dir[i] * mag for i in range(3))
+
+            target = point
+            if tgt_j > 0.0:
+                jitter_dir = _random_unit_vector()
+                jitter_mag = random.uniform(0.0, tgt_j)
+                target = tuple(point[i] + jitter_dir[i] * jitter_mag for i in range(3))
+
+            dir_vec = _normalize(target[i] - pos[i] for i in range(3))
+            poses.append({"position": pos, "target": target, "direction": dir_vec})
+
     return poses
 
 

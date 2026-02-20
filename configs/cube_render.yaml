@@ -14,11 +14,16 @@ rendering:
       time_of_day: null       # null -> random 5–19 inside code
       intensity: 0.25
   camera:
-    points_per_side: 2
-    distance_multiplier_min: 1.5
-    distance_multiplier_max: 2.5
-    direction_jitter_degrees: 25.0  # Camera look-direction randomness in degrees.
-    position_jitter: null           # Absolute position jitter (model units). null -> use scale below.
-    position_jitter_scale: 0.25     # Multiplied by grid spacing when position_jitter is null.
+    strategy: cube
+    cube:
+      arrangement: grid            # grid | spherical
+      points_per_side: 2           # Used by arrangement=grid
+      sample_count: 24             # Used by arrangement=spherical
+      distance_multiplier_min: 1.5
+      distance_multiplier_max: 2.5
+      sphere_angle_jitter_degrees: 0.0
+      direction_jitter_degrees: 25.0  # Camera look-direction randomness in degrees.
+      position_jitter: null           # Absolute position jitter (model units). null -> use scale below.
+      position_jitter_scale: 0.25     # Multiplied by pose spacing when position_jitter is null.
     transition_frames: 5
     smooth_path: false
