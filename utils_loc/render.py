@@ -1,6 +1,5 @@
 """Render stage helpers used by the pipeline orchestrator."""
 
-import itertools
 import math
 import os
 import random
@@ -9,13 +8,17 @@ import rhinoscriptsyntax as rs
 import scriptcontext as sc
 
 from utils_loc.camera import (
+    generate_box_camera_spherical,
     generate_box_camera_grid,
+    generate_defect_camera_poses,
     jitter_camera_poses,
     set_camera,
     sort_poses_topdown_circular,
 )
 from utils_loc.lighting import set_random_wallpaper, set_skylight, setup_sun
-from utils_loc.outputs import _capture_bitmap, _save_bitmap, render_all_outputs
+from utils_loc.outputs import render_all_outputs
+
+CAMERA_GIZMO_LAYER_DEFAULT = "demo_camera_gizmos"
 
 
 def _setup_render_environment(params):
@@ -43,20 +46,30 @@ def _setup_render_environment(params):
     )
 
 
-def _build_render_context(params):
-    """Collect scene/camera information required for rendering."""
-    bbox_pts = rs.BoundingBox(
-        rs.AllObjects(
-            select=False,
-            include_lights=False,
-            include_grips=False,
-        )
+def _coerce_vec3(value, label):
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"{label} must be a 3-item list/tuple.")
+    return tuple(float(v) for v in value)
+
+
+def _safe_lengths(lengths, min_value):
+    min_len = float(min_value)
+    return tuple(max(abs(float(length)), min_len) for length in lengths)
+
+
+def _bbox_center_lengths():
+    obj_ids = rs.AllObjects(
+        select=False,
+        include_lights=False,
+        include_grips=False,
     )
-    if not bbox_pts:
-        print("No geometry found for camera path generation; skipping render.")
+    if not obj_ids:
         return None
 
-    camera_cfg = params["camera"]
+    bbox_pts = rs.BoundingBox(obj_ids)
+    if not bbox_pts:
+        return None
+
     xs = [pt.X for pt in bbox_pts]
     ys = [pt.Y for pt in bbox_pts]
     zs = [pt.Z for pt in bbox_pts]
@@ -65,21 +78,175 @@ def _build_render_context(params):
         (max(ys) + min(ys)) * 0.5,
         (max(zs) + min(zs)) * 0.5,
     )
-    x_length = max(xs) - min(xs)
-    y_length = max(ys) - min(ys)
-    z_length = max(zs) - min(zs)
-    distance_multiplier_min = camera_cfg["distance_multiplier_min"]
-    distance_multiplier_max = camera_cfg["distance_multiplier_max"]
-    multiple = random.uniform(distance_multiplier_min, distance_multiplier_max)
-    lengths = (x_length * multiple, y_length * multiple, z_length * multiple)
+    lengths = _safe_lengths(
+        (
+            max(xs) - min(xs),
+            max(ys) - min(ys),
+            max(zs) - min(zs),
+        ),
+        min_value=1e-3,
+    )
+    return {"center": center, "lengths": lengths}
+
+
+def _center_lengths_from_points(points, min_length=1.0):
+    if not points:
+        return (0.0, 0.0, 0.0), (float(min_length), float(min_length), float(min_length))
+
+    xs = [float(pt[0]) for pt in points]
+    ys = [float(pt[1]) for pt in points]
+    zs = [float(pt[2]) for pt in points]
+    center = (
+        (max(xs) + min(xs)) * 0.5,
+        (max(ys) + min(ys)) * 0.5,
+        (max(zs) + min(zs)) * 0.5,
+    )
+    lengths = _safe_lengths(
+        (
+            max(xs) - min(xs),
+            max(ys) - min(ys),
+            max(zs) - min(zs),
+        ),
+        min_value=min_length,
+    )
+    return center, lengths
+
+
+def _normalize_camera_strategy(camera_cfg):
+    if "strategy" not in camera_cfg:
+        raise ValueError("camera.strategy is required and must be 'cube' or 'component'.")
+    strategy = camera_cfg["strategy"]
+    if strategy not in ("cube", "component"):
+        raise ValueError(
+            f"Unsupported camera.strategy='{strategy}'. "
+            "Expected exactly one of: cube, component."
+        )
+    return strategy
+
+
+def _normalize_cube_camera_cfg(camera_cfg):
+    cube_cfg = camera_cfg.get("cube")
+    if not isinstance(cube_cfg, dict):
+        raise ValueError("camera.cube is required and must be a dict when camera.strategy='cube'.")
+    if "arrangement" not in cube_cfg:
+        raise ValueError(
+            "camera.cube.arrangement is required and must be 'grid' or 'spherical'."
+        )
+    arrangement = cube_cfg["arrangement"]
+    if arrangement not in ("grid", "spherical"):
+        raise ValueError(
+            f"Unsupported cube camera arrangement='{arrangement}'. "
+            "Expected exactly one of: grid, spherical."
+        )
+    return dict(cube_cfg)
+
+
+def _normalize_component_camera_cfg(camera_cfg):
+    component_cfg = camera_cfg.get("component")
+    if not isinstance(component_cfg, dict):
+        raise ValueError(
+            "camera.component is required and must be a dict when camera.strategy='component'."
+        )
+    return dict(component_cfg)
+
+
+def _normalize_defects(raw_defects):
+    if raw_defects is None:
+        return []
+    if not isinstance(raw_defects, (list, tuple)):
+        raise ValueError("camera.component.defects must be a list.")
+
+    defects = []
+    for idx, defect in enumerate(raw_defects):
+        if not isinstance(defect, dict):
+            raise ValueError(
+                "Each defect entry must be a dict with keys: point, normal."
+            )
+        point_raw = defect.get("point")
+        normal_raw = defect.get("normal")
+
+        if point_raw is None or normal_raw is None:
+            raise ValueError(
+                f"Defect entry #{idx} must include both 'point' and 'normal'."
+            )
+
+        defects.append(
+            {
+                "point": _coerce_vec3(point_raw, f"defects[{idx}].point"),
+                "normal": _coerce_vec3(normal_raw, f"defects[{idx}].normal"),
+            }
+        )
+
+    return defects
+
+
+def _resolve_position_jitter(cfg, spacing, default_scale=0.25):
+    position_jitter_override = cfg.get("position_jitter")
+    if position_jitter_override is None:
+        position_jitter_scale = float(cfg.get("position_jitter_scale", default_scale))
+        return max(0.0, float(spacing) * position_jitter_scale)
+    return max(0.0, float(position_jitter_override))
+
+
+def _build_render_context(params):
+    """Collect scene/camera information required for rendering."""
+    camera_cfg = params["camera"]
+    strategy = _normalize_camera_strategy(camera_cfg)
+    bbox_data = _bbox_center_lengths()
+    cube_camera_cfg = {}
+    component_camera_cfg = {}
+    defects = []
+
+    if strategy == "cube":
+        if bbox_data is None:
+            print("No geometry found for cube camera path generation; skipping render.")
+            return None
+
+        cube_camera_cfg = _normalize_cube_camera_cfg(camera_cfg)
+        distance_multiplier_min = float(
+            cube_camera_cfg.get("distance_multiplier_min", 1.5)
+        )
+        distance_multiplier_max = float(
+            cube_camera_cfg.get("distance_multiplier_max", 2.5)
+        )
+        if distance_multiplier_min > distance_multiplier_max:
+            distance_multiplier_min, distance_multiplier_max = (
+                distance_multiplier_max,
+                distance_multiplier_min,
+            )
+        multiple = random.uniform(distance_multiplier_min, distance_multiplier_max)
+        center = bbox_data["center"]
+        lengths = tuple(length * multiple for length in bbox_data["lengths"])
+
+    else:
+        component_camera_cfg = _normalize_component_camera_cfg(camera_cfg)
+        defects = _normalize_defects(component_camera_cfg.get("defects"))
+        if not defects:
+            raise ValueError(
+                "camera.strategy='component' requires camera.component.defects "
+                "(list of point/normal entries)."
+            )
+
+        if bbox_data is None:
+            center, lengths = _center_lengths_from_points(
+                [item["point"] for item in defects],
+                min_length=1.0,
+            )
+        else:
+            center = bbox_data["center"]
+            lengths = bbox_data["lengths"]
 
     base_out_dir = params["output_dir"]
     os.makedirs(base_out_dir, exist_ok=True)
 
     return {
+        "camera_strategy": strategy,
         "center": center,
         "lengths": lengths,
         "camera_cfg": camera_cfg,
+        "cube_camera_cfg": cube_camera_cfg,
+        "component_camera_cfg": component_camera_cfg,
+        "defects": defects,
         "base_out_dir": base_out_dir,
         "lens": camera_cfg.get("lens"),
         "transition_frames": int(camera_cfg.get("transition_frames", 0)),
@@ -97,24 +264,79 @@ def _build_render_context(params):
 
 def _generate_render_poses(context):
     """Generate and order camera poses around the scene."""
-    camera_cfg = context["camera_cfg"]
     center = context["center"]
     lengths = context["lengths"]
+    camera_strategy = context["camera_strategy"]
 
-    points_per_side = max(2, int(camera_cfg["points_per_side"]))
-    poses = generate_box_camera_grid(center, lengths, points_per_side)
+    if camera_strategy == "cube":
+        cube_camera_cfg = context["cube_camera_cfg"]
+        arrangement = cube_camera_cfg["arrangement"]
 
-    grid_spacing = min(lengths) / float(points_per_side - 1)
-    position_jitter_override = camera_cfg.get("position_jitter")
-    if position_jitter_override is None:
-        # Scale-based jitter keeps behavior proportional to scene/camera grid size.
-        position_jitter_scale = float(camera_cfg.get("position_jitter_scale", 0.25))
-        position_jitter = max(0.0, grid_spacing * position_jitter_scale)
-    else:
-        # Absolute jitter in model units takes precedence when explicitly configured.
-        position_jitter = max(0.0, float(position_jitter_override))
+        if arrangement == "grid":
+            points_per_side = max(2, int(cube_camera_cfg.get("points_per_side", 2)))
+            poses = generate_box_camera_grid(center, lengths, points_per_side)
+            spacing = min(lengths) / float(points_per_side - 1)
+        elif arrangement == "spherical":
+            sample_count = max(1, int(cube_camera_cfg.get("sample_count", 24)))
+            poses = generate_box_camera_spherical(
+                center,
+                lengths,
+                sample_count,
+                angle_jitter_degrees=float(
+                    cube_camera_cfg.get("sphere_angle_jitter_degrees", 0.0)
+                ),
+            )
+            radius = 0.5 * math.sqrt(
+                lengths[0] * lengths[0]
+                + lengths[1] * lengths[1]
+                + lengths[2] * lengths[2]
+            )
+            spacing = math.sqrt((4.0 * math.pi * radius * radius) / float(sample_count))
+        else:
+            raise ValueError(f"Unsupported cube camera arrangement: {arrangement}")
 
-    direction_jitter_degrees = float(camera_cfg.get("direction_jitter_degrees", 10.0))
+        position_jitter = _resolve_position_jitter(
+            cube_camera_cfg,
+            spacing,
+            default_scale=0.25,
+        )
+        direction_jitter_degrees = float(
+            cube_camera_cfg.get("direction_jitter_degrees", 10.0)
+        )
+        poses = jitter_camera_poses(
+            poses,
+            position_jitter=position_jitter,
+            direction_jitter_degrees=direction_jitter_degrees,
+        )
+        return sort_poses_topdown_circular(poses, center=center)
+
+    component_cfg = context["component_camera_cfg"]
+    defects = context["defects"]
+    scene_scale = max(min(lengths), 1e-3)
+    default_distance_min = scene_scale * 0.10
+    default_distance_max = scene_scale * 0.20
+    distance_min = float(component_cfg.get("distance_min", default_distance_min))
+    distance_max = float(component_cfg.get("distance_max", default_distance_max))
+    if distance_min > distance_max:
+        distance_min, distance_max = distance_max, distance_min
+
+    poses = generate_defect_camera_poses(
+        defects=defects,
+        cameras_per_defect=max(1, int(component_cfg.get("cameras_per_defect", 1))),
+        distance_min=distance_min,
+        distance_max=distance_max,
+        normal_jitter_degrees=float(component_cfg.get("normal_jitter_degrees", 10.0)),
+        tangent_jitter=float(component_cfg.get("tangent_jitter", 0.0)),
+        target_jitter=float(component_cfg.get("target_jitter", 0.0)),
+    )
+
+    spacing = max(abs(distance_max - distance_min), 0.5 * (distance_min + distance_max), 1e-3)
+    position_jitter = _resolve_position_jitter(
+        component_cfg,
+        spacing,
+        default_scale=0.0,
+    )
+    direction_jitter_degrees = float(component_cfg.get("direction_jitter_degrees", 0.0))
     poses = jitter_camera_poses(
         poses,
         position_jitter=position_jitter,
@@ -155,7 +377,16 @@ def _camera_basis(dir_vec):
     return right, true_up
 
 
-def _add_camera_gizmo(idx, pose, scale):
+def _ensure_layer(layer_name):
+    if not layer_name:
+        return None
+    if rs.IsLayer(layer_name):
+        return layer_name
+    created = rs.AddLayer(layer_name)
+    return created or layer_name
+
+
+def _add_camera_gizmo(idx, pose, scale, layer_name=None):
     pos = tuple(float(v) for v in pose["position"])
     tgt = pose.get("target")
     dir_vec = pose.get("direction")
@@ -176,20 +407,58 @@ def _add_camera_gizmo(idx, pose, scale):
         tuple(base_center[i] + right[i] * half_w - up_vec[i] * half_w for i in range(3)),
     ]
 
-    rs.AddPolyline(base_corners + [base_corners[0]])
+    obj_ids = []
+    poly_id = rs.AddPolyline(base_corners + [base_corners[0]])
+    if poly_id:
+        obj_ids.append(poly_id)
     for corner in base_corners:
-        rs.AddLine(corner, tip)
-    rs.AddTextDot(f"cam {idx}", pos)
+        line_id = rs.AddLine(corner, tip)
+        if line_id:
+            obj_ids.append(line_id)
+    dot_id = rs.AddTextDot(f"cam {idx}", pos)
+    if dot_id:
+        obj_ids.append(dot_id)
     if tgt:
-        rs.AddLine(pos, tgt)
+        look_line_id = rs.AddLine(pos, tgt)
+        if look_line_id:
+            obj_ids.append(look_line_id)
+
+    if layer_name:
+        for obj_id in obj_ids:
+            if rs.IsObject(obj_id):
+                rs.ObjectLayer(obj_id, layer_name)
+
+    return obj_ids
 
 
-def _preview_camera_gizmos(poses, lengths):
+def _preview_camera_gizmos(poses, lengths, layer_name=CAMERA_GIZMO_LAYER_DEFAULT):
     """Draw camera gizmos in Rhino for visual debugging."""
-    gizmo_scale = min(lengths) * 0.08
+    use_layer = _ensure_layer(layer_name)
+    gizmo_scale = max(min(lengths), 1e-3) * 0.08
+    created_ids = []
     for idx, pose in enumerate(poses):
-        _add_camera_gizmo(idx, pose, gizmo_scale)
+        created_ids.extend(_add_camera_gizmo(idx, pose, gizmo_scale, layer_name=use_layer))
     rs.Redraw()
+    return created_ids
+
+
+def delete_camera_gizmo_layer(layer_name=CAMERA_GIZMO_LAYER_DEFAULT, delete_layer=True):
+    """Delete camera gizmo objects created on the given layer."""
+    if not layer_name or not rs.IsLayer(layer_name):
+        return 0
+
+    obj_ids = rs.ObjectsByLayer(layer_name, select=False) or []
+    if obj_ids:
+        rs.DeleteObjects(obj_ids)
+
+    if delete_layer and rs.IsLayer(layer_name):
+        try:
+            rs.DeleteLayer(layer_name)
+        except Exception:
+            pass
+
+    rs.Redraw()
+    return len(obj_ids)
 
 
 def _build_capture_basename(output_idx, context):
@@ -271,9 +540,9 @@ def generate_render_poses(context):
     return _generate_render_poses(context)
 
 
-def preview_camera_gizmos(poses, lengths):
+def preview_camera_gizmos(poses, lengths, layer_name=CAMERA_GIZMO_LAYER_DEFAULT):
     """Public helper for drawing camera previews."""
-    return _preview_camera_gizmos(poses, lengths)
+    return _preview_camera_gizmos(poses, lengths, layer_name=layer_name)
 
 
 def capture_pose_sequence(poses, context):
@@ -303,212 +572,3 @@ def render(params, show_cameras=False):
         return
 
     capture_pose_sequence(poses, context)
-
-
-def _as_list(value, default):
-    if value is None:
-        return list(default)
-    if isinstance(value, (list, tuple)):
-        return list(value)
-    return [value]
-
-
-def _sanitize_token(value):
-    text = str(value)
-    chars = []
-    for char in text:
-        if char.isalnum() or char in ("-", "_", "."):
-            chars.append(char)
-        elif char.isspace():
-            chars.append("-")
-    safe = "".join(chars).strip("-_.")
-    return safe or "na"
-
-
-def _to_bool(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "y", "on")
-    return bool(value)
-
-
-def _find_layer_by_name(layer_name):
-    for layer in sc.doc.Layers:
-        if layer.Name == layer_name:
-            return layer
-    raise ValueError(f"Layer not found for render demo: '{layer_name}'")
-
-
-def _resolve_demo_materials(material_names=None, sample_count=5, seed=0):
-    render_materials = [mat for mat in sc.doc.RenderMaterials]
-    if not render_materials:
-        raise ValueError("No render materials found in the current Rhino document.")
-
-    if material_names:
-        selected = []
-        wanted = [str(name).strip().lower() for name in material_names]
-        for wanted_name in wanted:
-            match = None
-            for mat in render_materials:
-                if mat.DisplayName and mat.DisplayName.strip().lower() == wanted_name:
-                    match = mat
-                    break
-            if match is None:
-                raise ValueError(f"Material not found for render demo: '{wanted_name}'")
-            selected.append(match)
-        return selected
-
-    count = max(1, min(int(sample_count), len(render_materials)))
-    rng = random.Random(seed)
-    indices = list(range(len(render_materials)))
-    rng.shuffle(indices)
-    return [render_materials[idx] for idx in indices[:count]]
-
-
-def build_render_demo_context(base_out_dir, params=None):
-    """Prepare parsed render-demo options and current-document state."""
-    params = params or {}
-    os.makedirs(base_out_dir, exist_ok=True)
-
-    rhino_view = sc.doc.Views.ActiveView
-    if rhino_view is None:
-        raise ValueError("No active Rhino view available for render demo.")
-
-    layer_name = params.get("layer_name", "cube")
-    target_layer = _find_layer_by_name(layer_name)
-
-    materials = _resolve_demo_materials(
-        material_names=params.get("material_names"),
-        sample_count=params.get("sample_material_count", 5),
-        seed=params.get("seed", 0),
-    )
-    sun_times = [float(v) for v in _as_list(params.get("sun_times"), [8.0, 12.0, 17.0])]
-    sun_intensities = [float(v) for v in _as_list(params.get("sun_intensities"), [0.25, 1.0])]
-    skylight_intensities = [float(v) for v in _as_list(params.get("skylight_intensities"), [0.25])]
-    wallpaper_flags = [_to_bool(v) for v in _as_list(params.get("use_wallpaper"), [False])]
-    wallpaper_dir = params.get("background_wallpaper_dir")
-
-    if any(wallpaper_flags) and not wallpaper_dir:
-        raise ValueError("render_demo requested wallpaper but no background_wallpaper_dir was provided.")
-
-    width = params.get("width")
-    height = params.get("height")
-    max_length = params.get("max_length")
-    max_cases = params.get("max_cases")
-    max_cases = None if max_cases is None else max(1, int(max_cases))
-
-    return {
-        "base_out_dir": base_out_dir,
-        "rhino_view": rhino_view,
-        "target_layer": target_layer,
-        "materials": materials,
-        "sun_times": sun_times,
-        "sun_intensities": sun_intensities,
-        "skylight_intensities": skylight_intensities,
-        "wallpaper_flags": wallpaper_flags,
-        "wallpaper_dir": wallpaper_dir,
-        "width": width,
-        "height": height,
-        "max_length": max_length,
-        "max_cases": max_cases,
-        "prev_wallpaper_file": rhino_view.ActiveViewport.WallpaperFilename,
-        "prev_layer_material": target_layer.RenderMaterial,
-    }
-
-
-def iterate_render_demo_cases(context):
-    """Yield cartesian-product demo cases from parsed context."""
-    return itertools.product(
-        context["materials"],
-        context["sun_times"],
-        context["sun_intensities"],
-        context["skylight_intensities"],
-        context["wallpaper_flags"],
-    )
-
-
-def should_stop_render_demo(case_idx, context):
-    """Return True when case limit is reached."""
-    max_cases = context["max_cases"]
-    return max_cases is not None and case_idx >= max_cases
-
-
-def capture_render_demo_case(case_idx, case, context):
-    """Apply a single demo case and capture one output image."""
-    material, sun_time, sun_intensity, skylight_intensity, use_wallpaper = case
-    rhino_view = context["rhino_view"]
-    target_layer = context["target_layer"]
-
-    target_layer.RenderMaterial = material
-    setup_sun(time_of_day=sun_time, intensity=sun_intensity)
-    set_skylight(intensity=skylight_intensity, enabled=skylight_intensity > 0.0)
-
-    wallpaper_tag = "none"
-    if use_wallpaper:
-        wallpaper_path = set_random_wallpaper(context["wallpaper_dir"], view=rhino_view.ActiveViewport.Name)
-        wallpaper_tag = _sanitize_token(os.path.splitext(os.path.basename(wallpaper_path))[0])
-    else:
-        rhino_view.ActiveViewport.SetWallpaper("", False)
-
-    rhino_view.Redraw()
-
-    basename = (
-        f"{case_idx:04d}"
-        f"_mat-{_sanitize_token(material.DisplayName)}"
-        f"_sunT-{sun_time:g}"
-        f"_sunI-{sun_intensity:g}"
-        f"_sky-{skylight_intensity:g}"
-        f"_bg-{wallpaper_tag}"
-    )
-    out_path = os.path.join(context["base_out_dir"], f"{basename}.png")
-    bitmap = _capture_bitmap(
-        rhino_view,
-        width=context["width"],
-        height=context["height"],
-        max_length=context["max_length"],
-    )
-    _save_bitmap(bitmap, out_path)
-    return out_path
-
-
-def restore_render_demo_context(context):
-    """Restore modified material/wallpaper state after demo capture."""
-    context["target_layer"].RenderMaterial = context["prev_layer_material"]
-    context["rhino_view"].ActiveViewport.SetWallpaper(context["prev_wallpaper_file"] or "", False)
-    context["rhino_view"].Redraw()
-
-
-def render_demo(base_out_dir, params=None):
-    """
-    Sweep combinations of render settings and capture demo images.
-
-    Params keys:
-      - layer_name (str): layer receiving material swaps. Default: "cube"
-      - material_names (list[str]): exact material names to use
-      - sample_material_count (int): used when material_names is omitted. Default: 5
-      - sun_times (list[float]): default [8.0, 12.0, 17.0]
-      - sun_intensities (list[float]): default [0.25, 1.0]
-      - skylight_intensities (list[float]): default [0.25]
-      - use_wallpaper (list[bool]): default [False]
-      - background_wallpaper_dir (str): required when any use_wallpaper=True
-      - width, height (int): optional capture size overrides
-      - max_length (int): optional longest-side resolution preserving viewport aspect ratio
-      - max_cases (int): optional cap on number of combinations
-      - seed (int): seed for deterministic random material sampling
-    """
-    context = build_render_demo_context(base_out_dir=base_out_dir, params=params)
-
-    captured_paths = []
-    try:
-        for case_idx, case in enumerate(iterate_render_demo_cases(context)):
-            if should_stop_render_demo(case_idx, context):
-                break
-            captured_paths.append(capture_render_demo_case(case_idx, case, context))
-    finally:
-        restore_render_demo_context(context)
-
-    print(f"render_demo: captured {len(captured_paths)} images to '{context['base_out_dir']}'.")
-    return captured_paths

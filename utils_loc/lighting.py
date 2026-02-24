@@ -183,12 +183,31 @@ def setup_face_lights(
             lg.Intensity = value
             sc.doc.Lights.Modify(lo.Id, lg)
 
+    # def _random_natural_light_color():
+    #     # Warm/neutral whites: hue 20–70° (no blue/purple), low saturation.
+    #     h = random.uniform(20.0 / 360.0, 70.0 / 360.0)
+    #     s = random.uniform(0.02, 0.12)
+    #     v = random.uniform(0.92, 1.0)
+    #     r, g, b = colorsys.hsv_to_rgb(h, s, v)
+    #     return int(r * 255), int(g * 255), int(b * 255)
 
     def _random_natural_light_color():
-        # Warm/neutral whites: hue 20–70° (no blue/purple), low saturation.
-        h = random.uniform(20.0 / 360.0, 70.0 / 360.0)
-        s = random.uniform(0.02, 0.12)
-        v = random.uniform(0.92, 1.0)
+        # Sunset-biased warm lights: red/orange/amber, occasionally yellow.
+        r = random.random()
+        if r < 0.35:
+            # Deep red / red-orange
+            h_deg = random.uniform(2.0, 15.0)
+        elif r < 0.80:
+            # Orange / amber (most common)
+            h_deg = random.uniform(15.0, 38.0)
+        else:
+            # Yellow / golden highlights
+            h_deg = random.uniform(38.0, 58.0)
+
+        h = h_deg / 360.0
+        s = random.uniform(0.18, 0.65)   # more color than neutral white
+        v = random.uniform(0.45, 0.90)   # darker overall than current 0.92–1.0
+
         r, g, b = colorsys.hsv_to_rgb(h, s, v)
         return int(r * 255), int(g * 255), int(b * 255)
 

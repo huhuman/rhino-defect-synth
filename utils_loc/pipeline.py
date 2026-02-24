@@ -7,6 +7,7 @@ from utils_loc.cube_modeling import create_cube
 
 import importlib
 render = importlib.import_module("utils_loc.render")
+render_demo = importlib.import_module("utils_loc.render_demo")
 
 
 def prepare(params=None):
@@ -99,16 +100,7 @@ def run_render(params, show_cameras=False):
 
 
 def run_render_demo(base_out_dir, params=None):
-    """Pipeline demo stage for sweeping render settings."""
-    context = render.build_render_demo_context(base_out_dir=base_out_dir, params=params)
-    captured_paths = []
-    try:
-        for case_idx, case in enumerate(render.iterate_render_demo_cases(context)):
-            if render.should_stop_render_demo(case_idx, context):
-                break
-            captured_paths.append(render.capture_render_demo_case(case_idx, case, context))
-    finally:
-        render.restore_render_demo_context(context)
-
-    print(f"run_render_demo: captured {len(captured_paths)} images to '{context['base_out_dir']}'.")
+    """Pipeline demo stage for camera/material/lighting visualization."""
+    captured_paths = render_demo.render_demo(base_out_dir=base_out_dir, params=params)
+    print(f"run_render_demo: captured {len(captured_paths)} images to '{base_out_dir}'.")
     return captured_paths
