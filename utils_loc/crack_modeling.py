@@ -1,4 +1,7 @@
+"""Crack modeling helpers shared by cube and component pipelines."""
+
 import random
+
 import rhinoscriptsyntax as rs
 
 
@@ -22,47 +25,107 @@ def _poly_inward_direction(curve_id):
     return normal
 
 
-def create_crack(crack_polys, crack_inside_polys, base_poly, offset_poly, diff_polys, inward_dir=None):
-    crack_polys = [bp for bp in crack_polys or [] if bp and rs.IsPolyline(bp)]
-    cleanup_ids = crack_polys
-    crack_inside_polys = [sp for sp in crack_inside_polys or [] if sp and rs.IsPolyline(sp)]
+def _coerce_ids(items):
+    obj_ids = []
+    for item in items or []:
+        if item is None:
+            continue
+        if isinstance(item, (list, tuple)):
+            obj_ids.extend(_coerce_ids(item))
+            continue
+        obj_id = getattr(item, "Id", item)
+        obj_id = rs.coerceguid(obj_id, False)
+        if obj_id:
+            obj_ids.append(obj_id)
+    return obj_ids
+
+
+def _assign_layer(obj_ids, layer_name):
+    if not layer_name or not rs.IsLayer(layer_name):
+        return
+    for obj_id in _coerce_ids(obj_ids):
+        if rs.IsObject(obj_id):
+            rs.ObjectLayer(obj_id, layer_name)
+
+
+def create_crack(
+    crack_polys,
+    crack_inside_polys,
+    base_poly,
+    offset_poly,
+    diff_polys,
+    inward_dir=None,
+    d1_range=(0.5, 2.5),
+    delta_depth_range=(10.0, 30.0),
+    layer_crack_extrusion="crack_extrusion",
+    layer_parent_surface="cube",
+    cleanup_inputs=True,
+):
+    """Create crack geometry from projected polygon curves.
+
+    Args:
+        crack_polys: Crack boundary curve ids.
+        crack_inside_polys: Inner (hole) curve ids.
+        base_poly: Base crack footprint curve id.
+        offset_poly: Outer crack area curve id.
+        diff_polys: Difference polygons used to patch parent surface.
+        inward_dir: Optional explicit inward vector.
+        d1_range: (min, max) shallow inward depth.
+        delta_depth_range: (min, max) extra depth after d1.
+        layer_crack_extrusion: Layer for generated crack solids/surfaces.
+        layer_parent_surface: Layer for helper fills on parent surface.
+        cleanup_inputs: Delete input/helper curves after creation.
+    """
+    crack_polys = [cid for cid in crack_polys or [] if cid and rs.IsPolyline(cid)]
+    inside_polys = [cid for cid in crack_inside_polys or [] if cid and rs.IsPolyline(cid)]
+    diff_polys = [cid for cid in diff_polys or [] if cid and rs.IsPolyline(cid)]
+
     if not crack_polys or not base_poly or not offset_poly or not rs.IsPolyline(offset_poly):
-        print("create_crack: crack_polys, base_poly, and offset_poly must be polylines.")
+        print("create_crack: crack_polys, base_poly, and offset_poly must be valid polylines.")
         return None
 
     direction = inward_dir or _poly_inward_direction(base_poly)
     if not direction:
         print("create_crack: failed to determine inward direction.")
         return None
-    d1 = random.uniform(0.5, 2.5)  # mm
-    d2 = d1 + random.uniform(10, 30)  # mm
 
+    d1_min, d1_max = float(d1_range[0]), float(d1_range[1])
+    if d1_min > d1_max:
+        d1_min, d1_max = d1_max, d1_min
+    depth_extra_min, depth_extra_max = float(delta_depth_range[0]), float(delta_depth_range[1])
+    if depth_extra_min > depth_extra_max:
+        depth_extra_min, depth_extra_max = depth_extra_max, depth_extra_min
+
+    d1 = random.uniform(d1_min, d1_max)
+    d2 = d1 + random.uniform(depth_extra_min, depth_extra_max)
     vec_d1 = rs.VectorScale(direction, d1)
     vec_delta = rs.VectorScale(direction, d2 - d1)
-    
+
+    cleanup_ids = list(crack_polys) + list(inside_polys) + [base_poly, offset_poly] + list(diff_polys)
+
     diff_surfaces = []
     for diff_poly in diff_polys:
-        diff_curve = rs.CopyObject(diff_poly, vec_d1)
-        diff_srf = rs.AddPlanarSrf(diff_curve)
-        cleanup_ids.append(diff_curve)
-        if diff_srf:
-            diff_surfaces.append(diff_srf)
-    cleanup_ids += diff_polys
+        shifted_curve = rs.CopyObject(diff_poly, vec_d1)
+        if not shifted_curve:
+            continue
+        cleanup_ids.append(shifted_curve)
+        surfaces = rs.AddPlanarSrf(shifted_curve) or []
+        diff_surfaces.extend(_coerce_ids(surfaces))
 
     base_bottom_curve = rs.CopyObject(base_poly, vec_d1)
-    cleanup_ids.append(base_poly)
     if not base_bottom_curve:
         print("create_crack: failed to offset base curve.")
         return None
+    cleanup_ids.append(base_bottom_curve)
 
     if not rs.CurveDirectionsMatch(offset_poly, base_bottom_curve):
         rs.ReverseCurve(base_bottom_curve)
-    rs.CurveSeam(base_bottom_curve, rs.CurveClosestPoint(base_bottom_curve, rs.CurveStartPoint(offset_poly)))
+    seam_param = rs.CurveClosestPoint(base_bottom_curve, rs.CurveStartPoint(offset_poly))
+    if seam_param is not None:
+        rs.CurveSeam(base_bottom_curve, seam_param)
 
-    loft_ids = rs.AddLoftSrf([offset_poly, base_bottom_curve])
-    cleanup_ids.append(base_bottom_curve)
+    loft_ids = _coerce_ids(rs.AddLoftSrf([offset_poly, base_bottom_curve]) or [])
 
-    # Extrude each base poly individually
     extrusions = []
     bottom_caps = []
     for crack_poly in crack_polys:
@@ -72,70 +135,54 @@ def create_crack(crack_polys, crack_inside_polys, base_poly, offset_poly, diff_p
         start = rs.CurveStartPoint(deep_poly)
         end = rs.PointAdd(start, vec_delta)
         extrusion = rs.ExtrudeCurveStraight(deep_poly, start, end)
-        if extrusion:
-            extrusions.append(extrusion)
-        bottom_cap = rs.AddPlanarSrf(rs.CopyObject(deep_poly, vec_delta))
-        if bottom_cap:
-            bottom_caps.append(bottom_cap)
+        extrusions.extend(_coerce_ids([extrusion]))
+
+        bottom_curve = rs.CopyObject(deep_poly, vec_delta)
+        cleanup_ids.append(bottom_curve)
+        cap_ids = rs.AddPlanarSrf(bottom_curve) if bottom_curve else []
+        bottom_caps.extend(_coerce_ids(cap_ids))
+
         if rs.IsObject(deep_poly):
             rs.DeleteObject(deep_poly)
 
-    # Extrude inner subtract curves to same depth and thickness.
-    inner_extrusions = []
+    inside_extrusions = []
+    inside_caps = []
     helper_curves = []
-    for sub_poly in crack_inside_polys:
+    for sub_poly in inside_polys:
         shifted = rs.CopyObject(sub_poly, vec_d1)
         if not shifted:
             continue
         helper_curves.append(shifted)
-        s_pt = rs.CurveStartPoint(shifted)
-        e_pt = rs.PointAdd(s_pt, vec_delta)
-        inside_extrusion = rs.ExtrudeCurveStraight(shifted, s_pt, e_pt)
-        if inside_extrusion:
-            inner_extrusions.append(inside_extrusion)
-        helper_curves.append(shifted)
-        cap = rs.AddPlanarSrf(shifted)
-        if cap:
-            inner_extrusions.extend(cap)
-    cleanup_ids += helper_curves
-    cleanup_ids += crack_inside_polys
-    
-    # place geometry on crack_extrusion layer if it exists
-    if rs.IsLayer("crack_extrusion"):
-        targets = []
-        targets.extend(loft_ids or [])
-        if extrusion:
-            targets.append(extrusion)
-        if bottom_cap:
-            targets.append(bottom_cap)
-        for obj in targets:
-            if not obj:
-                continue
-            obj_id = getattr(obj, "Id", obj)
-            obj_id = rs.coerceguid(obj_id, False)
-            if obj_id:
-                rs.ObjectLayer(obj_id, "crack_extrusion")
-    if rs.IsLayer("cube"):
-        for obj in inner_extrusions:
-            if not obj:
-                continue
-            obj_id = getattr(obj, "Id", obj)
-            obj_id = rs.coerceguid(obj_id, False)
-            if obj_id:
-                rs.ObjectLayer(obj_id, "cube")
-        for obj in diff_surfaces:
-            if not obj:
-                continue
-            obj_id = getattr(obj, "Id", obj)
-            obj_id = rs.coerceguid(obj_id, False)
-            if obj_id:
-                rs.ObjectLayer(obj_id, "cube")
+        start = rs.CurveStartPoint(shifted)
+        end = rs.PointAdd(start, vec_delta)
+        inside_extrusion = rs.ExtrudeCurveStraight(shifted, start, end)
+        inside_extrusions.extend(_coerce_ids([inside_extrusion]))
+        inside_caps.extend(_coerce_ids(rs.AddPlanarSrf(shifted) or []))
+    cleanup_ids.extend(helper_curves)
 
-    cleanup_ids.append(offset_poly)
-    cleanup_ids = set(cleanup_ids)
-    for cid in cleanup_ids:
-        if cid and rs.IsObject(cid):
-            rs.DeleteObject(cid)
+    crack_geometry_ids = []
+    crack_geometry_ids.extend(loft_ids)
+    crack_geometry_ids.extend(extrusions)
+    crack_geometry_ids.extend(bottom_caps)
 
-    created = {"loft": loft_ids, "extrusion": extrusion}
-    return created
+    parent_fill_ids = []
+    parent_fill_ids.extend(diff_surfaces)
+    parent_fill_ids.extend(inside_extrusions)
+    parent_fill_ids.extend(inside_caps)
+
+    _assign_layer(crack_geometry_ids, layer_crack_extrusion)
+    _assign_layer(parent_fill_ids, layer_parent_surface)
+
+    if cleanup_inputs:
+        for cid in set(_coerce_ids(cleanup_ids)):
+            if cid and rs.IsObject(cid):
+                rs.DeleteObject(cid)
+
+    return {
+        "loft": loft_ids,
+        "extrusions": extrusions,
+        "bottom_caps": bottom_caps,
+        "parent_fills": parent_fill_ids,
+        "d1": d1,
+        "d2": d2,
+    }

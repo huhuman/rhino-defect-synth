@@ -396,7 +396,59 @@ def render_mask(rhino_view, out_path=None, width=None, height=None, max_length=N
         rhino_view.Redraw()
 
 
-def render_all_outputs(view=None, out_dir=None, basename="frame", width=None, height=None, max_length=None):
+def _normalize_layer_name_set(layer_names):
+    if layer_names is None:
+        return None
+    if isinstance(layer_names, (str, bytes)):
+        return {str(layer_names)}
+    return {str(name) for name in layer_names if str(name).strip()}
+
+
+def _layer_matches(layer, names):
+    if not names:
+        return False
+    layer_name = getattr(layer, "Name", None)
+    full_path = getattr(layer, "FullPath", None)
+    if layer_name in names or full_path in names:
+        return True
+    if full_path:
+        tail = full_path.split("::")[-1]
+        if tail in names:
+            return True
+    return False
+
+
+def _apply_mask_layer_visibility(mask_only_layers=None, mask_hide_layers=None):
+    only_set = _normalize_layer_name_set(mask_only_layers)
+    hide_set = _normalize_layer_name_set(mask_hide_layers)
+
+    if only_set:
+        for layer in sc.doc.Layers:
+            if layer.Name:
+                layer.IsVisible = _layer_matches(layer, only_set)
+        return
+
+    for layer in sc.doc.Layers:
+        if not layer.Name:
+            continue
+        if "CS" in layer.Name:
+            layer.IsVisible = False
+        else:
+            layer.IsVisible = True
+        if hide_set and _layer_matches(layer, hide_set):
+            layer.IsVisible = False
+
+
+def render_all_outputs(
+    view=None,
+    out_dir=None,
+    basename="frame",
+    width=None,
+    height=None,
+    max_length=None,
+    mask_only_layers=None,
+    mask_hide_layers=None,
+):
     """
     Convenience helper to render color, depth, normal, and mask in one call.
     """
@@ -458,11 +510,10 @@ def render_all_outputs(view=None, out_dir=None, basename="frame", width=None, he
 
     render_normal(rhino_view=render_view, out_path=outputs["normal"], width=capture_width, height=capture_height)
 
-    for layer in sc.doc.Layers:
-        if layer.Name == "crack_extrusion":
-            layer.IsVisible = False
-        else:
-            layer.IsVisible = True
+    _apply_mask_layer_visibility(
+        mask_only_layers=mask_only_layers,
+        mask_hide_layers=mask_hide_layers if mask_hide_layers is not None else ["crack_extrusion"],
+    )
     render_view.Redraw()
 
     render_mask(rhino_view=render_view, out_path=outputs["mask"], width=capture_width, height=capture_height)

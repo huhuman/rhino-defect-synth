@@ -184,7 +184,7 @@ if __name__ == "__main__":
     #    run(stages=["preparation"])
     run(
         config_name="cube_render.yaml",
-        stages=["rendering"],
+        stages=["prepare"],
         skip=[],
         start_face_index=0,
         show_cameras=False,

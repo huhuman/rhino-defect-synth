@@ -2,11 +2,10 @@
 import Rhino
 import scriptcontext as sc
 import rhinoscriptsyntax as rs
-import json
 import os
 import random
-import numpy as np
-import random
+
+from utils_loc.damage_shapes import read_cube_contour_json
 
 # CUBE_LENGTH is the distance from origin to each face.
 # So the cube spans from -CUBE_LENGTH to +CUBE_LENGTH (edge length = 2 * CUBE_LENGTH).
@@ -64,73 +63,28 @@ def __create_cube_faces():
 
 
 def read_contour_json(filepath):
-    """
-    Read one JSON file and return a list of contours:
-    [
-        {
-            "parent": <whatever is in JSON>,
-            "points": numpy array of shape (N, 2) in mm
-        },
-        ...
-    ]
-    Assumes JSON:
-    {
-        "pixel_size_cm": 0.1,
-        "contours": [
-            { "parent": "...", "points": [[x_px, y_px], ...] },
-            ...
-        ]
-        "severity": "CS1" | "CS2" | "CS3"
-    }
-    """
-    if not os.path.isfile(filepath):
-        raise IOError("File not found: {}".format(filepath))
-
-    with open(filepath, "r") as f:
-        data = json.load(f)
-
-    try:
-        # convert pixel size to mm
-        pixel_size_mm = float(data["pixel_size_cm"]) * 10.0
-    except KeyError:
-        raise KeyError('JSON must contain "pixel_size_cm".')
-    
+    """Read cube contour JSON via shared parser and keep legacy return signature."""
+    parsed = read_cube_contour_json(filepath)
     global CUBE_LENGTH
-    try:
-        map_pixel = float(data.get("width_px", 0) or data.get("height_px", 0))
-        if map_pixel == 0:
-            raise ValueError("Both width_px and height_px are missing or zero")
-    except (ValueError, TypeError):
-        raise KeyError('JSON must contain valid "width_px" or "height_px".')
-    CUBE_LENGTH = map_pixel * pixel_size_mm
-
-    if "contours" not in data:
-        raise KeyError('JSON must contain "contours".')
-
-    def _contour_conversion(item):
-        pts_px = np.array(item["points"], dtype=float)
-        pts_mm = pts_px * pixel_size_mm
-        return {
-            "parent": item["parent"],
-            "points": pts_mm
-        }
-
-    contours = [[_contour_conversion(item) for item in cnt_list] for cnt_list in data["contours"]]
-    severities = data["severities"]
-    erode_contours = [_contour_conversion(item) for item in data["expanded_contours"]]
-    base_contours = [_contour_conversion(item) for item in data["base_contours"]]
-    diff_contours = [[_contour_conversion(item) for item in cnt_list] for cnt_list in data["difference_contours"]]
-
-    return contours, base_contours, erode_contours, diff_contours, severities
+    CUBE_LENGTH = max(float(parsed["width_mm"]), float(parsed["height_mm"]))
+    return (
+        parsed["contours"],
+        parsed["base_contours"],
+        parsed["expanded_contours"],
+        parsed["difference_contours"],
+        parsed["severities"],
+    )
 
 
-def center_2d_points(points_2d):
+def center_2d_points(points_2d, width_mm=None, height_mm=None):
     """
     Center the 2D points around (0,0) using their bounding box center.
     points_2d: iterable of (x, y) (list or numpy array)
     Returns a list of (x, y) tuples.
     """
-    centered = [(x - CUBE_LENGTH/2, y - CUBE_LENGTH/2) for (x, y) in points_2d]
+    width = CUBE_LENGTH if width_mm is None else float(width_mm)
+    height = CUBE_LENGTH if height_mm is None else float(height_mm)
+    centered = [(x - width / 2.0, y - height / 2.0) for (x, y) in points_2d]
     return centered
 
 

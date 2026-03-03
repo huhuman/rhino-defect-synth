@@ -11,3 +11,13 @@ preparation:
     parapet: Green
     bearing: AliceBlue
     pier: Brown
+    "defects::geometry::crack": OrangeRed
+    "defects::geometry::efflore": LightYellow
+    "defects::geometry::spall": Chocolate
+    "defects::geometry::rebar": DarkSlateGray
+    "defects::mask::crack": White
+    "defects::mask::efflore": White
+    "defects::mask::spall": White
+    "defects::mask::rebar": White
+    "defects::mask::exposed_rebar": White
+    "defects::seeds": Magenta

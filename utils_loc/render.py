@@ -16,6 +16,7 @@ from utils_loc.camera import (
     sort_poses_topdown_circular,
 )
 from utils_loc.lighting import set_random_wallpaper, set_skylight, setup_sun
+from utils_loc.damage_modeling import defects_from_record_payload, load_damage_records
 from utils_loc.outputs import render_all_outputs
 
 CAMERA_GIZMO_LAYER_DEFAULT = "demo_camera_gizmos"
@@ -150,6 +151,13 @@ def _normalize_component_camera_cfg(camera_cfg):
     return dict(component_cfg)
 
 
+def _load_defects_from_record_path(record_path, include_damage_types=None):
+    if not record_path:
+        return []
+    payload = load_damage_records(record_path)
+    return defects_from_record_payload(payload, include_damage_types=include_damage_types)
+
+
 def _normalize_defects(raw_defects):
     if raw_defects is None:
         return []
@@ -192,6 +200,8 @@ def _build_render_context(params):
     """Collect scene/camera information required for rendering."""
     camera_cfg = params["camera"]
     strategy = _normalize_camera_strategy(camera_cfg)
+    outputs_cfg = params.get("outputs") or {}
+    mask_cfg = outputs_cfg.get("mask") or {}
     bbox_data = _bbox_center_lengths()
     cube_camera_cfg = {}
     component_camera_cfg = {}
@@ -222,9 +232,16 @@ def _build_render_context(params):
         component_camera_cfg = _normalize_component_camera_cfg(camera_cfg)
         defects = _normalize_defects(component_camera_cfg.get("defects"))
         if not defects:
+            defects = _normalize_defects(
+                _load_defects_from_record_path(
+                    component_camera_cfg.get("defect_record_path") or params.get("defect_record_path"),
+                    include_damage_types=component_camera_cfg.get("defect_types"),
+                )
+            )
+        if not defects:
             raise ValueError(
                 "camera.strategy='component' requires camera.component.defects "
-                "(list of point/normal entries)."
+                "(list of point/normal entries) or camera.component.defect_record_path."
             )
 
         if bbox_data is None:
@@ -259,6 +276,8 @@ def _build_render_context(params):
         "output_index_offset": int(params.get("output_index_offset", 0)),
         "model_iter": params.get("model_iter"),
         "render_iter": params.get("render_iter"),
+        "mask_only_layers": mask_cfg.get("only_layers"),
+        "mask_hide_layers": mask_cfg.get("hide_layers", ["crack_extrusion"]),
     }
 
 
@@ -492,6 +511,8 @@ def _capture_pose(idx, pose, context):
         width=context["width"],
         height=context["height"],
         max_length=context["max_length"],
+        mask_only_layers=context.get("mask_only_layers"),
+        mask_hide_layers=context.get("mask_hide_layers"),
     )
 
 

@@ -21,11 +21,32 @@ def create_single_layer(name, color):
     """
     if isinstance(color, str):
         color = __color_from_name(color)
-    layer = sc.doc.Layers.FindByFullPath(name, True)
-    if layer>=0: return sc.doc.Layers[layer]
-    layer_index = sc.doc.Layers.Add(name, color)
-    layer = sc.doc.Layers[layer_index]
-    return layer
+    layer_index = sc.doc.Layers.FindByFullPath(name, True)
+    if layer_index >= 0:
+        return sc.doc.Layers[layer_index]
+
+    parts = [part.strip() for part in str(name).split("::") if part.strip()]
+    if not parts:
+        raise ValueError("Layer name cannot be empty.")
+
+    parent = None
+    current_full = None
+    for idx, part in enumerate(parts):
+        current_full = part if parent is None else "{}::{}".format(parent, part)
+        existing = sc.doc.Layers.FindByFullPath(current_full, True)
+        if existing >= 0:
+            parent = current_full
+            continue
+        if idx == len(parts) - 1:
+            created = rs.AddLayer(name=part, color=color, parent=parent)
+        else:
+            created = rs.AddLayer(name=part, parent=parent)
+        parent = created or current_full
+
+    final_index = sc.doc.Layers.FindByFullPath(current_full, True)
+    if final_index < 0:
+        raise ValueError("Failed to create layer '{}'".format(name))
+    return sc.doc.Layers[final_index]
 
 
 def create_layers(
@@ -43,12 +64,20 @@ def create_layers(
     render_materials = [mat.DisplayName for mat in sc.doc.RenderMaterials]
 
     currnt_layer = rs.CurrentLayer()
+    existing_layers = []
     for layer in sc.doc.Layers:
-        if layer.Name and layer != currnt_layer:
-            objects = rs.ObjectsByLayer(layer.Name)
-            if objects:
-                rs.DeleteObjects(objects)  # Delete all objects on the layer
-            rs.DeleteLayer(layer.Name)
+        if not layer.Name:
+            continue
+        if layer.Name == currnt_layer:
+            continue
+        existing_layers.append(layer.FullPath or layer.Name)
+    existing_layers.sort(key=lambda name: str(name).count("::"), reverse=True)
+    for layer_name in existing_layers:
+        objects = rs.ObjectsByLayer(layer_name)
+        if objects:
+            rs.DeleteObjects(objects)  # Delete all objects on the layer
+        if rs.IsLayer(layer_name):
+            rs.DeleteLayer(layer_name)
 
     for layer_name, color in layer_color_dict.items():
         layer = create_single_layer(layer_name, color)
