@@ -1,111 +1,45 @@
 """Unified defect placement interfaces for crack/efflore/exposed-rebar."""
 
+import copy
 import json
 import math
 import os
+from pathlib import Path
 import random
 
 import rhinoscriptsyntax as rs
+import yaml
 
 from utils_loc.crack_modeling import create_crack
 from utils_loc.damage_shapes import load_shape_templates
 from utils_loc.defect_modeling import get_reference_points, get_surfaces
 
-DEFAULT_DAMAGE_CONFIG = {
-    "enabled": True,
-    "seed": None,
-    "record_output_path": None,
-    "target_layers": None,
-    "max_attempts_per_instance": 40,
-    "reference": {
-        "sample_count_u": 2,
-        "sample_count_v": 2,
-        "trim_margin": 0.1,
-        "max_num_surfaces": 0,
-        "min_boundary_distance": 1.0,
-    },
-    "random": {
-        "scale_min": 0.6,
-        "scale_max": 1.4,
-        "orientation_min_deg": 0.0,
-        "orientation_max_deg": 360.0,
-        "boundary_margin": 0.9,
-        "normal_offset": 0.0,
-    },
-    "shape_library": {
-        "paths": [],
-        "shape_dir": None,
-        "recursive": True,
-        "pattern": "*.json",
-        "file_format": "auto",
-    },
-    "layers": {
-        "seeds": "defects::seeds",
-        "geometry": {
-            "crack": "defects::geometry::crack",
-            "efflore": "defects::geometry::efflore",
-            "spall": "defects::geometry::spall",
-            "rebar": "defects::geometry::rebar",
-        },
-        "mask": {
-            "crack": "defects::mask::crack",
-            "efflore": "defects::mask::efflore",
-            "spall": "defects::mask::spall",
-            "rebar": "defects::mask::rebar",
-            "exposed_rebar": "defects::mask::exposed_rebar",
-        },
-    },
-    "crack": {
-        "enabled": True,
-        "count": 0,
-        "scale_min": None,
-        "scale_max": None,
-        "orientation_min_deg": None,
-        "orientation_max_deg": None,
-        "boundary_margin": None,
-        "normal_offset": None,
-        "shape_library": {},
-        "d1_range": [0.5, 2.5],
-        "delta_depth_range": [10.0, 30.0],
-    },
-    "efflore": {
-        "enabled": True,
-        "count": 0,
-        "scale_min": None,
-        "scale_max": None,
-        "orientation_min_deg": None,
-        "orientation_max_deg": None,
-        "boundary_margin": None,
-        "normal_offset": None,
-        "shape_library": {},
-        "thickness_range": [0.2, 1.5],
-    },
-    "exposed_rebar": {
-        "enabled": True,
-        "count": 0,
-        "scale_min": None,
-        "scale_max": None,
-        "orientation_min_deg": None,
-        "orientation_max_deg": None,
-        "boundary_margin": None,
-        "normal_offset": None,
-        "shape_library": {},
-        "spall_depth_range": [5.0, 20.0],
-        "rebar_count_range": [1, 3],
-        "rebar_radius_range": [0.8, 2.5],
-        "rebar_length_scale": 1.3,
-        "rebar_cover_depth": 2.0,
-    },
-}
+_CONFIG_ROOT = Path(__file__).resolve().parent.parent / "configs"
+_DAMAGE_DEFAULTS_PATH = _CONFIG_ROOT / "damage_defaults.yaml"
+
+
+def _load_damage_defaults():
+    if not _DAMAGE_DEFAULTS_PATH.is_file():
+        raise FileNotFoundError(
+            "Missing damage defaults config: '{}'".format(_DAMAGE_DEFAULTS_PATH)
+        )
+    loaded = yaml.safe_load(_DAMAGE_DEFAULTS_PATH.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            "Invalid damage defaults config '{}': expected a mapping at root.".format(
+                _DAMAGE_DEFAULTS_PATH
+            )
+        )
+    return loaded
 
 
 def _deep_merge(base, override):
-    merged = dict(base)
+    merged = copy.deepcopy(base)
     for key, value in (override or {}).items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = _deep_merge(merged[key], value)
         else:
-            merged[key] = value
+            merged[key] = copy.deepcopy(value)
     return merged
 
 
@@ -338,6 +272,9 @@ def _add_mask_from_polygon(points, layer_name, as_surface=True):
 def _collect_reference_candidates(cfg, model_result=None):
     source_ids = _collect_object_ids(model_result)
     ref_cfg = cfg.get("reference") or {}
+    existing_ids_before = set(
+        rs.AllObjects(select=False, include_lights=False, include_grips=False) or []
+    )
     surface_ids = get_surfaces(
         object_ids=source_ids,
         layer_names=cfg.get("target_layers"),
@@ -345,6 +282,7 @@ def _collect_reference_candidates(cfg, model_result=None):
         explode_polysurfaces=True,
         keep_input=True,
     )
+    temporary_surface_ids = [sid for sid in surface_ids if sid not in existing_ids_before]
 
     max_num_surfaces = max(0, _to_int(ref_cfg.get("max_num_surfaces"), 0))
     if max_num_surfaces > 0:
@@ -356,35 +294,40 @@ def _collect_reference_candidates(cfg, model_result=None):
     trim_margin = _to_float(ref_cfg.get("trim_margin"), 0.1)
     min_boundary_distance = max(0.0, _to_float(ref_cfg.get("min_boundary_distance"), 1.0))
 
-    for surface_id in surface_ids:
-        if not rs.IsObject(surface_id):
-            continue
-        border_curves = _duplicate_surface_borders(surface_id)
-        points, sizes, normals = get_reference_points(
-            surface_id,
-            sample_count_u=su,
-            sample_count_v=sv,
-            trim_margin=trim_margin,
-            return_normals=True,
-        )
-        surface_layer = rs.ObjectLayer(surface_id)
-        for point, size, normal in zip(points, sizes, normals):
-            boundary_dist = _distance_to_boundary(point, border_curves)
-            if boundary_dist < min_boundary_distance:
+    try:
+        for surface_id in surface_ids:
+            if not rs.IsObject(surface_id):
                 continue
-            candidates.append(
-                {
-                    "surface_id": surface_id,
-                    "surface_layer": surface_layer,
-                    "point": _vec3(point),
-                    "normal": _unit(normal, fallback=(0.0, 0.0, 1.0)),
-                    "reference_size": float(size),
-                    "boundary_dist": float(boundary_dist),
-                }
+            border_curves = _duplicate_surface_borders(surface_id)
+            points, sizes, normals = get_reference_points(
+                surface_id,
+                sample_count_u=su,
+                sample_count_v=sv,
+                trim_margin=trim_margin,
+                return_normals=True,
             )
-        for curve_id in border_curves:
-            if rs.IsObject(curve_id):
-                rs.DeleteObject(curve_id)
+            surface_layer = rs.ObjectLayer(surface_id)
+            for point, size, normal in zip(points, sizes, normals):
+                boundary_dist = _distance_to_boundary(point, border_curves)
+                if boundary_dist < min_boundary_distance:
+                    continue
+                candidates.append(
+                    {
+                        "surface_id": surface_id,
+                        "surface_layer": surface_layer,
+                        "point": _vec3(point),
+                        "normal": _unit(normal, fallback=(0.0, 0.0, 1.0)),
+                        "reference_size": float(size),
+                        "boundary_dist": float(boundary_dist),
+                    }
+                )
+            for curve_id in border_curves:
+                if rs.IsObject(curve_id):
+                    rs.DeleteObject(curve_id)
+    finally:
+        for sid in temporary_surface_ids:
+            if sid and rs.IsObject(sid):
+                rs.DeleteObject(sid)
 
     return candidates
 
@@ -684,10 +627,20 @@ def _resolve_layer_map(cfg):
         "geometry": dict((layers_cfg.get("geometry") or {})),
         "mask": dict((layers_cfg.get("mask") or {})),
     }
-    defaults = DEFAULT_DAMAGE_CONFIG["layers"]
-    for key, value in defaults.get("geometry", {}).items():
+    for key, value in {
+        "crack": "defects::geometry::crack",
+        "efflore": "defects::geometry::efflore",
+        "spall": "defects::geometry::spall",
+        "rebar": "defects::geometry::rebar",
+    }.items():
         layer_map["geometry"].setdefault(key, value)
-    for key, value in defaults.get("mask", {}).items():
+    for key, value in {
+        "crack": "defects::mask::crack",
+        "efflore": "defects::mask::efflore",
+        "spall": "defects::mask::spall",
+        "rebar": "defects::mask::rebar",
+        "exposed_rebar": "defects::mask::exposed_rebar",
+    }.items():
         layer_map["mask"].setdefault(key, value)
 
     ensure_layer(layer_map["seeds"])
@@ -804,7 +757,7 @@ def defects_from_record_payload(payload, include_damage_types=None):
 
 def apply_damage_pipeline(params=None, model_result=None):
     """Place crack/efflore/exposed-rebar defects on model surfaces."""
-    cfg = _deep_merge(DEFAULT_DAMAGE_CONFIG, params or {})
+    cfg = _deep_merge(_load_damage_defaults(), params or {})
     if not bool(cfg.get("enabled", True)):
         return {
             "enabled": False,
