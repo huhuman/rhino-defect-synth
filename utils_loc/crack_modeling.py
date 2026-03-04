@@ -60,6 +60,7 @@ def create_crack(
     layer_crack_extrusion="crack_extrusion",
     layer_parent_surface="cube",
     cleanup_inputs=True,
+    rng=None,
 ):
     """Create crack geometry from projected polygon curves.
 
@@ -96,8 +97,9 @@ def create_crack(
     if depth_extra_min > depth_extra_max:
         depth_extra_min, depth_extra_max = depth_extra_max, depth_extra_min
 
-    d1 = random.uniform(d1_min, d1_max)
-    d2 = d1 + random.uniform(depth_extra_min, depth_extra_max)
+    rng = random if rng is None else rng
+    d1 = rng.uniform(d1_min, d1_max)
+    d2 = d1 + rng.uniform(depth_extra_min, depth_extra_max)
     vec_d1 = rs.VectorScale(direction, d1)
     vec_delta = rs.VectorScale(direction, d2 - d1)
 

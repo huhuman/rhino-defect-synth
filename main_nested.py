@@ -174,10 +174,11 @@ def run(
 
     if seed is None:
         seed = nested_cfg.get("seed")
-    rng = random
     if seed is not None:
-        random.seed(int(seed))
+        rng = random.Random(int(seed))
         print(f"Random seed: {int(seed)}")
+    else:
+        rng = random.Random()
 
     if renders_per_model is None:
         renders_per_model = int(nested_cfg.get("renders_per_model", 1))

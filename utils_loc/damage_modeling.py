@@ -21,7 +21,7 @@ DEFAULT_DAMAGE_CONFIG = {
         "sample_count_u": 2,
         "sample_count_v": 2,
         "trim_margin": 0.1,
-        "max_surfaces": 0,
+        "max_num_surfaces": 0,
         "min_boundary_distance": 1.0,
     },
     "random": {
@@ -346,9 +346,9 @@ def _collect_reference_candidates(cfg, model_result=None):
         keep_input=True,
     )
 
-    max_surfaces = max(0, _to_int(ref_cfg.get("max_surfaces"), 0))
-    if max_surfaces > 0:
-        surface_ids = surface_ids[:max_surfaces]
+    max_num_surfaces = max(0, _to_int(ref_cfg.get("max_num_surfaces"), 0))
+    if max_num_surfaces > 0:
+        surface_ids = surface_ids[:max_num_surfaces]
 
     candidates = []
     su = max(1, _to_int(ref_cfg.get("sample_count_u"), 2))
@@ -396,7 +396,7 @@ def _resolve_random_value(damage_cfg, random_cfg, key, default):
     return value
 
 
-def _sample_transform(damage_cfg, random_cfg, candidate, shape):
+def _sample_transform(damage_cfg, random_cfg, candidate, shape, rng):
     scale_min = _to_float(_resolve_random_value(damage_cfg, random_cfg, "scale_min", 0.6), 0.6)
     scale_max = _to_float(_resolve_random_value(damage_cfg, random_cfg, "scale_max", 1.4), 1.4)
     if scale_min > scale_max:
@@ -420,8 +420,8 @@ def _sample_transform(damage_cfg, random_cfg, candidate, shape):
     if scale_upper < scale_min:
         return None
 
-    scale = random.uniform(scale_min, scale_upper)
-    angle_deg = random.uniform(angle_min, angle_max)
+    scale = rng.uniform(scale_min, scale_upper)
+    angle_deg = rng.uniform(angle_min, angle_max)
     normal_offset = _to_float(_resolve_random_value(damage_cfg, random_cfg, "normal_offset", 0.0), 0.0)
 
     return {
@@ -479,7 +479,7 @@ def _record_common(damage_type, candidate, transform, shape):
     }
 
 
-def _model_crack_instance(candidate, shape, transform, cfg, layer_map):
+def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng):
     offset_2d, base_2d, crack_2d, inside_2d, diff_2d = _pick_shape_points(shape)
     offset_3d = _project_points_to_surface(offset_2d, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
     base_3d = _project_points_to_surface(base_2d, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
@@ -527,6 +527,7 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map):
         layer_crack_extrusion=layer_map["geometry"]["crack"],
         layer_parent_surface=candidate.get("surface_layer"),
         cleanup_inputs=True,
+        rng=rng,
     ) or {}
 
     record = _record_common("crack", candidate, transform, shape)
@@ -543,7 +544,7 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map):
     return record
 
 
-def _model_efflore_instance(candidate, shape, transform, cfg, layer_map):
+def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng):
     offset_2d, _, _, _, _ = _pick_shape_points(shape)
     polygon = _project_points_to_surface(offset_2d, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
     curve_id = _add_polyline(polygon)
@@ -558,7 +559,7 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map):
     thickness_max = _to_float(thickness_max, 1.5)
     if thickness_min > thickness_max:
         thickness_min, thickness_max = thickness_max, thickness_min
-    thickness = random.uniform(thickness_min, thickness_max)
+    thickness = rng.uniform(thickness_min, thickness_max)
 
     start = candidate["point"]
     end = _add(start, _scale(candidate["normal"], thickness))
@@ -596,7 +597,7 @@ def _model_spall_from_polygon(polygon, candidate, depth, layer_name):
     return _coerce_ids(ids)
 
 
-def _model_rebar_bars(candidate, transform, shape_radius, cfg, layer_name):
+def _model_rebar_bars(candidate, transform, shape_radius, cfg, layer_name, rng):
     u_axis, v_axis, n_axis = _surface_axes(candidate["surface_id"], candidate["point"], candidate["normal"])
     rebar_cfg = cfg["exposed_rebar"]
 
@@ -605,7 +606,7 @@ def _model_rebar_bars(candidate, transform, shape_radius, cfg, layer_name):
     bar_count_max = max(1, _to_int(bar_count_max, 3))
     if bar_count_min > bar_count_max:
         bar_count_min, bar_count_max = bar_count_max, bar_count_min
-    bar_count = random.randint(bar_count_min, bar_count_max)
+    bar_count = rng.randint(bar_count_min, bar_count_max)
 
     radius_min, radius_max = rebar_cfg.get("rebar_radius_range", [0.8, 2.5])
     radius_min = max(0.05, _to_float(radius_min, 0.8))
@@ -629,7 +630,7 @@ def _model_rebar_bars(candidate, transform, shape_radius, cfg, layer_name):
         line_id = rs.AddLine(start, end)
         if not line_id:
             continue
-        radius = random.uniform(radius_min, radius_max)
+        radius = rng.uniform(radius_min, radius_max)
         pipes = _coerce_ids(rs.AddPipe(line_id, 0.0, radius, cap=2) or [])
         if pipes:
             created.extend(pipes)
@@ -639,7 +640,7 @@ def _model_rebar_bars(candidate, transform, shape_radius, cfg, layer_name):
     return created, {"bar_count": bar_count, "bar_length": bar_length}
 
 
-def _model_exposed_rebar_instance(candidate, shape, transform, cfg, layer_map):
+def _model_exposed_rebar_instance(candidate, shape, transform, cfg, layer_map, rng):
     offset_2d, _, _, _, _ = _pick_shape_points(shape)
     polygon = _project_points_to_surface(offset_2d, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
     if len(polygon) < 4:
@@ -650,7 +651,7 @@ def _model_exposed_rebar_instance(candidate, shape, transform, cfg, layer_map):
     spall_depth_max = max(0.1, _to_float(spall_depth_max, 20.0))
     if spall_depth_min > spall_depth_max:
         spall_depth_min, spall_depth_max = spall_depth_max, spall_depth_min
-    spall_depth = random.uniform(spall_depth_min, spall_depth_max)
+    spall_depth = rng.uniform(spall_depth_min, spall_depth_max)
 
     mask_ids = []
     mask_ids.extend(_add_mask_from_polygon(polygon, layer_map["mask"]["exposed_rebar"], as_surface=True))
@@ -663,6 +664,7 @@ def _model_exposed_rebar_instance(candidate, shape, transform, cfg, layer_map):
         shape_radius=max(1.0, _to_float(shape.get("shape_radius"), 1.0)),
         cfg=cfg,
         layer_name=layer_map["geometry"]["rebar"],
+        rng=rng,
     )
 
     record = _record_common("exposed_rebar", candidate, transform, shape)
@@ -696,7 +698,7 @@ def _resolve_layer_map(cfg):
     return layer_map
 
 
-def _build_instance_records_for_type(damage_type, cfg, candidates, shapes, layer_map):
+def _build_instance_records_for_type(damage_type, cfg, candidates, shapes, layer_map, rng):
     if damage_type not in ("crack", "efflore", "exposed_rebar"):
         return []
 
@@ -714,18 +716,18 @@ def _build_instance_records_for_type(damage_type, cfg, candidates, shapes, layer
     for _ in range(count):
         placed = None
         for _attempt in range(max_attempts):
-            candidate = random.choice(candidates)
-            shape = random.choice(shapes)
-            transform = _sample_transform(damage_cfg, random_cfg, candidate, shape)
+            candidate = rng.choice(candidates)
+            shape = rng.choice(shapes)
+            transform = _sample_transform(damage_cfg, random_cfg, candidate, shape, rng=rng)
             if transform is None:
                 continue
 
             if damage_type == "crack":
-                placed = _model_crack_instance(candidate, shape, transform, cfg, layer_map)
+                placed = _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng=rng)
             elif damage_type == "efflore":
-                placed = _model_efflore_instance(candidate, shape, transform, cfg, layer_map)
+                placed = _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng=rng)
             else:
-                placed = _model_exposed_rebar_instance(candidate, shape, transform, cfg, layer_map)
+                placed = _model_exposed_rebar_instance(candidate, shape, transform, cfg, layer_map, rng=rng)
 
             if placed is not None:
                 seed_id = _create_seed_marker(candidate, layer_map["seeds"])
@@ -815,7 +817,9 @@ def apply_damage_pipeline(params=None, model_result=None):
 
     seed = cfg.get("seed")
     if seed is not None:
-        random.seed(_to_int(seed, 0))
+        rng = random.Random(_to_int(seed, 0))
+    else:
+        rng = random.Random()
 
     layer_map = _resolve_layer_map(cfg)
     candidates = _collect_reference_candidates(cfg, model_result=model_result)
@@ -840,7 +844,16 @@ def apply_damage_pipeline(params=None, model_result=None):
         if damage_type not in shape_cache:
             shape_cache[damage_type] = _resolve_shape_library(cfg, damage_cfg)
         shapes = shape_cache[damage_type]
-        records.extend(_build_instance_records_for_type(damage_type, cfg, candidates, shapes, layer_map))
+        records.extend(
+            _build_instance_records_for_type(
+                damage_type,
+                cfg,
+                candidates,
+                shapes,
+                layer_map,
+                rng=rng,
+            )
+        )
 
     json_ready = _json_ready_records(records)
     camera_defects = _extract_camera_defects(json_ready)

@@ -71,7 +71,7 @@ modeling:
       sample_count_u: 1
       sample_count_v: 1
       trim_margin: 0.1
-      max_surfaces: 0
+      max_num_surfaces: 0
       convert_polylines: true
       explode_polysurfaces: true
   damage:
@@ -89,7 +89,7 @@ modeling:
       sample_count_v: 2
       trim_margin: 0.1
       min_boundary_distance: 20.0
-      max_surfaces: 0
+      max_num_surfaces: 0
     random:
       scale_min: 0.6
       scale_max: 1.4

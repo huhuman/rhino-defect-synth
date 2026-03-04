@@ -4,10 +4,13 @@ This module refactors the procedural bridge script (tmp.py) into a parameterized
 pipeline that can be called from utils_loc.pipeline::create_model.
 """
 
+import copy
 import math
+from pathlib import Path
 import random
 
 import rhinoscriptsyntax as rs
+import yaml
 
 INCH_TO_UNIT = 2.54
 FOOT_TO_UNIT = 30.48
@@ -26,98 +29,32 @@ DEFAULT_BEAM_SECTION_LIBRARY_INCH = {
     "45B IL-beam": [38, 7, 38, 5, 7.5, 10.5, 15, 7],
 }
 
-DEFAULT_COMPONENT_CONFIG = {
-    "seed": None,
-    "delete_centerline_curve": True,
-    "convert_polygons_to_surfaces": True,
-    "keep_polygon_curves": False,
-    "centerline": {
-        "span": 70 * FOOT_TO_UNIT,
-        "num_base_pts": 3,
-        "start_point": [0.0, 0.0, 0.0],
-        "use_curve": True,
-        "theta_deg": None,
-        "theta_deg_min": 75.0,
-        "theta_deg_max": 105.0,
-    },
-    "slab": {
-        "width": 1200.0,
-        "thickness": 25.0,
-        "cross_slope_ratio": 1.5 / 100.0,
-    },
-    "parapet": {
-        "enabled": True,
-        "h1": 4 * INCH_TO_UNIT,
-        "h2": 9 * INCH_TO_UNIT,
-        "h3": 37.5 * INCH_TO_UNIT,
-        "h4": 39 * INCH_TO_UNIT,
-        "w1": 30 * INCH_TO_UNIT,
-        "w2": 9.5 * INCH_TO_UNIT,
-        "w3": 7.5 * INCH_TO_UNIT,
-    },
-    "beam": {
-        "enabled": True,
-        "num_lines": 7,
-        "section_key": "36 I-beam",
-        "section_library_inch": {},
-    },
-    "bearing": {
-        "enabled": True,
-        "thickness": 5.0,
-        "base_norm_width": 120.0,
-        "road_width_scale": 0.8,
-        "mid_width_scale": 0.8,
-        "mid_thickness_scale": 1.5,
-    },
-    "pier": {
-        "enabled": True,
-        "type": "hammerhead",  # hammerhead | m_column
-        "H": 1200.0,
-        "V": 500.0,
-        "W": 100.0,
-        "count": 1,
-        "anchor_indices": None,
-        "use_internal_stations_only": True,
-        "hammerhead": {
-            "slope_ratio": 3.0 / (2.0 * 12.0),
-            "head_height_ratio": 0.15,
-            "head_cap_section_height": 80.0,
-        },
-        "m_column": {
-            "cap_height": 3.25 * FOOT_TO_UNIT,
-            "bottom_height": 5.0 * FOOT_TO_UNIT,
-            "slope_ratio": 1.0 / 12.0,
-            "column_min_width": 3.0 * FOOT_TO_UNIT,
-            "edge_offset": 7.0 * FOOT_TO_UNIT,
-        },
-    },
-    "layers": {
-        "slab": "slab",
-        "parapet": "parapet",
-        "beam": "beam",
-        "bearing": "bearing",
-        "pier": "pier",
-    },
-    "reference_points": {
-        "enabled": True,
-        "layers": ["slab", "parapet", "beam", "pier"],
-        "sample_count_u": 1,
-        "sample_count_v": 1,
-        "trim_margin": 0.1,
-        "max_surfaces": 0,
-        "convert_polylines": True,
-        "explode_polysurfaces": True,
-    },
-}
+_CONFIG_ROOT = Path(__file__).resolve().parent.parent / "configs"
+_COMPONENT_DEFAULTS_PATH = _CONFIG_ROOT / "component_defaults.yaml"
+
+
+def _load_component_defaults():
+    if not _COMPONENT_DEFAULTS_PATH.is_file():
+        raise FileNotFoundError(
+            "Missing component defaults config: '{}'".format(_COMPONENT_DEFAULTS_PATH)
+        )
+    loaded = yaml.safe_load(_COMPONENT_DEFAULTS_PATH.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            "Invalid component defaults config '{}': expected a mapping at root.".format(
+                _COMPONENT_DEFAULTS_PATH
+            )
+        )
+    return loaded
 
 
 def _deep_merge(base, override):
-    merged = dict(base)
+    merged = copy.deepcopy(base)
     for key, value in (override or {}).items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = _deep_merge(merged[key], value)
         else:
-            merged[key] = value
+            merged[key] = copy.deepcopy(value)
     return merged
 
 
@@ -226,19 +163,29 @@ def _add_polygon(result, component, layer_name, points, cfg):
     if len(closed) < 4:
         return []
 
+    keep_curve = bool(cfg.get("keep_polygon_curves", False))
+    convert = bool(cfg.get("convert_polygons_to_surfaces", True))
+    vertices = _unique_vertices(closed)
+
+    # Fast path for the common quad case: avoid polyline creation/deletion churn.
+    if convert and len(vertices) == 4 and not keep_curve:
+        srf_id = rs.AddSrfPt(vertices)
+        if srf_id:
+            _assign_layer(srf_id, layer_name)
+            result["surfaces"].append(srf_id)
+            _append_component_object(result, component, srf_id)
+            return [srf_id]
+
     curve_id = rs.AddPolyline(closed)
     if not curve_id:
         return []
     _assign_layer(curve_id, layer_name)
 
     created_ids = []
-    keep_curve = bool(cfg.get("keep_polygon_curves", False))
-    convert = bool(cfg.get("convert_polygons_to_surfaces", True))
 
     if convert:
         surface_ids = rs.AddPlanarSrf(curve_id) or []
         if not surface_ids:
-            vertices = _unique_vertices(closed)
             if len(vertices) == 4:
                 srf_id = rs.AddSrfPt(vertices)
                 if srf_id:
@@ -248,7 +195,7 @@ def _add_polygon(result, component, layer_name, points, cfg):
             result["surfaces"].append(srf_id)
             _append_component_object(result, component, srf_id)
             created_ids.append(srf_id)
-        if surface_ids and not keep_curve and rs.IsObject(curve_id):
+        if created_ids and not keep_curve and rs.IsObject(curve_id):
             rs.DeleteObject(curve_id)
 
     if keep_curve or not created_ids:
@@ -288,7 +235,8 @@ def _add_box(result, component, layer_name, corners):
     return box_id
 
 
-def _build_centerline(centerline_cfg):
+def _build_centerline(centerline_cfg, rng=None):
+    rng = random if rng is None else rng
     span = max(1e-6, _to_float(centerline_cfg.get("span"), 70 * FOOT_TO_UNIT))
     num_base_pts = max(2, _to_int(centerline_cfg.get("num_base_pts"), 3))
     start_pt = _xyz(centerline_cfg.get("start_point", [0.0, 0.0, 0.0]))
@@ -302,7 +250,7 @@ def _build_centerline(centerline_cfg):
         t_max = _to_float(centerline_cfg.get("theta_deg_max"), 105.0)
         if t_min > t_max:
             t_min, t_max = t_max, t_min
-        theta_deg = random.uniform(t_min, t_max)
+        theta_deg = rng.uniform(t_min, t_max)
     theta_rad = math.radians(float(theta_deg))
 
     if use_curve:
@@ -656,9 +604,12 @@ def _resolve_pier_anchor_indices(pier_cfg, n_stations):
         return []
 
     explicit = pier_cfg.get("anchor_indices")
-    if explicit:
+    if explicit is not None:
+        explicit_indices = explicit
+        if not isinstance(explicit_indices, (list, tuple, set)):
+            explicit_indices = [explicit_indices]
         ordered = []
-        for idx in explicit:
+        for idx in explicit_indices:
             try:
                 i = int(idx)
             except (TypeError, ValueError):
@@ -889,32 +840,70 @@ def _collect_reference_points(result, cfg):
     if not candidate_ids:
         return
 
-    surfaces = get_surfaces(
-        object_ids=candidate_ids,
-        layer_names=reference_cfg.get("layers"),
-        convert_polylines=bool(reference_cfg.get("convert_polylines", True)),
-        explode_polysurfaces=bool(reference_cfg.get("explode_polysurfaces", True)),
-        keep_input=True,
+    convert_polylines = bool(reference_cfg.get("convert_polylines", True))
+    explode_polysurfaces = bool(reference_cfg.get("explode_polysurfaces", True))
+    max_num_surfaces = max(
+        0,
+        _to_int(reference_cfg.get("max_num_surfaces"), 0),
     )
-    max_surfaces = max(0, _to_int(reference_cfg.get("max_surfaces"), 0))
-    if max_surfaces > 0:
-        surfaces = surfaces[:max_surfaces]
+
+    existing_surface_ids = set(result["surfaces"])
+    temporary_surface_ids = set()
+
+    surfaces = []
+    if max_num_surfaces > 0:
+        seen = set()
+        for obj_id in candidate_ids:
+            if len(surfaces) >= max_num_surfaces:
+                break
+            found = get_surfaces(
+                object_ids=[obj_id],
+                layer_names=reference_cfg.get("layers"),
+                convert_polylines=convert_polylines,
+                explode_polysurfaces=explode_polysurfaces,
+                keep_input=True,
+            )
+            for sid in found:
+                if sid not in existing_surface_ids:
+                    temporary_surface_ids.add(sid)
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                surfaces.append(sid)
+                if len(surfaces) >= max_num_surfaces:
+                    break
+    else:
+        surfaces = get_surfaces(
+            object_ids=candidate_ids,
+            layer_names=reference_cfg.get("layers"),
+            convert_polylines=convert_polylines,
+            explode_polysurfaces=explode_polysurfaces,
+            keep_input=True,
+        )
+        for sid in surfaces:
+            if sid not in existing_surface_ids:
+                temporary_surface_ids.add(sid)
 
     su = max(1, _to_int(reference_cfg.get("sample_count_u"), 1))
     sv = max(1, _to_int(reference_cfg.get("sample_count_v"), 1))
     trim_margin = _to_float(reference_cfg.get("trim_margin"), 0.1)
 
-    for surface_id in surfaces:
-        pts, sizes, normals = get_reference_points(
-            surface_id,
-            sample_count_u=su,
-            sample_count_v=sv,
-            trim_margin=trim_margin,
-            return_normals=True,
-        )
-        result["reference_points"].extend(pts)
-        result["reference_sizes"].extend(sizes)
-        result["reference_normals"].extend(normals)
+    try:
+        for surface_id in surfaces:
+            pts, sizes, normals = get_reference_points(
+                surface_id,
+                sample_count_u=su,
+                sample_count_v=sv,
+                trim_margin=trim_margin,
+                return_normals=True,
+            )
+            result["reference_points"].extend(pts)
+            result["reference_sizes"].extend(sizes)
+            result["reference_normals"].extend(normals)
+    finally:
+        for sid in temporary_surface_ids:
+            if sid and rs.IsObject(sid):
+                rs.DeleteObject(sid)
 
 
 def create_bridge_component(params=None):
@@ -926,10 +915,9 @@ def create_bridge_component(params=None):
     Returns:
         dict: Created geometry ids and sampled reference points.
     """
-    cfg = _deep_merge(DEFAULT_COMPONENT_CONFIG, params or {})
+    cfg = _deep_merge(_load_component_defaults(), params or {})
     seed = cfg.get("seed")
-    if seed is not None:
-        random.seed(_to_int(seed, 0))
+    rng = random.Random() if seed is None else random.Random(_to_int(seed, 0))
 
     result = {
         "config": cfg,
@@ -948,7 +936,10 @@ def create_bridge_component(params=None):
         "pier_anchor_indices": [],
     }
 
-    centerline_id, base_pts, road_dirs, norm_dirs, theta_deg = _build_centerline(cfg.get("centerline") or {})
+    centerline_id, base_pts, road_dirs, norm_dirs, theta_deg = _build_centerline(
+        cfg.get("centerline") or {},
+        rng=rng,
+    )
     result["centerline_id"] = centerline_id
     result["centerline_theta_deg"] = theta_deg
     result["base_points"] = base_pts
