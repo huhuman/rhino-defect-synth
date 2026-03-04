@@ -68,12 +68,6 @@ main_nested.run(
 - `modeling`
 - `rendering`
 
-別名：
-- `prepare` / `prep` -> `preparation`
-- `view` / `setup_view` -> `view_setup`
-- `model` -> `modeling`
-- `render` -> `rendering`
-
 相依性：
 - `preparation`、`modeling`、`rendering` 都需要 `load_config`。
 

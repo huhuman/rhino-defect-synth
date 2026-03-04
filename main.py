@@ -16,14 +16,6 @@ STAGE_ORDER = (
     "modeling",
     "rendering",
 )
-STAGE_ALIASES = {
-    "prepare": "preparation",
-    "prep": "preparation",
-    "view": "view_setup",
-    "setup_view": "view_setup",
-    "model": "modeling",
-    "render": "rendering",
-}
 STAGE_DEPENDENCIES = {
     "preparation": ("load_config",),
     "modeling": ("load_config",),
@@ -65,7 +57,6 @@ def time_stage(name, func, stage_times, *args, **kwargs):
 
 def _normalize_stage_name(name):
     stage_name = name.strip().lower()
-    stage_name = STAGE_ALIASES.get(stage_name, stage_name)
     if stage_name not in STAGE_ORDER:
         valid = ", ".join(STAGE_ORDER)
         raise ValueError(f"Unknown stage '{name}'. Valid stages: {valid}")
@@ -184,7 +175,7 @@ if __name__ == "__main__":
     #    run(stages=["preparation"])
     run(
         config_name="cube_render.yaml",
-        stages=["prepare"],
+        stages=["preparation"],
         skip=[],
         start_face_index=0,
         show_cameras=False,

@@ -68,12 +68,6 @@ Defined order:
 - `modeling`
 - `rendering`
 
-Aliases:
-- `prepare` / `prep` -> `preparation`
-- `view` / `setup_view` -> `view_setup`
-- `model` -> `modeling`
-- `render` -> `rendering`
-
 Dependencies:
 - `preparation`, `modeling`, `rendering` require `load_config`.
 
