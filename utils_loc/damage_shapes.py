@@ -5,6 +5,11 @@ import json
 import os
 
 
+def _load_json(filepath):
+    with open(filepath, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def _as_float(value, default=0.0):
     try:
         return float(value)
@@ -50,13 +55,65 @@ def _shape_radius(shape):
     return max((x * x + y * y) ** 0.5 for x, y in candidates)
 
 
+def extract_point_sets(data):
+    """Extract point-set payloads from common JSON forms.
+
+    Supported data shapes:
+      1) {"points": [[x, y], ...]}
+      2) {"contours": [{"points": [[x, y], ...]}, ...]}
+      3) [[x, y], ...]
+      4) [[[x, y], ...], ...]
+    """
+    if isinstance(data, dict):
+        if "points" in data:
+            return [data["points"]]
+        if "contours" in data:
+            point_sets = []
+            for contour in data["contours"]:
+                if isinstance(contour, dict) and "points" in contour:
+                    point_sets.append(contour["points"])
+                elif isinstance(contour, (list, tuple)):
+                    point_sets.append(contour)
+            return point_sets
+        raise ValueError("Unsupported dict format. Expected keys: 'points' or 'contours'.")
+
+    if isinstance(data, (list, tuple)):
+        if not data:
+            return []
+        first = data[0]
+        if isinstance(first, (list, tuple)) and first and isinstance(first[0], (int, float)):
+            return [data]
+        point_sets = []
+        for contour in data:
+            if isinstance(contour, dict) and "points" in contour:
+                point_sets.append(contour["points"])
+            else:
+                point_sets.append(contour)
+        return point_sets
+
+    raise ValueError("Unsupported shape content.")
+
+
+def _looks_like_cube_payload(data):
+    if not isinstance(data, dict):
+        return False
+    if "pixel_size_cm" in data:
+        return True
+    required = ("contours", "expanded_contours", "base_contours", "difference_contours", "severities")
+    return all(key in data for key in required)
+
+
+def _detect_shape_file_format(filepath):
+    data = _load_json(filepath)
+    return "cube" if _looks_like_cube_payload(data) else "simple"
+
+
 def read_cube_contour_json(filepath):
     """Read cube-style contour JSON and convert pixels into millimeter units."""
     if not os.path.isfile(filepath):
         raise IOError("File not found: {}".format(filepath))
 
-    with open(filepath, "r") as handle:
-        data = json.load(handle)
+    data = _load_json(filepath)
 
     if "pixel_size_cm" not in data:
         raise KeyError('JSON must contain "pixel_size_cm".')
@@ -136,7 +193,22 @@ def iter_cube_shape_templates(filepath):
     width_mm = parsed["width_mm"]
     height_mm = parsed["height_mm"]
 
-    n_items = min(len(contours), len(expanded), len(base), len(diffs), len(severities))
+    counts = {
+        "contours": len(contours),
+        "expanded_contours": len(expanded),
+        "base_contours": len(base),
+        "difference_contours": len(diffs),
+        "severities": len(severities),
+    }
+    if len(set(counts.values())) != 1:
+        raise ValueError(
+            "Mismatched cube contour array lengths for '{}': {}".format(
+                os.path.abspath(filepath),
+                counts,
+            )
+        )
+
+    n_items = counts["contours"]
     templates = []
     for idx in range(n_items):
         contour_group = contours[idx]
@@ -209,8 +281,7 @@ def iter_simple_shape_templates(filepath):
     """Read simple polygon JSON and emit templates with unified keys."""
     if not os.path.isfile(filepath):
         raise IOError("File not found: {}".format(filepath))
-    with open(filepath, "r") as handle:
-        data = json.load(handle)
+    data = _load_json(filepath)
 
     if isinstance(data, list) and data and isinstance(data[0], dict):
         return [
@@ -257,18 +328,11 @@ def load_shape_templates(paths=None, shape_dir=None, recursive=True, pattern="*.
         if selected_format not in ("auto", "cube", "simple"):
             raise ValueError("Unsupported shape file_format '{}'.".format(file_format))
 
-        if selected_format in ("auto", "cube"):
-            try:
-                cube_items = iter_cube_shape_templates(filepath)
-            except Exception:
-                cube_items = None
-            if cube_items:
-                templates.extend(cube_items)
-                continue
-            if selected_format == "cube":
-                raise ValueError("Failed to parse '{}' as cube contour JSON.".format(filepath))
-
-        templates.extend(iter_simple_shape_templates(filepath))
+        resolved_format = _detect_shape_file_format(filepath) if selected_format == "auto" else selected_format
+        if resolved_format == "cube":
+            templates.extend(iter_cube_shape_templates(filepath))
+        else:
+            templates.extend(iter_simple_shape_templates(filepath))
 
     if not templates:
         raise ValueError("No shape templates were loaded from the provided paths.")

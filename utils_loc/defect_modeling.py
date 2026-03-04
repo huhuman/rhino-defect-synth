@@ -6,6 +6,7 @@ import math
 import os
 
 import rhinoscriptsyntax as rs
+from utils_loc.damage_shapes import extract_point_sets
 
 
 def _as_list(value):
@@ -272,37 +273,6 @@ def get_surfaces(
     return _dedupe_ids(surfaces)
 
 
-def _extract_point_sets(data):
-    if isinstance(data, dict):
-        if "points" in data:
-            return [data["points"]]
-        if "contours" in data:
-            point_sets = []
-            for contour in data["contours"]:
-                if isinstance(contour, dict) and "points" in contour:
-                    point_sets.append(contour["points"])
-                elif isinstance(contour, (list, tuple)):
-                    point_sets.append(contour)
-            return point_sets
-        raise ValueError("Unsupported dict format in curve file. Expected keys: 'points' or 'contours'.")
-
-    if isinstance(data, (list, tuple)):
-        if not data:
-            return []
-        first = data[0]
-        if isinstance(first, (list, tuple)) and first and isinstance(first[0], (int, float)):
-            return [data]
-        point_sets = []
-        for contour in data:
-            if isinstance(contour, dict) and "points" in contour:
-                point_sets.append(contour["points"])
-            else:
-                point_sets.append(contour)
-        return point_sets
-
-    raise ValueError("Unsupported curve file content.")
-
-
 def create_curve_from_file(filename, close_curve=True, scale=1.0, z=0.0, layer_name=None):
     """Create one or more polylines from a JSON file.
 
@@ -315,11 +285,11 @@ def create_curve_from_file(filename, close_curve=True, scale=1.0, z=0.0, layer_n
     if not filename or not os.path.isfile(filename):
         raise IOError("File not found: {}".format(filename))
 
-    with open(filename, "r") as handle:
+    with open(filename, "r", encoding="utf-8") as handle:
         data = json.load(handle)
 
     curves = []
-    for points in _extract_point_sets(data):
+    for points in extract_point_sets(data):
         if not points:
             continue
         poly_pts = []

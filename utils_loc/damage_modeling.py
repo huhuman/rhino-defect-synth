@@ -135,6 +135,19 @@ def _as_strings(ids):
     return [str(obj_id) for obj_id in _coerce_ids(ids)]
 
 
+def _delete_objects(obj_ids):
+    for obj_id in _coerce_ids(obj_ids):
+        if rs.IsObject(obj_id):
+            rs.DeleteObject(obj_id)
+
+
+def _try_vec3(value):
+    try:
+        return _vec3(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 def _layer_path_parts(layer_name):
     return [part.strip() for part in str(layer_name).split("::") if part.strip()]
 
@@ -216,23 +229,48 @@ def _distance_to_boundary(point, border_curves):
 
 
 def _surface_axes(surface_id, point, normal):
-    uv = rs.SurfaceClosestPoint(surface_id, point)
-    frame = rs.SurfaceFrame(surface_id, uv) if uv else None
+    frame = None
+    try:
+        if surface_id and rs.IsObject(surface_id):
+            uv = rs.SurfaceClosestPoint(surface_id, point)
+            frame = rs.SurfaceFrame(surface_id, uv) if uv else None
+    except Exception:
+        frame = None
+
     if frame and hasattr(frame, "XAxis") and hasattr(frame, "YAxis"):
         u_axis = _unit(frame.XAxis, fallback=(1.0, 0.0, 0.0))
         v_axis = _unit(frame.YAxis, fallback=(0.0, 1.0, 0.0))
     else:
-        n = _unit(normal, fallback=(0.0, 0.0, 1.0))
+        n = _unit(normal or (0.0, 0.0, 1.0), fallback=(0.0, 0.0, 1.0))
         ref = (0.0, 0.0, 1.0) if abs(n[2]) < 0.95 else (0.0, 1.0, 0.0)
         u_axis = _unit(_cross(ref, n), fallback=(1.0, 0.0, 0.0))
         v_axis = _unit(_cross(n, u_axis), fallback=(0.0, 1.0, 0.0))
-    n_axis = _unit(normal, fallback=_cross(u_axis, v_axis))
+    n_axis = _unit(normal or (0.0, 0.0, 1.0), fallback=_cross(u_axis, v_axis))
     return u_axis, v_axis, n_axis
 
 
+def _candidate_axes(candidate):
+    u_axis = _try_vec3((candidate or {}).get("u_axis"))
+    v_axis = _try_vec3((candidate or {}).get("v_axis"))
+    n_axis = _try_vec3((candidate or {}).get("n_axis"))
+    if u_axis is not None and v_axis is not None:
+        u_axis = _unit(u_axis, fallback=(1.0, 0.0, 0.0))
+        v_axis = _unit(v_axis, fallback=(0.0, 1.0, 0.0))
+        n_fallback = n_axis if n_axis is not None else _cross(u_axis, v_axis)
+        n_axis = _unit(n_fallback, fallback=_cross(u_axis, v_axis))
+        return u_axis, v_axis, n_axis
+
+    return _surface_axes(
+        (candidate or {}).get("surface_id"),
+        (candidate or {}).get("point"),
+        (candidate or {}).get("normal"),
+    )
+
+
 def _project_points_to_surface(points_2d, candidate, scale, angle_deg, normal_offset=0.0):
-    origin = _add(candidate["point"], _scale(candidate["normal"], normal_offset))
-    u_axis, v_axis, _ = _surface_axes(candidate["surface_id"], candidate["point"], candidate["normal"])
+    normal = (candidate or {}).get("normal") or (0.0, 0.0, 1.0)
+    origin = _add(candidate["point"], _scale(normal, normal_offset))
+    u_axis, v_axis, _ = _candidate_axes(candidate)
     angle = math.radians(float(angle_deg))
     cos_v = math.cos(angle)
     sin_v = math.sin(angle)
@@ -308,6 +346,9 @@ def _collect_reference_candidates(cfg, model_result=None):
             )
             surface_layer = rs.ObjectLayer(surface_id)
             for point, size, normal in zip(points, sizes, normals):
+                point_3d = _vec3(point)
+                normal_3d = _unit(normal, fallback=(0.0, 0.0, 1.0))
+                u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
                 boundary_dist = _distance_to_boundary(point, border_curves)
                 if boundary_dist < min_boundary_distance:
                     continue
@@ -315,8 +356,11 @@ def _collect_reference_candidates(cfg, model_result=None):
                     {
                         "surface_id": surface_id,
                         "surface_layer": surface_layer,
-                        "point": _vec3(point),
-                        "normal": _unit(normal, fallback=(0.0, 0.0, 1.0)),
+                        "point": point_3d,
+                        "normal": normal_3d,
+                        "u_axis": u_axis,
+                        "v_axis": v_axis,
+                        "n_axis": n_axis,
                         "reference_size": float(size),
                         "boundary_dist": float(boundary_dist),
                     }
@@ -472,13 +516,25 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng):
         cleanup_inputs=True,
         rng=rng,
     ) or {}
-
-    record = _record_common("crack", candidate, transform, shape)
-    record["geometry_ids"] = _as_strings(
+    crack_geometry = _coerce_ids(
         (crack_created.get("loft") or [])
         + (crack_created.get("extrusions") or [])
         + (crack_created.get("bottom_caps") or [])
     )
+    parent_fills = _coerce_ids(crack_created.get("parent_fills") or [])
+    if not crack_geometry:
+        _delete_objects(
+            crack_polys
+            + inside_polys
+            + diff_polys
+            + [offset_curve, base_curve]
+            + mask_ids
+            + parent_fills
+        )
+        return None
+
+    record = _record_common("crack", candidate, transform, shape)
+    record["geometry_ids"] = _as_strings(crack_geometry)
     record["mask_ids"] = _as_strings(mask_ids)
     record["crack_metrics"] = {
         "d1": crack_created.get("d1"),
@@ -514,6 +570,9 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng):
 
     if rs.IsObject(curve_id):
         rs.DeleteObject(curve_id)
+    if not geometry_ids:
+        _delete_objects(mask_ids)
+        return None
 
     record = _record_common("efflore", candidate, transform, shape)
     record["geometry_ids"] = _as_strings(geometry_ids)
@@ -541,7 +600,7 @@ def _model_spall_from_polygon(polygon, candidate, depth, layer_name):
 
 
 def _model_rebar_bars(candidate, transform, shape_radius, cfg, layer_name, rng):
-    u_axis, v_axis, n_axis = _surface_axes(candidate["surface_id"], candidate["point"], candidate["normal"])
+    u_axis, v_axis, n_axis = _candidate_axes(candidate)
     rebar_cfg = cfg["exposed_rebar"]
 
     bar_count_min, bar_count_max = rebar_cfg.get("rebar_count_range", [1, 3])
@@ -609,11 +668,15 @@ def _model_exposed_rebar_instance(candidate, shape, transform, cfg, layer_map, r
         layer_name=layer_map["geometry"]["rebar"],
         rng=rng,
     )
+    geometry_ids = _coerce_ids(spall_ids + rebar_ids)
+    if not geometry_ids:
+        _delete_objects(mask_ids + spall_ids + rebar_ids)
+        return None
 
     record = _record_common("exposed_rebar", candidate, transform, shape)
     record["spall_geometry_ids"] = _as_strings(spall_ids)
     record["rebar_geometry_ids"] = _as_strings(rebar_ids)
-    record["geometry_ids"] = _as_strings(spall_ids + rebar_ids)
+    record["geometry_ids"] = _as_strings(geometry_ids)
     record["mask_ids"] = _as_strings(mask_ids)
     record["spall_metrics"] = {"depth": spall_depth}
     record["rebar_metrics"] = rebar_metrics
@@ -682,12 +745,25 @@ def _build_instance_records_for_type(damage_type, cfg, candidates, shapes, layer
             else:
                 placed = _model_exposed_rebar_instance(candidate, shape, transform, cfg, layer_map, rng=rng)
 
-            if placed is not None:
-                seed_id = _create_seed_marker(candidate, layer_map["seeds"])
-                if seed_id:
-                    placed["seed_id"] = str(seed_id)
-                records.append(placed)
-                break
+            if placed is None:
+                continue
+
+            geometry_ids = _coerce_ids(placed.get("geometry_ids") or [])
+            if not geometry_ids:
+                _delete_objects(
+                    (placed.get("geometry_ids") or [])
+                    + (placed.get("spall_geometry_ids") or [])
+                    + (placed.get("rebar_geometry_ids") or [])
+                    + (placed.get("mask_ids") or [])
+                )
+                placed = None
+                continue
+
+            seed_id = _create_seed_marker(candidate, layer_map["seeds"])
+            if seed_id:
+                placed["seed_id"] = str(seed_id)
+            records.append(placed)
+            break
         if placed is None:
             print("Damage {}: failed to place one instance within attempt budget.".format(damage_type))
     return records
@@ -725,7 +801,7 @@ def save_damage_records(path, payload):
         return None
     abs_path = os.path.abspath(path)
     os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-    with open(abs_path, "w") as handle:
+    with open(abs_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
     return abs_path
 
@@ -737,7 +813,7 @@ def load_damage_records(path):
     abs_path = os.path.abspath(path)
     if not os.path.isfile(abs_path):
         raise IOError("Damage record file not found: '{}'".format(abs_path))
-    with open(abs_path, "r") as handle:
+    with open(abs_path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
     return data
 
@@ -746,13 +822,24 @@ def defects_from_record_payload(payload, include_damage_types=None):
     """Convert damage records into camera defect seeds."""
     if not payload:
         return []
+    if not isinstance(payload, dict):
+        raise ValueError("Damage record payload must be a mapping/dict.")
+
     defects = payload.get("camera_defects")
     if defects is None:
-        defects = _extract_camera_defects(payload.get("records") or [])
+        records = payload.get("records") or []
+        if not isinstance(records, (list, tuple)):
+            raise ValueError("Damage record payload field 'records' must be a list.")
+        defects = _extract_camera_defects(records)
+    elif not isinstance(defects, (list, tuple)):
+        raise ValueError("Damage record payload field 'camera_defects' must be a list.")
+
     if not include_damage_types:
-        return defects
+        return list(defects)
+    if isinstance(include_damage_types, str):
+        include_damage_types = [include_damage_types]
     allowed = {str(name) for name in include_damage_types}
-    return [item for item in defects if item.get("damage_type") in allowed]
+    return [item for item in defects if isinstance(item, dict) and item.get("damage_type") in allowed]
 
 
 def apply_damage_pipeline(params=None, model_result=None):

@@ -140,10 +140,16 @@ Returned model result includes:
 - optional cap: `reference.max_num_surfaces` (`0` = unlimited)
 - boundary-aware random scaling/orientation per candidate
 - per-instance records + optional JSON export (`record_output_path`)
+  - `records`/`summary` count only successfully generated defects (non-empty geometry)
 - camera seed extraction (`camera_defects`) for component camera strategy
+  - each item includes `point`, `normal`, `damage_type`, `instance_index`
 - local RNG seeding (`seed`) without mutating Python global random state
+- shape-library parsing:
+  - `file_format=auto` now detects cube vs simple JSON before parsing
+  - cube contour arrays must have consistent lengths; mismatches raise explicit errors
+  - shared point-set parsing is centralized in `utils_loc.damage_shapes.extract_point_sets()` (also used by `utils_loc.defect_modeling.py`)
 
-`crack` generation is shared through `utils_loc/crack_modeling.py::create_crack()` and now takes configurable depth ranges/layers/cleanup.
+`crack` generation is shared through `utils_loc/crack_modeling.py::create_crack()` and takes configurable depth ranges/layers/cleanup. It validates both `base_poly` and `offset_poly`, and applies cleanup in failure paths when `cleanup_inputs=True`.
 
 ### 3) `rendering`
 Used by `utils_loc/pipeline.py::run_render()` and `utils_loc/render.py`.

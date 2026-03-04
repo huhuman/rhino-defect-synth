@@ -140,10 +140,16 @@ Damage 建模預設值：
 - 可選上限：`reference.max_num_surfaces`（`0` 代表不限制）
 - 依邊界條件限制 random scale/orientation
 - 實例紀錄與可選 JSON 輸出（`record_output_path`）
+  - `records`/`summary` 只統計「成功生成幾何」的損害實例
 - 萃取 `camera_defects` 作為 component 相機 seed
+  - 每筆包含 `point`、`normal`、`damage_type`、`instance_index`
 - 使用區域 RNG（`seed`）抽樣，不會污染 Python 全域 random 狀態
+- shape library 解析行為：
+  - `file_format=auto` 會先判斷 cube/simple JSON 再解析
+  - cube contour 各陣列長度必須一致；不一致會明確報錯
+  - 共用 point-set 解析已集中到 `utils_loc.damage_shapes.extract_point_sets()`（`utils_loc.defect_modeling.py` 也使用）
 
-`crack` 幾何透過 `utils_loc/crack_modeling.py::create_crack()` 共用，並可配置深度範圍、圖層與清理行為。
+`crack` 幾何透過 `utils_loc/crack_modeling.py::create_crack()` 共用，並可配置深度範圍、圖層與清理行為。函式會驗證 `base_poly` 與 `offset_poly`，且在 `cleanup_inputs=True` 時失敗路徑也會做清理。
 
 ### 3) `rendering`
 由 `utils_loc/pipeline.py::run_render()` 與 `utils_loc/render.py` 使用。
