@@ -80,6 +80,15 @@ main_nested.run(
 - 僅做 top-level 淺層合併。
 - 子設定覆寫時，巢狀區塊會整塊被取代。
 
+Component 建模預設值：
+- `utils_loc/component_modeling.py::create_bridge_component()` 會先讀取 `configs/component_defaults.yaml`。
+- 再將 `modeling.component` 的設定以 deep-merge 覆蓋上去。
+- 也就是說，只有你在 `modeling.component` 明確設定的鍵會覆蓋預設值。
+
+Damage 建模預設值：
+- `utils_loc/damage_modeling.py::apply_damage_pipeline()` 會先讀取 `configs/damage_defaults.yaml`。
+- 再將 `modeling.damage` 的設定以 deep-merge 覆蓋上去。
+
 ## 主要設定區塊
 ### 1) `preparation`
 由 `utils_loc/pipeline.py::prepare()` 使用：
@@ -107,6 +116,11 @@ main_nested.run(
 - bearing 與 pier（`hammerhead` 或 `m_column`）
 - 將生成 polygon 轉為 surface
 - 抽樣 reference points 供損害放置
+- 可選上限：`reference_points.max_num_surfaces`（`0` 代表不限制）
+
+常用 component 鍵：
+- `pier.anchor_indices`：手動指定要放置 pier 的 station index（支援負索引）
+- `reference_points.max_num_surfaces`：限制 reference-point 抽樣時要處理的 surface 數量
 
 回傳結果包含：
 - `surfaces`、`polylines`、`solids`
@@ -123,9 +137,11 @@ main_nested.run(
 - 以以下工具建立候選點：
   - `utils_loc.defect_modeling.get_surfaces`
   - `utils_loc.defect_modeling.get_reference_points`
+- 可選上限：`reference.max_num_surfaces`（`0` 代表不限制）
 - 依邊界條件限制 random scale/orientation
 - 實例紀錄與可選 JSON 輸出（`record_output_path`）
 - 萃取 `camera_defects` 作為 component 相機 seed
+- 使用區域 RNG（`seed`）抽樣，不會污染 Python 全域 random 狀態
 
 `crack` 幾何透過 `utils_loc/crack_modeling.py::create_crack()` 共用，並可配置深度範圍、圖層與清理行為。
 
@@ -209,6 +225,8 @@ main_nested.run(
 ## 設定檔範例
 - Cube 渲染：`configs/cube_render.yaml`
 - Component 渲染（含可選 damage pipeline）：`configs/component_render.yaml`
+- Component 預設值（component 建模會載入）：`configs/component_defaults.yaml`
+- Damage 預設值（damage 建模會載入）：`configs/damage_defaults.yaml`
 - Base 材質/圖層設定：
   - `configs/cube_base.yaml`
   - `configs/component_base.yaml`

@@ -80,6 +80,15 @@ Merge behavior:
 - Top-level merge is shallow.
 - Nested blocks are replaced when overridden in child config.
 
+Component-modeling defaults:
+- `utils_loc/component_modeling.py::create_bridge_component()` first loads `configs/component_defaults.yaml`.
+- Then it deep-merges `modeling.component` overrides on top.
+- In other words, only keys you define in `modeling.component` override the defaults.
+
+Damage-modeling defaults:
+- `utils_loc/damage_modeling.py::apply_damage_pipeline()` first loads `configs/damage_defaults.yaml`.
+- Then it deep-merges `modeling.damage` overrides on top.
+
 ## Main Config Sections
 ### 1) `preparation`
 Used by `utils_loc/pipeline.py::prepare()`:
@@ -107,6 +116,11 @@ Supported strategies:
 - bearing and pier generation (`hammerhead` or `m_column`)
 - conversion of generated polygons to surfaces
 - reference-point extraction for defect placement
+- optional cap: `reference_points.max_num_surfaces` (`0` = unlimited)
+
+Useful component keys:
+- `pier.anchor_indices`: explicit station indices for pier placement (supports negative indices)
+- `reference_points.max_num_surfaces`: limit sampled surfaces during reference-point extraction
 
 Returned model result includes:
 - `surfaces`, `polylines`, `solids`
@@ -123,9 +137,11 @@ Returned model result includes:
 - candidate generation from surfaces via:
   - `utils_loc.defect_modeling.get_surfaces`
   - `utils_loc.defect_modeling.get_reference_points`
+- optional cap: `reference.max_num_surfaces` (`0` = unlimited)
 - boundary-aware random scaling/orientation per candidate
 - per-instance records + optional JSON export (`record_output_path`)
 - camera seed extraction (`camera_defects`) for component camera strategy
+- local RNG seeding (`seed`) without mutating Python global random state
 
 `crack` generation is shared through `utils_loc/crack_modeling.py::create_crack()` and now takes configurable depth ranges/layers/cleanup.
 
@@ -209,6 +225,8 @@ By default, `basename` is `view_XXX`. Nested runs can override basename patterns
 ## Example Configs
 - Cube render: `configs/cube_render.yaml`
 - Component render (+ optional damage pipeline): `configs/component_render.yaml`
+- Component defaults (loaded by component modeling): `configs/component_defaults.yaml`
+- Damage defaults (loaded by damage modeling): `configs/damage_defaults.yaml`
 - Base layer/material setup:
   - `configs/cube_base.yaml`
   - `configs/component_base.yaml`
