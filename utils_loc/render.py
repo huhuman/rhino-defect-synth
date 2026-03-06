@@ -276,8 +276,10 @@ def _build_render_context(params):
         "output_index_offset": int(params.get("output_index_offset", 0)),
         "model_iter": params.get("model_iter"),
         "render_iter": params.get("render_iter"),
+        "scene_only_layers": (outputs_cfg.get("scene") or {}).get("only_layers"),
+        "scene_hide_layers": (outputs_cfg.get("scene") or {}).get("hide_layers"),
         "mask_only_layers": mask_cfg.get("only_layers"),
-        "mask_hide_layers": mask_cfg.get("hide_layers", ["crack_extrusion"]),
+        "mask_hide_layers": mask_cfg.get("hide_layers"),
     }
 
 
@@ -511,6 +513,8 @@ def _capture_pose(idx, pose, context):
         width=context["width"],
         height=context["height"],
         max_length=context["max_length"],
+        scene_only_layers=context.get("scene_only_layers"),
+        scene_hide_layers=context.get("scene_hide_layers"),
         mask_only_layers=context.get("mask_only_layers"),
         mask_hide_layers=context.get("mask_hide_layers"),
     )

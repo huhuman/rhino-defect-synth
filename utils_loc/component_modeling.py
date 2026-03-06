@@ -4,13 +4,10 @@ This module refactors the procedural bridge script (tmp.py) into a parameterized
 pipeline that can be called from utils_loc.pipeline::create_model.
 """
 
-import copy
 import math
-from pathlib import Path
 import random
 
 import rhinoscriptsyntax as rs
-import yaml
 
 INCH_TO_UNIT = 2.54
 FOOT_TO_UNIT = 30.48
@@ -28,35 +25,6 @@ DEFAULT_BEAM_SECTION_LIBRARY_INCH = {
     "36B IL-beam": [38, 7, 38, 5, 7.5, 1.5, 15, 7],
     "45B IL-beam": [38, 7, 38, 5, 7.5, 10.5, 15, 7],
 }
-
-_CONFIG_ROOT = Path(__file__).resolve().parent.parent / "configs"
-_COMPONENT_DEFAULTS_PATH = _CONFIG_ROOT / "component_defaults.yaml"
-
-
-def _load_component_defaults():
-    if not _COMPONENT_DEFAULTS_PATH.is_file():
-        raise FileNotFoundError(
-            "Missing component defaults config: '{}'".format(_COMPONENT_DEFAULTS_PATH)
-        )
-    loaded = yaml.safe_load(_COMPONENT_DEFAULTS_PATH.read_text(encoding="utf-8")) or {}
-    if not isinstance(loaded, dict):
-        raise ValueError(
-            "Invalid component defaults config '{}': expected a mapping at root.".format(
-                _COMPONENT_DEFAULTS_PATH
-            )
-        )
-    return loaded
-
-
-def _deep_merge(base, override):
-    merged = copy.deepcopy(base)
-    for key, value in (override or {}).items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = copy.deepcopy(value)
-    return merged
-
 
 def _to_float(value, default):
     try:
@@ -915,7 +883,7 @@ def create_bridge_component(params=None):
     Returns:
         dict: Created geometry ids and sampled reference points.
     """
-    cfg = _deep_merge(_load_component_defaults(), params or {})
+    cfg = params or {}
     seed = cfg.get("seed")
     rng = random.Random() if seed is None else random.Random(_to_int(seed, 0))
 
