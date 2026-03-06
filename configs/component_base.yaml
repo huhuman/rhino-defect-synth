@@ -1,10 +1,10 @@
 preparation:
   materials:
-    slab: "/Concrete Weathered 300cm"
+    slab: "Concrete rusty"
     beam: "Concrete light"
-    parapet: "/Concrete Weathered 300cm"
-    bearing: "/Rubber Rough 001"
-    pier: "/Concrete Simple G01 400cm"
+    parapet: "Concrete rusty"
+    bearing: "Black Sandblasted Plastic"
+    pier: "Concrete rusty"
   colors:
     slab: Red
     beam: Blue

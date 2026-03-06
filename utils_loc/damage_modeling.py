@@ -4,33 +4,13 @@ import copy
 import json
 import math
 import os
-from pathlib import Path
 import random
 
 import rhinoscriptsyntax as rs
-import yaml
 
 from utils_loc.crack_modeling import create_crack
 from utils_loc.damage_shapes import load_shape_templates
 from utils_loc.defect_modeling import get_reference_points, get_surfaces
-
-_CONFIG_ROOT = Path(__file__).resolve().parent.parent / "configs"
-_DAMAGE_DEFAULTS_PATH = _CONFIG_ROOT / "damage_defaults.yaml"
-
-
-def _load_damage_defaults():
-    if not _DAMAGE_DEFAULTS_PATH.is_file():
-        raise FileNotFoundError(
-            "Missing damage defaults config: '{}'".format(_DAMAGE_DEFAULTS_PATH)
-        )
-    loaded = yaml.safe_load(_DAMAGE_DEFAULTS_PATH.read_text(encoding="utf-8")) or {}
-    if not isinstance(loaded, dict):
-        raise ValueError(
-            "Invalid damage defaults config '{}': expected a mapping at root.".format(
-                _DAMAGE_DEFAULTS_PATH
-            )
-        )
-    return loaded
 
 
 def _deep_merge(base, override):
@@ -844,7 +824,7 @@ def defects_from_record_payload(payload, include_damage_types=None):
 
 def apply_damage_pipeline(params=None, model_result=None):
     """Place crack/efflore/exposed-rebar defects on model surfaces."""
-    cfg = _deep_merge(_load_damage_defaults(), params or {})
+    cfg = copy.deepcopy(params or {})
     if not bool(cfg.get("enabled", True)):
         return {
             "enabled": False,

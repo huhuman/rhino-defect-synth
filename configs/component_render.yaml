@@ -1,5 +1,10 @@
 extends: component_base.yaml
 
+view_setup:
+  hide_layers:
+    - "defects::mask"
+    - "defects::seeds"
+
 modeling:
   strategy: component
   component:
@@ -46,7 +51,7 @@ modeling:
       H: 1200.0
       V: 500.0
       W: 100.0
-      count: 1
+      count: 5
       anchor_indices: null
       use_internal_stations_only: true
       hammerhead:
@@ -133,6 +138,10 @@ rendering:
   height: 1080
   output_dir: "C:/path/to/your/component_rendered"
   outputs:
+    scene:
+      hide_layers:
+        - "defects::mask"
+        - "defects::seeds"
     mask:
       # If `only_layers` is set, only these layers are visible for mask output.
       # only_layers:
