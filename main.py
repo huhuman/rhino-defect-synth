@@ -18,6 +18,7 @@ STAGE_ORDER = (
 )
 STAGE_DEPENDENCIES = {
     "preparation": ("load_config",),
+    "view_setup": ("load_config",),
     "modeling": ("load_config",),
     "rendering": ("load_config",),
 }
@@ -34,16 +35,53 @@ def reset():
         rs.DeleteObjects(objs)
 
 
-def setup_render_view():
-    """Set active view to Rendered mode and hide crack section layers."""
+def _normalize_layer_name_set(layer_names):
+    if layer_names is None:
+        return None
+    if isinstance(layer_names, (str, bytes)):
+        return {str(layer_names)}
+    return {str(name) for name in layer_names if str(name).strip()}
+
+
+def _layer_matches(layer, names):
+    if not names:
+        return False
+    layer_name = getattr(layer, "Name", None)
+    full_path = getattr(layer, "FullPath", None)
+    if layer_name in names or full_path in names:
+        return True
+    if full_path:
+        for name in names:
+            if full_path.startswith(f"{name}::"):
+                return True
+    if full_path:
+        tail = full_path.split("::")[-1]
+        if tail in names:
+            return True
+    return False
+
+
+def setup_render_view(cfg=None):
+    """Set active view mode and configure layer visibility from config."""
     render_view = sc.doc.Views.ActiveView
     mode = Rhino.Display.DisplayModeDescription.FindByName("Rendered")
     if mode:
         render_view.ActiveViewport.DisplayMode = mode
 
+    cfg = cfg or {}
+    view_setup_cfg = cfg.get("view_setup") or {}
+    only_set = _normalize_layer_name_set(view_setup_cfg.get("only_layers"))
+    hide_set = _normalize_layer_name_set(view_setup_cfg.get("hide_layers"))
+
     for layer in sc.doc.Layers:
-        if layer.Name:
-            layer.IsVisible = "CS" not in layer.Name
+        if not layer.Name:
+            continue
+        if only_set:
+            layer.IsVisible = _layer_matches(layer, only_set)
+        else:
+            layer.IsVisible = True
+        if hide_set and _layer_matches(layer, hide_set):
+            layer.IsVisible = False
 
 
 def time_stage(name, func, stage_times, *args, **kwargs):
@@ -120,13 +158,14 @@ def run(
         time_stage("preparation", prepare, stage_times, params=cfg.get("preparation"))
 
     if "view_setup" in selected_stages:
-        time_stage("view_setup", setup_render_view, stage_times)
+        time_stage("view_setup", setup_render_view, stage_times, cfg=cfg)
 
     if "modeling" in selected_stages:
         modeling_params = dict(cfg.get("modeling", {}))
         if not modeling_params:
             raise ValueError("Selected 'modeling' stage but config has no 'modeling' section.")
-        modeling_params["start_face_index"] = start_face_index
+        if modeling_params["strategy"] == "cube":
+            modeling_params["start_face_index"] = start_face_index
         time_stage("modeling", create_model, stage_times, params=modeling_params)
 
     if "rendering" in selected_stages:
@@ -173,11 +212,20 @@ if __name__ == "__main__":
     #    run(stages=["reset", "load_config", "preparation", "view_setup", "modeling", "rendering"])
     # 3) Preparation only:
     #    run(stages=["preparation"])
+
+    # run(
+    #     config_name="cube_render.yaml",
+    #     stages=["preparation"],
+    #     skip=[],
+    #     start_face_index=0,
+    #     show_cameras=False,
+    #     print_timings=True,
+    # )
+
     run(
-        config_name="cube_render.yaml",
-        stages=["preparation"],
+        config_name="component_render.yaml",
+        stages=["reset", "load_config", "preparation", "view_setup", "modeling"],
         skip=[],
-        start_face_index=0,
         show_cameras=False,
         print_timings=True,
     )

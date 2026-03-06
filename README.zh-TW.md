@@ -69,7 +69,7 @@ main_nested.run(
 - `rendering`
 
 相依性：
-- `preparation`、`modeling`、`rendering` 都需要 `load_config`。
+- `preparation`、`view_setup`、`modeling`、`rendering` 都需要 `load_config`。
 
 ## 設定系統
 設定檔位於 `configs/`，由 `utils_loc.config.load_config(config_name)` 載入。
@@ -77,16 +77,16 @@ main_nested.run(
 支援 `extends`（例如 `cube_render.yaml` extends `cube_base.yaml`）。
 
 合併規則：
-- 僅做 top-level 淺層合併。
-- 子設定覆寫時，巢狀區塊會整塊被取代。
+- `extends` 會做遞迴（deep-merge）合併。
+- 衝突優先順序：目前設定檔 > extends 設定檔 > defaults。
 
 Component 建模預設值：
-- `utils_loc/component_modeling.py::create_bridge_component()` 會先讀取 `configs/component_defaults.yaml`。
+- `utils_loc.config.load_config()` 在 `modeling.strategy: component` 時，會自動讀取 `configs/component_defaults.yaml`。
 - 再將 `modeling.component` 的設定以 deep-merge 覆蓋上去。
-- 也就是說，只有你在 `modeling.component` 明確設定的鍵會覆蓋預設值。
+- 也就是說，只有你在 `modeling.component` 明確設定的鍵會覆蓋 component 預設值。
 
 Damage 建模預設值：
-- `utils_loc/damage_modeling.py::apply_damage_pipeline()` 會先讀取 `configs/damage_defaults.yaml`。
+- `utils_loc.config.load_config()` 在存在 `modeling.damage` 時，會自動讀取 `configs/damage_defaults.yaml`。
 - 再將 `modeling.damage` 的設定以 deep-merge 覆蓋上去。
 
 ## 主要設定區塊

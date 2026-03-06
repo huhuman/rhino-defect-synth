@@ -69,7 +69,7 @@ Defined order:
 - `rendering`
 
 Dependencies:
-- `preparation`, `modeling`, `rendering` require `load_config`.
+- `preparation`, `view_setup`, `modeling`, `rendering` require `load_config`.
 
 ## Config System
 Configs live in `configs/`, loaded via `utils_loc.config.load_config(config_name)`.
@@ -77,17 +77,17 @@ Configs live in `configs/`, loaded via `utils_loc.config.load_config(config_name
 `extends` is supported (for example `cube_render.yaml` extends `cube_base.yaml`).
 
 Merge behavior:
-- Top-level merge is shallow.
-- Nested blocks are replaced when overridden in child config.
+- `extends` merge is recursive (deep merge).
+- Conflict priority is: current config > extends config > defaults.
 
 Component-modeling defaults:
-- `utils_loc/component_modeling.py::create_bridge_component()` first loads `configs/component_defaults.yaml`.
-- Then it deep-merges `modeling.component` overrides on top.
-- In other words, only keys you define in `modeling.component` override the defaults.
+- `utils_loc.config.load_config()` auto-loads `configs/component_defaults.yaml` for `modeling.strategy: component`.
+- Then it deep-merges `modeling.component` on top.
+- In other words, only keys you define in `modeling.component` override component defaults.
 
 Damage-modeling defaults:
-- `utils_loc/damage_modeling.py::apply_damage_pipeline()` first loads `configs/damage_defaults.yaml`.
-- Then it deep-merges `modeling.damage` overrides on top.
+- `utils_loc.config.load_config()` auto-loads `configs/damage_defaults.yaml` when `modeling.damage` is present.
+- Then it deep-merges `modeling.damage` on top.
 
 ## Main Config Sections
 ### 1) `preparation`
