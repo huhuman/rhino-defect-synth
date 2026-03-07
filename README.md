@@ -97,7 +97,7 @@ Supported strategies:
 - `strategy: cube`
   - required: `cube.cube_map_dir`
   - optional: `start_face_index` (injected by `main.run`)
-  - optional: `defect` block (unified defect placement)
+  - crack geometry is generated directly from six face maps (no secondary defect-placement stage)
 - `strategy: component`
   - uses `component` block handled by `utils_loc/component_modeling.py`
   - optional: `defect` block (unified defect placement)
@@ -121,7 +121,7 @@ Returned model result includes:
 - `objects_by_component`
 - sampled `reference_points`, `reference_sizes`, `reference_normals`
 
-#### Unified defect modeling (`modeling.defect`)
+#### Unified defect modeling (`modeling.defect`, component branch)
 `utils_loc/defect_placement.py::apply_defect_pipeline()` supports:
 - defect types:
   - `crack`
@@ -230,7 +230,8 @@ By default, `basename` is `view_XXX`. Nested runs can override basename patterns
 - Component local (recommended runtime entry): `configs/component.local.yaml`
 - Render blocks: `configs/cube_render.yaml`, `configs/component_render.yaml`
 - Modeling defaults: `configs/cube_defaults.yaml`, `configs/component_defaults.yaml`
-- Defect defaults: `configs/cube_defect_defaults.yaml`, `configs/component_defect_defaults.yaml`
+- Defect defaults: `configs/component_defect_defaults.yaml`
+- Cube defect defaults (kept for config composition/compatibility): `configs/cube_defect_defaults.yaml`
 - Base composition + preparation: `configs/cube_base.yaml`, `configs/component_base.yaml`
 
 ## Project Layout

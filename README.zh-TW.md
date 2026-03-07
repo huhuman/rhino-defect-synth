@@ -97,7 +97,7 @@ main_nested.run(
 - `strategy: cube`
   - 必要：`cube.cube_map_dir`
   - 可選：`start_face_index`（由 `main.run` 注入）
-  - 可選：`defect`（統一 defect 放置）
+  - crack 幾何直接由六個面 map 生成（不走第二段 defect placement）
 - `strategy: component`
   - 使用 `component` 區塊（`utils_loc/component_modeling.py`）
   - 可選：`defect`（統一 defect 放置）
@@ -121,7 +121,7 @@ main_nested.run(
 - `objects_by_component`
 - `reference_points`、`reference_sizes`、`reference_normals`
 
-#### 統一 defect 建模（`modeling.defect`）
+#### 統一 defect 建模（`modeling.defect`，component 分支）
 `utils_loc/defect_placement.py::apply_defect_pipeline()` 支援：
 - defect 型別：
   - `crack`
@@ -230,7 +230,8 @@ main_nested.run(
 - Component 本機設定（建議執行入口）：`configs/component.local.yaml`
 - Render 區塊：`configs/cube_render.yaml`、`configs/component_render.yaml`
 - 建模預設值：`configs/cube_defaults.yaml`、`configs/component_defaults.yaml`
-- defect 預設值：`configs/cube_defect_defaults.yaml`、`configs/component_defect_defaults.yaml`
+- defect 預設值：`configs/component_defect_defaults.yaml`
+- cube defect defaults（保留給設定組合/相容用途）：`configs/cube_defect_defaults.yaml`
 - Base 組合與 preparation：`configs/cube_base.yaml`、`configs/component_base.yaml`
 
 ## 專案結構
