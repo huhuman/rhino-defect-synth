@@ -95,6 +95,12 @@ def _cross(a, b):
     return ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
 
 
+def _dot(a, b):
+    ax, ay, az = _vec3(a)
+    bx, by, bz = _vec3(b)
+    return ax * bx + ay * by + az * bz
+
+
 def _norm(v):
     x, y, z = _vec3(v)
     return math.sqrt(x * x + y * y + z * z)
@@ -139,6 +145,18 @@ def _normalize_path(path):
     return str(path or "").replace("\\", "/")
 
 
+def _resolve_path_with_base(path, base_dir=None):
+    text = str(path or "").strip()
+    if not text:
+        return None
+    norm = os.path.normpath(text)
+    if os.path.isabs(norm):
+        return os.path.abspath(norm)
+    if base_dir:
+        return os.path.abspath(os.path.normpath(os.path.join(str(base_dir), norm)))
+    return os.path.abspath(norm)
+
+
 def _load_overview_rows(csv_path):
     if not csv_path:
         return []
@@ -147,6 +165,7 @@ def _load_overview_rows(csv_path):
         print("Defect overview: CSV file not found: '{}'".format(abs_path))
         return []
 
+    csv_dir = os.path.dirname(abs_path)
     rows = []
     with open(abs_path, "r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -159,6 +178,8 @@ def _load_overview_rows(csv_path):
                     continue
                 row[str(key).strip()] = value
             if any(str(value).strip() for value in row.values()):
+                row["__overview_dir"] = csv_dir
+                row["__overview_csv_path"] = abs_path
                 rows.append(row)
     return rows
 
@@ -184,15 +205,17 @@ def _to_polygon_json_path(instance_mask_path):
     ):
         path = path.replace(src, dst)
     root, _ext = os.path.splitext(path)
-    return os.path.abspath(os.path.normpath(root + ".json"))
+    return os.path.normpath(root + ".json")
 
 
 def _resolve_polygon_path_from_row(row):
     row = row or {}
+    base_dir = row.get("__overview_dir")
     direct = row.get("polygon_json_path") or row.get("polygon_path")
     if direct:
-        return os.path.abspath(os.path.normpath(str(direct)))
-    return _to_polygon_json_path(row.get("instance_mask_path"))
+        return _resolve_path_with_base(direct, base_dir=base_dir)
+    polygon_path = _to_polygon_json_path(row.get("instance_mask_path"))
+    return _resolve_path_with_base(polygon_path, base_dir=base_dir)
 
 
 def _polygon_area(points):
@@ -978,6 +1001,21 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng):
     if not inner_2d:
         return None
 
+    def _extrude_polygon(polygon_points, thickness):
+        curve_id = _add_polyline(polygon_points)
+        if not curve_id:
+            return []
+        try:
+            depth = max(1e-4, float(thickness))
+            extrusion = rs.ExtrudeCurveStraight(curve_id, (0.0, 0.0, 0.0), _scale(candidate["normal"], depth))
+            geometry = _coerce_ids([extrusion])
+            if not geometry:
+                geometry.extend(_coerce_ids(rs.AddPlanarSrf(curve_id) or []))
+            return geometry
+        finally:
+            if rs.IsObject(curve_id):
+                rs.DeleteObject(curve_id)
+
     inner_polygon = _project_points_to_surface(
         inner_2d,
         candidate,
@@ -985,11 +1023,20 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng):
         transform["angle_deg"],
         transform["normal_offset"],
     )
-    inner_curve = _add_polyline(inner_polygon)
-    if not inner_curve:
+    if len(inner_polygon) < 4:
         return None
 
+    outer_polygon = []
     has_outer = bool(outer_2d and len(outer_2d) >= 3)
+    if has_outer:
+        outer_polygon = _project_points_to_surface(
+            outer_2d,
+            candidate,
+            transform["scale"],
+            transform["angle_deg"],
+            transform["normal_offset"],
+        )
+        has_outer = len(outer_polygon) >= 4
 
     thickness_min, thickness_max = eff_cfg.get("thickness_range", [0.2, 1.5])
     thickness_min = _to_float(thickness_min, 0.2)
@@ -1000,44 +1047,21 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng):
     cs_level = _resolve_efflore_condition_state(eff_cfg, thickness=thickness, has_outer=has_outer)
 
     mask_layer = _mask_layer_for_state(layer_map, "efflore", cs_level)
-    mask_ids = _add_mask_from_polygon(inner_polygon, mask_layer, as_surface=True)
+    mask_source = outer_polygon if has_outer else inner_polygon
+    mask_ids = _add_mask_from_polygon(mask_source, mask_layer, as_surface=True)
 
-    start = candidate["point"]
-    end = _add(start, _scale(candidate["normal"], thickness))
-    inner_extrusion = rs.ExtrudeCurveStraight(inner_curve, start, end)
-    inner_geometry = _coerce_ids([inner_extrusion])
-    if not inner_geometry:
-        inner_geometry.extend(_coerce_ids(rs.AddPlanarSrf(inner_curve) or []))
+    inner_geometry = _extrude_polygon(inner_polygon, thickness)
 
     inner_layer_key = "efflore_{}".format(cs_level.lower())
     inner_layer = layer_map["geometry"].get(inner_layer_key) or layer_map["geometry"]["efflore"]
     _assign_layer(inner_geometry, inner_layer)
 
     outer_geometry = []
-    outer_curve = None
+    outer_ratio = max(0.0, _to_float(eff_cfg.get("outer_thickness_ratio"), 0.35))
     if has_outer:
-        outer_polygon = _project_points_to_surface(
-            outer_2d,
-            candidate,
-            transform["scale"],
-            transform["angle_deg"],
-            transform["normal_offset"],
-        )
-        outer_curve = _add_polyline(outer_polygon)
-        if outer_curve:
-            ratio = max(0.0, _to_float(eff_cfg.get("outer_thickness_ratio"), 0.35))
-            outer_thickness = max(1e-4, thickness * ratio)
-            outer_end = _add(start, _scale(candidate["normal"], outer_thickness))
-            outer_extrusion = rs.ExtrudeCurveStraight(outer_curve, start, outer_end)
-            outer_geometry = _coerce_ids([outer_extrusion])
-            if not outer_geometry:
-                outer_geometry.extend(_coerce_ids(rs.AddPlanarSrf(outer_curve) or []))
-            _assign_layer(outer_geometry, layer_map["geometry"]["efflore_outer"])
-
-    if rs.IsObject(inner_curve):
-        rs.DeleteObject(inner_curve)
-    if outer_curve and rs.IsObject(outer_curve):
-        rs.DeleteObject(outer_curve)
+        outer_thickness = max(1e-4, thickness * outer_ratio)
+        outer_geometry = _extrude_polygon(outer_polygon, outer_thickness)
+        _assign_layer(outer_geometry, layer_map["geometry"]["efflore_outer"])
 
     geometry_ids = _coerce_ids(inner_geometry + outer_geometry)
     if not geometry_ids:
@@ -1051,8 +1075,10 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng):
     record["efflore_outer_geometry_ids"] = _as_strings(outer_geometry)
     record["mask_ids"] = _as_strings(mask_ids)
     record["efflore_metrics"] = {
-        "thickness": thickness,
+        "thickness": float(thickness),
+        "outer_thickness": float(thickness * outer_ratio) if has_outer else 0.0,
         "has_outer_layer": bool(outer_geometry),
+        "mask_uses_outer": bool(has_outer),
     }
     return record
 
@@ -1129,46 +1155,134 @@ def _model_spall_from_polygon(polygon, candidate, depth, layer_name, rng, irregu
     }
 
 
-def _model_rebar_bars(candidate, transform, shape_radius, rebar_cfg, layer_name, rng):
+def _rebar_line_positions(start, end, spacing, rng, padding=0.5):
+    start = float(start)
+    end = float(end)
+    if end < start:
+        start, end = end, start
+    length = max(0.0, end - start)
+    spacing = max(1e-4, float(spacing))
+    if spacing > length:
+        center = 0.5 * (start + end)
+        return [center * (0.8 + 0.4 * rng.random())]
+    out = []
+    x = start
+    limit = end + float(padding)
+    while x < limit:
+        out.append(x)
+        x += spacing
+    return out or [0.5 * (start + end)]
+
+
+def _make_rebar_pipe(start, end, radius):
+    line_id = rs.AddLine(start, end)
+    if not line_id:
+        return []
+    try:
+        return _coerce_ids(rs.AddPipe(line_id, 0.0, float(radius), cap=2) or [])
+    finally:
+        if rs.IsObject(line_id):
+            rs.DeleteObject(line_id)
+
+
+def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rng):
     u_axis, v_axis, n_axis = _candidate_axes(candidate)
+    cover_depth = max(0.0, _to_float(rebar_cfg.get("rebar_cover_depth"), 2.0))
+    if float(spall_depth) <= cover_depth:
+        return [], {"bar_count": 0, "skipped_reason": "spall_depth_not_enough"}
+
+    vertices = _unique_points(polygon)
+    if len(vertices) < 3:
+        return [], {"bar_count": 0, "skipped_reason": "invalid_polygon"}
+
+    local_uv = []
+    for point in vertices:
+        rel = _sub(point, candidate["point"])
+        local_uv.append((_dot(rel, u_axis), _dot(rel, v_axis)))
+    us = [uv[0] for uv in local_uv]
+    vs = [uv[1] for uv in local_uv]
+    left, right = min(us), max(us)
+    bottom, top = min(vs), max(vs)
+    span_u = max(1e-4, right - left)
+    span_v = max(1e-4, top - bottom)
+    length_scale = max(0.2, _to_float(rebar_cfg.get("rebar_length_scale"), 1.3))
+
+    mid_u = 0.5 * (left + right)
+    mid_v = 0.5 * (bottom + top)
+    half_u = 0.5 * span_u * length_scale
+    half_v = 0.5 * span_v * length_scale
+    left_ext, right_ext = mid_u - half_u, mid_u + half_u
+    bottom_ext, top_ext = mid_v - half_v, mid_v + half_v
 
     bar_count_min, bar_count_max = rebar_cfg.get("rebar_count_range", [1, 3])
     bar_count_min = max(1, _to_int(bar_count_min, 1))
     bar_count_max = max(1, _to_int(bar_count_max, 3))
     if bar_count_min > bar_count_max:
         bar_count_min, bar_count_max = bar_count_max, bar_count_min
-    bar_count = rng.randint(bar_count_min, bar_count_max)
+    fallback_count = rng.randint(bar_count_min, bar_count_max)
+
+    spacing = _to_optional_float(rebar_cfg.get("rebar_spacing"))
+    if spacing is None:
+        spacing = _to_optional_float(rebar_cfg.get("spacing"))
+    if spacing is None:
+        spacing = max(span_u, span_v) / float(max(1, fallback_count))
+    spacing = max(1e-4, float(spacing))
 
     radius_min, radius_max = rebar_cfg.get("rebar_radius_range", [0.8, 2.5])
     radius_min = max(0.05, _to_float(radius_min, 0.8))
     radius_max = max(0.05, _to_float(radius_max, 2.5))
     if radius_min > radius_max:
         radius_min, radius_max = radius_max, radius_min
+    radius = rng.uniform(radius_min, radius_max)
+    diameter = 2.0 * radius
 
-    length_scale = max(0.2, _to_float(rebar_cfg.get("rebar_length_scale"), 1.3))
-    cover_depth = max(0.0, _to_float(rebar_cfg.get("rebar_cover_depth"), 2.0))
-    span = max(5.0, shape_radius * transform["scale"] * 2.0)
-    bar_length = span * length_scale
-    spacing = span / float(max(1, bar_count))
+    keep_probability = max(0.0, min(1.0, _to_float(rebar_cfg.get("rebar_keep_probability"), 1.0)))
+    padding = _to_float(rebar_cfg.get("rebar_extent_padding"), 0.5)
+    use_dual_direction = _to_bool(rebar_cfg.get("rebar_dual_direction"), default=True)
+
+    xs = _rebar_line_positions(left, right, spacing, rng, padding=padding)
+    ys = _rebar_line_positions(bottom, top, spacing, rng, padding=padding)
 
     center_base = _add(candidate["point"], _scale(n_axis, -cover_depth))
     created = []
-    for idx in range(bar_count):
-        side_offset = (idx - (bar_count - 1) * 0.5) * spacing
-        center = _add(center_base, _scale(v_axis, side_offset))
-        start = _add(center, _scale(u_axis, -0.5 * bar_length))
-        end = _add(center, _scale(u_axis, 0.5 * bar_length))
-        line_id = rs.AddLine(start, end)
-        if not line_id:
+    count_u = 0
+    count_v = 0
+
+    for x in xs:
+        if rng.random() > keep_probability:
             continue
-        radius = rng.uniform(radius_min, radius_max)
-        pipes = _coerce_ids(rs.AddPipe(line_id, 0.0, radius, cap=2) or [])
+        start = _add(_add(center_base, _scale(u_axis, x)), _scale(v_axis, top_ext))
+        end = _add(_add(center_base, _scale(u_axis, x)), _scale(v_axis, bottom_ext))
+        pipes = _make_rebar_pipe(start, end, radius)
         if pipes:
+            count_v += 1
             created.extend(pipes)
-        if rs.IsObject(line_id):
-            rs.DeleteObject(line_id)
+
+    if use_dual_direction:
+        cross_base = _add(candidate["point"], _scale(n_axis, -(cover_depth + diameter)))
+        for y in ys:
+            if rng.random() > keep_probability:
+                continue
+            start = _add(_add(cross_base, _scale(u_axis, left_ext)), _scale(v_axis, y))
+            end = _add(_add(cross_base, _scale(u_axis, right_ext)), _scale(v_axis, y))
+            pipes = _make_rebar_pipe(start, end, radius)
+            if pipes:
+                count_u += 1
+                created.extend(pipes)
+
     _assign_layer(created, layer_name)
-    return created, {"bar_count": bar_count, "bar_length": bar_length}
+    return created, {
+        "bar_count": int(count_u + count_v),
+        "bar_count_u": int(count_u),
+        "bar_count_v": int(count_v),
+        "bar_length": float(max(right_ext - left_ext, top_ext - bottom_ext)),
+        "bar_length_u": float(right_ext - left_ext),
+        "bar_length_v": float(top_ext - bottom_ext),
+        "spacing": float(spacing),
+        "diameter": float(diameter),
+        "cover_depth": float(cover_depth),
+        "dual_direction": bool(use_dual_direction),
+    }
 
 
 def _resolve_spalling_cfg(cfg):
@@ -1196,6 +1310,11 @@ def _resolve_rebar_cfg(cfg, spalling_cfg):
         "rebar_radius_range",
         "rebar_length_scale",
         "rebar_cover_depth",
+        "rebar_spacing",
+        "spacing",
+        "rebar_keep_probability",
+        "rebar_extent_padding",
+        "rebar_dual_direction",
     ):
         if key in (spalling_cfg or {}):
             rebar_cfg[key] = copy.deepcopy(spalling_cfg[key])
@@ -1300,8 +1419,8 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng):
         rebar_cfg = _resolve_rebar_cfg(cfg, spalling_cfg)
         rebar_ids, rebar_metrics = _model_rebar_bars(
             candidate,
-            transform,
-            shape_radius=max(1.0, _to_float(shape.get("shape_radius"), 1.0) * float(transform["scale"])),
+            polygon,
+            spall_depth=spall_depth,
             rebar_cfg=rebar_cfg,
             layer_name=layer_map["geometry"]["rebar"],
             rng=rng,
