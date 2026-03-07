@@ -5,13 +5,39 @@ from utils_loc.materials import create_materials_from_texture_dir, import_materi
 from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
 from utils_loc.component_modeling import create_bridge_component
-from utils_loc.damage_modeling import apply_damage_pipeline
+from utils_loc.defect_placement import apply_defect_pipeline
 
 import importlib
 render = importlib.import_module("utils_loc.render")
 render_demo = importlib.import_module("utils_loc.render_demo")
 
 _LAST_MODEL_RESULT = None
+
+
+def _to_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _should_run_defect_pipeline(defect_cfg):
+    if not isinstance(defect_cfg, dict) or not defect_cfg:
+        return False
+
+    # Keep supporting the legacy/global switch when it is explicitly set.
+    if "enabled" in defect_cfg and not bool(defect_cfg.get("enabled", True)):
+        return False
+
+    for defect_type in ("crack", "efflore", "spalling", "exposed_rebar"):
+        type_cfg = defect_cfg.get(defect_type)
+        if not isinstance(type_cfg, dict):
+            continue
+        if not bool(type_cfg.get("enabled", True)):
+            continue
+        if _to_int(type_cfg.get("count"), 0) > 0:
+            return True
+    return False
 
 
 def prepare(params=None):
@@ -53,10 +79,13 @@ def create_model(params):
     global _LAST_MODEL_RESULT
 
     if strategy == "cube":
+        cube_cfg = dict(params.get("cube") or {})
+        if not cube_cfg:
+            raise ValueError("modeling.cube is required when modeling.strategy='cube'.")
         print ("-------- Start Cube Modeling -------")
         crack_faces = create_cube(
-            cube_map_dir=params["cube_map_dir"],
-            start_face_index=params.get("start_face_index", 0),
+            cube_map_dir=cube_cfg["cube_map_dir"],
+            start_face_index=params.get("start_face_index", cube_cfg.get("start_face_index", 0)),
         )
 
         inward_dirs = {
@@ -80,21 +109,8 @@ def create_model(params):
                     inward_dir=inward,
                 )
 
+        # Cube workflow uses face crack maps directly; no secondary defect placement stage.
         model_result = {"strategy": "cube", "crack_faces": crack_faces}
-        damage_cfg = params.get("damage") or {}
-        if damage_cfg and bool(damage_cfg.get("enabled", True)):
-            print("-------- Start Damage Placement -------")
-            damage_result = apply_damage_pipeline(damage_cfg, model_result=model_result)
-            model_result["damage"] = damage_result
-            print(
-                "-------- Damage Placement Complete ------- "
-                "(total: {}, crack: {}, efflore: {}, exposed_rebar: {})".format(
-                    damage_result.get("summary", {}).get("total", 0),
-                    damage_result.get("summary", {}).get("crack", 0),
-                    damage_result.get("summary", {}).get("efflore", 0),
-                    damage_result.get("summary", {}).get("exposed_rebar", 0),
-                )
-            )
         _LAST_MODEL_RESULT = model_result
         return model_result
 
@@ -102,25 +118,22 @@ def create_model(params):
         print("-------- Start Component Modeling -------")
         component_cfg = dict(params.get("component", {}))
         if not component_cfg:
-            component_cfg = {
-                key: value
-                for key, value in params.items()
-                if key not in ("strategy", "start_face_index")
-            }
+            raise ValueError("modeling.component is required when modeling.strategy='component'.")
 
         result = create_bridge_component(component_cfg)
-        damage_cfg = params.get("damage") or {}
-        if damage_cfg and bool(damage_cfg.get("enabled", True)):
-            print("-------- Start Damage Placement -------")
-            damage_result = apply_damage_pipeline(damage_cfg, model_result=result)
-            result["damage"] = damage_result
+        defect_cfg = params.get("defect") or {}
+        if _should_run_defect_pipeline(defect_cfg):
+            print("-------- Start Defect Placement -------")
+            defect_result = apply_defect_pipeline(defect_cfg, model_result=result)
+            result["defect"] = defect_result
             print(
-                "-------- Damage Placement Complete ------- "
-                "(total: {}, crack: {}, efflore: {}, exposed_rebar: {})".format(
-                    damage_result.get("summary", {}).get("total", 0),
-                    damage_result.get("summary", {}).get("crack", 0),
-                    damage_result.get("summary", {}).get("efflore", 0),
-                    damage_result.get("summary", {}).get("exposed_rebar", 0),
+                "-------- Defect Placement Complete ------- "
+                "(total: {}, crack: {}, efflore: {}, spalling: {}, exposed_rebar: {})".format(
+                    defect_result.get("summary", {}).get("total", 0),
+                    defect_result.get("summary", {}).get("crack", 0),
+                    defect_result.get("summary", {}).get("efflore", 0),
+                    defect_result.get("summary", {}).get("spalling", 0),
+                    defect_result.get("summary", {}).get("exposed_rebar", 0),
                 )
             )
         print(
@@ -147,9 +160,9 @@ def run_render(params, show_cameras=False):
         has_defects = bool(component_cfg.get("defects"))
         has_record = bool(component_cfg.get("defect_record_path") or params.get("defect_record_path"))
         if not has_defects and not has_record:
-            last_damage = ((_LAST_MODEL_RESULT or {}).get("damage") or {})
-            if last_damage.get("camera_defects"):
-                component_cfg["defects"] = last_damage["camera_defects"]
+            last_defect = (_LAST_MODEL_RESULT or {}).get("defect") or {}
+            if last_defect.get("camera_defects"):
+                component_cfg["defects"] = last_defect["camera_defects"]
                 camera_cfg["component"] = component_cfg
                 params["camera"] = camera_cfg
 

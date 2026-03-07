@@ -1,0 +1,93 @@
+modeling:
+  defect:
+    enabled: true
+    seed: null
+    record_output_path: null
+    target_layers: [slab, parapet, beam, pier]
+    max_attempts_per_instance: 40
+    reference:
+      sample_count_u: 2
+      sample_count_v: 2
+      trim_margin: 0.1
+      max_num_surfaces: 0
+      min_boundary_distance: 20.0
+    random:
+      scale_min: 0.6
+      scale_max: 1.4
+      orientation_min_deg: 0.0
+      orientation_max_deg: 360.0
+      boundary_margin: 0.9
+      normal_offset: 0.0
+    shape_library:
+      paths: []
+      shape_dir: null
+      recursive: true
+      pattern: "*.json"
+      file_format: auto
+    layers:
+      seeds: "defects::seeds"
+      geometry:
+        crack: "defects::geometry::crack"
+        efflore: "defects::geometry::efflore"
+        efflore_outer: "defects::geometry::efflore_outer"
+        efflore_cs2: "defects::geometry::efflore_cs2"
+        efflore_cs3: "defects::geometry::efflore_cs3"
+        spall: "defects::geometry::spall"
+        spall_cs2: "defects::geometry::spall_cs2"
+        spall_cs3: "defects::geometry::spall_cs3"
+        rebar: "defects::geometry::rebar"
+      mask:
+        crack: "defects::mask::crack"
+        crack_cs1: "defects::mask::crack_cs1"
+        crack_cs2: "defects::mask::crack_cs2"
+        crack_cs3: "defects::mask::crack_cs3"
+        efflore: "defects::mask::efflore"
+        efflore_cs2: "defects::mask::efflore_cs2"
+        efflore_cs3: "defects::mask::efflore_cs3"
+        spall: "defects::mask::spall"
+        spall_cs2: "defects::mask::spall_cs2"
+        spall_cs3: "defects::mask::spall_cs3"
+        rebar: "defects::mask::rebar"
+        exposed_rebar: "defects::mask::exposed_rebar"
+        exposed_rebar_cs1: "defects::mask::exposed_rebar_cs1"
+        exposed_rebar_cs2: "defects::mask::exposed_rebar_cs2"
+        exposed_rebar_cs3: "defects::mask::exposed_rebar_cs3"
+    crack:
+      enabled: true
+      count: 0
+      overview_csv_path: null
+      target_width_cm: 0.1
+      cs2_d1_threshold: 1.0
+      cs3_d1_threshold: 2.0
+      d1_range: [0.5, 2.5]
+      delta_depth_range: [10.0, 30.0]
+    efflore:
+      enabled: true
+      count: 0
+      overview_csv_path: null
+      target_span_cm: 12.0
+      outer_thickness_ratio: 0.35
+      cs2_thickness_threshold: 0.4
+      cs3_thickness_threshold: null
+      thickness_range: [0.2, 1.5]
+    spalling:
+      enabled: true
+      count: 0
+      overview_csv_path: null
+      target_diameter_cm: 15.0
+      depth_range: [5.0, 20.0]
+      depth_irregularity: 0.2
+      cs2_depth_threshold: null
+      cs2_diameter_threshold: null
+      cs3_depth_threshold: null
+      cs3_diameter_threshold: null
+      cs3_requires_both: false
+      rebar_enabled: true
+      rebar_probability: 0.0
+      rebar_only_cs3: false
+      force_rebar: false
+      rebar:
+        rebar_count_range: [1, 3]
+        rebar_radius_range: [0.8, 2.5]
+        rebar_length_scale: 1.3
+        rebar_cover_depth: 2.0

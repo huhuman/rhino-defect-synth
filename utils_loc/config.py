@@ -16,6 +16,28 @@ def _load_yaml_mapping(path):
     return loaded
 
 
+def _normalize_extends(path, extends_value):
+    if extends_value is None:
+        return []
+    if isinstance(extends_value, str):
+        base = extends_value.strip()
+        return [base] if base else []
+    if isinstance(extends_value, (list, tuple)):
+        bases = []
+        for idx, item in enumerate(extends_value):
+            if not isinstance(item, str):
+                raise ValueError(
+                    "Invalid config '{}': extends[{}] must be a string.".format(path, idx)
+                )
+            base = item.strip()
+            if base:
+                bases.append(base)
+        return bases
+    raise ValueError(
+        "Invalid config '{}': extends must be a string or list of strings.".format(path)
+    )
+
+
 def _deep_merge(base, override):
     merged = copy.deepcopy(base or {})
     for key, value in (override or {}).items():
@@ -26,46 +48,37 @@ def _deep_merge(base, override):
     return merged
 
 
-def _load_with_extends(config_name, seen=None):
-    seen = set(seen or [])
+def _load_with_extends(config_name, cache=None, stack=None):
+    if cache is None:
+        cache = {}
+    stack = list(stack or [])
     config_path = root / str(config_name)
     config_key = str(config_path.resolve())
-    if config_key in seen:
-        chain = " -> ".join(sorted(seen) + [config_key])
+
+    if config_key in stack:
+        chain = " -> ".join(stack + [config_key])
         raise ValueError(f"Cyclic config extends detected: {chain}")
-    seen.add(config_key)
+
+    cached = cache.get(config_key)
+    if cached is not None:
+        return copy.deepcopy(cached)
 
     cfg = _load_yaml_mapping(config_path)
-    base_name = cfg.get("extends")
+    stack.append(config_key)
+    base_names = _normalize_extends(config_path, cfg.get("extends"))
     current = {k: v for k, v in cfg.items() if k != "extends"}
 
-    if base_name:
-        base_cfg = _load_with_extends(base_name, seen=seen)
-    else:
-        base_cfg = {}
-    return _deep_merge(base_cfg, current)
+    merged_base = {}
+    for base_name in base_names:
+        base_cfg = _load_with_extends(base_name, cache=cache, stack=stack)
+        merged_base = _deep_merge(merged_base, base_cfg)
 
-
-def _apply_modeling_defaults(cfg):
-    merged = copy.deepcopy(cfg)
-    modeling_cfg = merged.get("modeling")
-    if not isinstance(modeling_cfg, dict):
-        return merged
-
-    strategy = modeling_cfg.get("strategy")
-    component_cfg = modeling_cfg.get("component")
-    if strategy == "component" or isinstance(component_cfg, dict):
-        component_defaults = _load_yaml_mapping(root / "component_defaults.yaml")
-        modeling_cfg["component"] = _deep_merge(component_defaults, component_cfg or {})
-
-    if "damage" in modeling_cfg and modeling_cfg.get("damage") is not None:
-        damage_defaults = _load_yaml_mapping(root / "damage_defaults.yaml")
-        modeling_cfg["damage"] = _deep_merge(damage_defaults, modeling_cfg.get("damage") or {})
-
-    return merged
+    stack.pop()
+    result = _deep_merge(merged_base, current)
+    cache[config_key] = copy.deepcopy(result)
+    return result
 
 
 def load_config(config_name):
-    # Priority on conflicts: current config > extends config > defaults.
-    cfg = _load_with_extends(config_name)
-    return _apply_modeling_defaults(cfg)
+    # Priority on conflicts: current config > extends config.
+    return _load_with_extends(config_name)

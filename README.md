@@ -8,7 +8,7 @@ Rhino Python workflow for synthetic defect generation and multi-pass rendering.
 Implemented and wired in the main pipeline:
 - `cube` modeling from contour JSON + crack geometry generation.
 - `component` (bridge) modeling with configurable slab/parapet/beam/bearing/pier generation.
-- Unified damage placement pipeline for `crack`, `efflore`, and `exposed_rebar` (spall + rebar).
+- Unified defect placement pipeline for `crack`, `efflore`, and `exposed_rebar` (spall + rebar).
 - Camera generation for both `cube` and `component` strategies.
 - Multi-pass output capture: color, depth, normal, mask, plus linear depth/normal `.pfm` channels.
 
@@ -74,20 +74,14 @@ Dependencies:
 ## Config System
 Configs live in `configs/`, loaded via `utils_loc.config.load_config(config_name)`.
 
-`extends` is supported (for example `cube_render.yaml` extends `cube_base.yaml`).
+`extends` supports both string and list:
+- `extends: cube_base.yaml`
+- `extends: [cube_defaults.yaml, cube_defect_defaults.yaml, cube_render.yaml]`
 
 Merge behavior:
 - `extends` merge is recursive (deep merge).
-- Conflict priority is: current config > extends config > defaults.
-
-Component-modeling defaults:
-- `utils_loc.config.load_config()` auto-loads `configs/component_defaults.yaml` for `modeling.strategy: component`.
-- Then it deep-merges `modeling.component` on top.
-- In other words, only keys you define in `modeling.component` override component defaults.
-
-Damage-modeling defaults:
-- `utils_loc.config.load_config()` auto-loads `configs/damage_defaults.yaml` when `modeling.damage` is present.
-- Then it deep-merges `modeling.damage` on top.
+- Conflict priority is: current config > later extends entries > earlier extends entries.
+- `load_config()` does not inject defaults automatically; defaults are composed explicitly via `extends`.
 
 ## Main Config Sections
 ### 1) `preparation`
@@ -101,12 +95,12 @@ Used by `utils_loc/pipeline.py::create_model()`.
 
 Supported strategies:
 - `strategy: cube`
-  - required: `cube_map_dir`
+  - required: `cube.cube_map_dir`
   - optional: `start_face_index` (injected by `main.run`)
-  - optional: `damage` block (unified damage placement)
+  - optional: `defect` block (unified defect placement)
 - `strategy: component`
   - uses `component` block handled by `utils_loc/component_modeling.py`
-  - optional: `damage` block (unified damage placement)
+  - optional: `defect` block (unified defect placement)
 
 #### Component modeling highlights
 `utils_loc/component_modeling.py::create_bridge_component()` supports:
@@ -127,12 +121,15 @@ Returned model result includes:
 - `objects_by_component`
 - sampled `reference_points`, `reference_sizes`, `reference_normals`
 
-#### Unified damage modeling (`modeling.damage`)
-`utils_loc/damage_modeling.py::apply_damage_pipeline()` supports:
-- damage types:
+#### Unified defect modeling (`modeling.defect`)
+`utils_loc/defect_placement.py::apply_defect_pipeline()` supports:
+- defect types:
   - `crack`
   - `efflore`
   - `exposed_rebar` (modeled as `spall + rebar`)
+- condition-state notes:
+  - `crack`: CS1/CS2/CS3
+  - `efflore` and `spalling`: CS2/CS3 only
 - shared shape library loading (cube contour JSON and simple polygon JSON)
 - candidate generation from surfaces via:
   - `utils_loc.defect_modeling.get_surfaces`
@@ -142,12 +139,12 @@ Returned model result includes:
 - per-instance records + optional JSON export (`record_output_path`)
   - `records`/`summary` count only successfully generated defects (non-empty geometry)
 - camera seed extraction (`camera_defects`) for component camera strategy
-  - each item includes `point`, `normal`, `damage_type`, `instance_index`
+  - each item includes `point`, `normal`, `defect_type`, `instance_index`
 - local RNG seeding (`seed`) without mutating Python global random state
 - shape-library parsing:
   - `file_format=auto` now detects cube vs simple JSON before parsing
   - cube contour arrays must have consistent lengths; mismatches raise explicit errors
-  - shared point-set parsing is centralized in `utils_loc.damage_shapes.extract_point_sets()` (also used by `utils_loc.defect_modeling.py`)
+  - shared point-set parsing is centralized in `utils_loc.defect_shapes.extract_point_sets()` (also used by `utils_loc.defect_modeling.py`)
 
 `crack` generation is shared through `utils_loc/crack_modeling.py::create_crack()` and takes configurable depth ranges/layers/cleanup. It validates both `base_poly` and `offset_poly`, and applies cleanup in failure paths when `cleanup_inputs=True`.
 
@@ -181,7 +178,7 @@ Common keys:
 #### Camera strategy: `component`
 - direct seed list:
   - `camera.component.defects: [{point: [x,y,z], normal: [nx,ny,nz]}, ...]`
-- or load from damage records:
+- or load from defect records:
   - `camera.component.defect_record_path`
   - optional `camera.component.defect_types`
 - sampling controls:
@@ -193,7 +190,7 @@ Common keys:
   - optional final jitter: `direction_jitter_degrees`, `position_jitter`, `position_jitter_scale`
 
 Pipeline behavior:
-- If `camera.strategy=component` and config does not provide defects or record path, `pipeline.run_render()` can auto-use defects from the most recent `modeling.damage` result in-memory.
+- If `camera.strategy=component` and config does not provide defects or record path, `pipeline.run_render()` can auto-use defects from the most recent `modeling.defect` result in-memory.
 
 #### Mask layer controls
 `rendering.outputs.mask` supports:
@@ -222,20 +219,19 @@ By default, `basename` is `view_XXX`. Nested runs can override basename patterns
 
 ## Layering Notes
 - Hierarchical layer paths (for example `defects::mask::crack`) are supported and auto-created.
-- Damage pipeline separates:
+- Defect pipeline separates:
   - geometry layers (`defects::geometry::*`)
   - mask layers (`defects::mask::*`)
   - seed markers (`defects::seeds`)
 - This makes hide/show-based mask annotation capture easier during rendering.
 
 ## Example Configs
-- Cube render: `configs/cube_render.yaml`
-- Component render (+ optional damage pipeline): `configs/component_render.yaml`
-- Component defaults (loaded by component modeling): `configs/component_defaults.yaml`
-- Damage defaults (loaded by damage modeling): `configs/damage_defaults.yaml`
-- Base layer/material setup:
-  - `configs/cube_base.yaml`
-  - `configs/component_base.yaml`
+- Cube local (recommended runtime entry): `configs/cube_render.local.yaml`
+- Component local (recommended runtime entry): `configs/component.local.yaml`
+- Render blocks: `configs/cube_render.yaml`, `configs/component_render.yaml`
+- Modeling defaults: `configs/cube_defaults.yaml`, `configs/component_defaults.yaml`
+- Defect defaults: `configs/cube_defect_defaults.yaml`, `configs/component_defect_defaults.yaml`
+- Base composition + preparation: `configs/cube_base.yaml`, `configs/component_base.yaml`
 
 ## Project Layout
 - `main.py`: stage runner
@@ -245,8 +241,8 @@ By default, `basename` is `view_XXX`. Nested runs can override basename patterns
 - `utils_loc/pipeline.py`: orchestration (`prepare`, `create_model`, `run_render`, `run_render_demo`)
 - `utils_loc/cube_modeling.py`: cube geometry + contour mapping
 - `utils_loc/component_modeling.py`: configurable bridge component modeling
-- `utils_loc/damage_shapes.py`: shared shape parsing/loading
-- `utils_loc/damage_modeling.py`: unified defect placement + records
+- `utils_loc/defect_shapes.py`: shared shape parsing/loading
+- `utils_loc/defect_placement.py`: unified defect placement + records
 - `utils_loc/crack_modeling.py`: shared crack geometry generation
 - `utils_loc/defect_modeling.py`: surface/reference-point helpers
 - `utils_loc/render.py`: camera generation + render-stage orchestration

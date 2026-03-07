@@ -1,3 +1,8 @@
+extends:
+  - component_defaults.yaml
+  - component_defect_defaults.yaml
+  - component_render.yaml
+
 preparation:
   materials:
     slab: "Concrete rusty"
@@ -5,6 +10,15 @@ preparation:
     parapet: "Concrete rusty"
     bearing: "Black Sandblasted Plastic"
     pier: "Concrete rusty"
+    "defects::geometry::crack": "Concrete rusty"
+    "defects::geometry::efflore": "Concrete light"
+    "defects::geometry::efflore_cs2": "Concrete light"
+    "defects::geometry::efflore_cs3": "Concrete light"
+    "defects::geometry::efflore_outer": "Concrete rusty"
+    "defects::geometry::spall": "Concrete rusty"
+    "defects::geometry::spall_cs2": "Concrete rusty"
+    "defects::geometry::spall_cs3": "Concrete rusty"
+    "defects::geometry::rebar": "Black Sandblasted Plastic"
   colors:
     slab: Red
     beam: Blue
@@ -13,11 +27,26 @@ preparation:
     pier: Brown
     "defects::geometry::crack": OrangeRed
     "defects::geometry::efflore": LightYellow
+    "defects::geometry::efflore_cs2": LightYellow
+    "defects::geometry::efflore_cs3": Gold
+    "defects::geometry::efflore_outer": Peru
     "defects::geometry::spall": Chocolate
+    "defects::geometry::spall_cs2": Chocolate
+    "defects::geometry::spall_cs3": SaddleBrown
     "defects::geometry::rebar": DarkSlateGray
     "defects::mask::crack": White
+    "defects::mask::crack_cs1": LightGreen
+    "defects::mask::crack_cs2": Yellow
+    "defects::mask::crack_cs3": OrangeRed
     "defects::mask::efflore": White
+    "defects::mask::efflore_cs2": LightSkyBlue
+    "defects::mask::efflore_cs3": DeepSkyBlue
     "defects::mask::spall": White
+    "defects::mask::spall_cs2": Gold
+    "defects::mask::spall_cs3": DarkOrange
     "defects::mask::rebar": White
     "defects::mask::exposed_rebar": White
+    "defects::mask::exposed_rebar_cs1": Gainsboro
+    "defects::mask::exposed_rebar_cs2": Silver
+    "defects::mask::exposed_rebar_cs3": Gray
     "defects::seeds": Magenta

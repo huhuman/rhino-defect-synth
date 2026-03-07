@@ -6,7 +6,7 @@ import math
 import os
 
 import rhinoscriptsyntax as rs
-from utils_loc.damage_shapes import extract_point_sets
+from utils_loc.defect_shapes import extract_point_sets
 
 
 def _as_list(value):

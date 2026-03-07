@@ -1,0 +1,5 @@
+modeling:
+  strategy: cube
+  cube:
+    cube_map_dir: "C:/path/to/your/crack_cube_maps"
+    start_face_index: 0

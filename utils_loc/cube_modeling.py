@@ -5,7 +5,7 @@ import rhinoscriptsyntax as rs
 import os
 import random
 
-from utils_loc.damage_shapes import read_cube_contour_json
+from utils_loc.defect_shapes import read_cube_contour_json
 
 # CUBE_LENGTH is the distance from origin to each face.
 # So the cube spans from -CUBE_LENGTH to +CUBE_LENGTH (edge length = 2 * CUBE_LENGTH).

@@ -8,7 +8,7 @@
 已實作並串接到主流程的功能：
 - `cube` 建模：由 contour JSON 建立立方體面與裂縫幾何。
 - `component`（橋梁）建模：可參數化生成 slab/parapet/beam/bearing/pier。
-- 統一損害放置流程：`crack`、`efflore`、`exposed_rebar`（spall + rebar）。
+- 統一 defect 放置流程：`crack`、`efflore`、`exposed_rebar`（spall + rebar）。
 - 兩種相機策略：`cube` 與 `component`。
 - 多通道輸出：color、depth、normal、mask，以及線性 `.pfm`（depth/normal）。
 
@@ -74,20 +74,14 @@ main_nested.run(
 ## 設定系統
 設定檔位於 `configs/`，由 `utils_loc.config.load_config(config_name)` 載入。
 
-支援 `extends`（例如 `cube_render.yaml` extends `cube_base.yaml`）。
+`extends` 支援字串或清單：
+- `extends: cube_base.yaml`
+- `extends: [cube_defaults.yaml, cube_defect_defaults.yaml, cube_render.yaml]`
 
 合併規則：
 - `extends` 會做遞迴（deep-merge）合併。
-- 衝突優先順序：目前設定檔 > extends 設定檔 > defaults。
-
-Component 建模預設值：
-- `utils_loc.config.load_config()` 在 `modeling.strategy: component` 時，會自動讀取 `configs/component_defaults.yaml`。
-- 再將 `modeling.component` 的設定以 deep-merge 覆蓋上去。
-- 也就是說，只有你在 `modeling.component` 明確設定的鍵會覆蓋 component 預設值。
-
-Damage 建模預設值：
-- `utils_loc.config.load_config()` 在存在 `modeling.damage` 時，會自動讀取 `configs/damage_defaults.yaml`。
-- 再將 `modeling.damage` 的設定以 deep-merge 覆蓋上去。
+- 衝突優先順序：目前設定檔 > `extends` 後面的項目 > `extends` 前面的項目。
+- `load_config()` 不會自動注入 defaults；所有 defaults 由 `extends` 明確組合。
 
 ## 主要設定區塊
 ### 1) `preparation`
@@ -101,12 +95,12 @@ Damage 建模預設值：
 
 支援策略：
 - `strategy: cube`
-  - 必要：`cube_map_dir`
+  - 必要：`cube.cube_map_dir`
   - 可選：`start_face_index`（由 `main.run` 注入）
-  - 可選：`damage`（統一損害放置）
+  - 可選：`defect`（統一 defect 放置）
 - `strategy: component`
   - 使用 `component` 區塊（`utils_loc/component_modeling.py`）
-  - 可選：`damage`（統一損害放置）
+  - 可選：`defect`（統一 defect 放置）
 
 #### Component 建模重點
 `utils_loc/component_modeling.py::create_bridge_component()` 支援：
@@ -127,12 +121,15 @@ Damage 建模預設值：
 - `objects_by_component`
 - `reference_points`、`reference_sizes`、`reference_normals`
 
-#### 統一損害建模（`modeling.damage`）
-`utils_loc/damage_modeling.py::apply_damage_pipeline()` 支援：
-- 損害型別：
+#### 統一 defect 建模（`modeling.defect`）
+`utils_loc/defect_placement.py::apply_defect_pipeline()` 支援：
+- defect 型別：
   - `crack`
   - `efflore`
   - `exposed_rebar`（以 `spall + rebar` 方式建模）
+- condition-state 補充：
+  - `crack`：CS1/CS2/CS3
+  - `efflore` 與 `spalling`：只有 CS2/CS3
 - 共用 shape library 讀取（cube contour JSON 與一般 polygon JSON）
 - 以以下工具建立候選點：
   - `utils_loc.defect_modeling.get_surfaces`
@@ -142,12 +139,12 @@ Damage 建模預設值：
 - 實例紀錄與可選 JSON 輸出（`record_output_path`）
   - `records`/`summary` 只統計「成功生成幾何」的損害實例
 - 萃取 `camera_defects` 作為 component 相機 seed
-  - 每筆包含 `point`、`normal`、`damage_type`、`instance_index`
+  - 每筆包含 `point`、`normal`、`defect_type`、`instance_index`
 - 使用區域 RNG（`seed`）抽樣，不會污染 Python 全域 random 狀態
 - shape library 解析行為：
   - `file_format=auto` 會先判斷 cube/simple JSON 再解析
   - cube contour 各陣列長度必須一致；不一致會明確報錯
-  - 共用 point-set 解析已集中到 `utils_loc.damage_shapes.extract_point_sets()`（`utils_loc.defect_modeling.py` 也使用）
+  - 共用 point-set 解析已集中到 `utils_loc.defect_shapes.extract_point_sets()`（`utils_loc.defect_modeling.py` 也使用）
 
 `crack` 幾何透過 `utils_loc/crack_modeling.py::create_crack()` 共用，並可配置深度範圍、圖層與清理行為。函式會驗證 `base_poly` 與 `offset_poly`，且在 `cleanup_inputs=True` 時失敗路徑也會做清理。
 
@@ -193,7 +190,7 @@ Damage 建模預設值：
   - 最後額外 jitter：`direction_jitter_degrees`、`position_jitter`、`position_jitter_scale`
 
 流程行為：
-- 若 `camera.strategy=component` 且 config 未提供 defects/record path，`pipeline.run_render()` 會嘗試自動使用本次 `modeling.damage` 產生的缺陷點。
+- 若 `camera.strategy=component` 且 config 未提供 defects/record path，`pipeline.run_render()` 會嘗試自動使用本次 `modeling.defect` 產生的缺陷點。
 
 #### Mask 圖層控制
 `rendering.outputs.mask` 支援：
@@ -222,20 +219,19 @@ Damage 建模預設值：
 
 ## 圖層管理重點
 - 支援階層式圖層路徑（例如 `defects::mask::crack`），會自動建立。
-- 損害流程分離：
+- defect 流程分離：
   - 幾何圖層（`defects::geometry::*`）
   - mask 圖層（`defects::mask::*`）
   - seed 點圖層（`defects::seeds`）
 - 方便透過 hide/show layer 進行 mask annotation capture。
 
 ## 設定檔範例
-- Cube 渲染：`configs/cube_render.yaml`
-- Component 渲染（含可選 damage pipeline）：`configs/component_render.yaml`
-- Component 預設值（component 建模會載入）：`configs/component_defaults.yaml`
-- Damage 預設值（damage 建模會載入）：`configs/damage_defaults.yaml`
-- Base 材質/圖層設定：
-  - `configs/cube_base.yaml`
-  - `configs/component_base.yaml`
+- Cube 本機設定（建議執行入口）：`configs/cube_render.local.yaml`
+- Component 本機設定（建議執行入口）：`configs/component.local.yaml`
+- Render 區塊：`configs/cube_render.yaml`、`configs/component_render.yaml`
+- 建模預設值：`configs/cube_defaults.yaml`、`configs/component_defaults.yaml`
+- defect 預設值：`configs/cube_defect_defaults.yaml`、`configs/component_defect_defaults.yaml`
+- Base 組合與 preparation：`configs/cube_base.yaml`、`configs/component_base.yaml`
 
 ## 專案結構
 - `main.py`：stage runner
@@ -245,8 +241,8 @@ Damage 建模預設值：
 - `utils_loc/pipeline.py`：流程編排（`prepare`、`create_model`、`run_render`、`run_render_demo`）
 - `utils_loc/cube_modeling.py`：cube 幾何與 contour 映射
 - `utils_loc/component_modeling.py`：可配置橋梁元件建模
-- `utils_loc/damage_shapes.py`：共用 shape 解析/載入
-- `utils_loc/damage_modeling.py`：統一損害放置與紀錄
+- `utils_loc/defect_shapes.py`：共用 shape 解析/載入
+- `utils_loc/defect_placement.py`：統一 defect 放置與紀錄
 - `utils_loc/crack_modeling.py`：共用 crack 幾何生成
 - `utils_loc/defect_modeling.py`：surface/reference-point helper
 - `utils_loc/render.py`：相機生成與渲染流程

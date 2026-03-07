@@ -1,0 +1,42 @@
+modeling:
+  defect:
+    seed: null
+    record_output_path: null
+    target_layers: null
+    max_attempts_per_instance: 40
+    reference:
+      sample_count_u: 2
+      sample_count_v: 2
+      trim_margin: 0.1
+      max_num_surfaces: 0
+      min_boundary_distance: 1.0
+    random:
+      scale_min: 0.6
+      scale_max: 1.4
+      orientation_min_deg: 0.0
+      orientation_max_deg: 360.0
+      boundary_margin: 0.9
+      normal_offset: 0.0
+    shape_library:
+      paths: []
+      shape_dir: null
+      recursive: true
+      pattern: "*.json"
+      file_format: auto
+    layers:
+      seeds: "defects::seeds"
+      geometry:
+        crack: "defects::geometry::crack"
+      mask:
+        crack: "defects::mask::crack"
+        crack_cs1: "defects::mask::crack_cs1"
+        crack_cs2: "defects::mask::crack_cs2"
+        crack_cs3: "defects::mask::crack_cs3"
+    crack:
+      enabled: true
+      overview_csv_path: null
+      target_width_cm: 0.1
+      cs2_d1_threshold: 1.0
+      cs3_d1_threshold: 2.0
+      d1_range: [0.5, 2.5]
+      delta_depth_range: [10.0, 30.0]

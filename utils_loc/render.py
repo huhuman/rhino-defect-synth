@@ -16,7 +16,7 @@ from utils_loc.camera import (
     sort_poses_topdown_circular,
 )
 from utils_loc.lighting import set_random_wallpaper, set_skylight, setup_sun
-from utils_loc.damage_modeling import defects_from_record_payload, load_damage_records
+from utils_loc.defect_placement import defects_from_record_payload, load_defect_records
 from utils_loc.outputs import render_all_outputs
 
 CAMERA_GIZMO_LAYER_DEFAULT = "demo_camera_gizmos"
@@ -151,11 +151,11 @@ def _normalize_component_camera_cfg(camera_cfg):
     return dict(component_cfg)
 
 
-def _load_defects_from_record_path(record_path, include_damage_types=None):
+def _load_defects_from_record_path(record_path, include_defect_types=None):
     if not record_path:
         return []
-    payload = load_damage_records(record_path)
-    return defects_from_record_payload(payload, include_damage_types=include_damage_types)
+    payload = load_defect_records(record_path)
+    return defects_from_record_payload(payload, include_defect_types=include_defect_types)
 
 
 def _normalize_defects(raw_defects):
@@ -235,7 +235,7 @@ def _build_render_context(params):
             defects = _normalize_defects(
                 _load_defects_from_record_path(
                     component_camera_cfg.get("defect_record_path") or params.get("defect_record_path"),
-                    include_damage_types=component_camera_cfg.get("defect_types"),
+                    include_defect_types=component_camera_cfg.get("defect_types"),
                 )
             )
         if not defects:

@@ -1,3 +1,8 @@
+extends:
+  - cube_defaults.yaml
+  - cube_defect_defaults.yaml
+  - cube_render.yaml
+
 preparation:
   texture_materials:
     texture_root_dir: "C:/path/to/your/texture_root"
@@ -5,9 +10,16 @@ preparation:
   materials:
     cube: Concrete light
     crack_extrusion: Concrete rusty
+    "defects::geometry::crack": "Concrete rusty"
   colors:
     cube: Black
     crack_extrusion: Red
     crack_CS1: Green
     crack_CS2: Yellow
     crack_CS3: Orange
+    "defects::geometry::crack": OrangeRed
+    "defects::mask::crack": White
+    "defects::mask::crack_cs1": LightGreen
+    "defects::mask::crack_cs2": Yellow
+    "defects::mask::crack_cs3": OrangeRed
+    "defects::seeds": Magenta
