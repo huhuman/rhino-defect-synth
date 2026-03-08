@@ -63,14 +63,15 @@ def create_layers(
 
     render_materials = [mat.DisplayName for mat in sc.doc.RenderMaterials]
 
-    currnt_layer = rs.CurrentLayer()
+    current_layer = rs.CurrentLayer()
     existing_layers = []
     for layer in sc.doc.Layers:
         if not layer.Name:
             continue
-        if layer.Name == currnt_layer:
+        layer_full = layer.FullPath or layer.Name
+        if current_layer and (layer_full == current_layer or layer.Name == current_layer):
             continue
-        existing_layers.append(layer.FullPath or layer.Name)
+        existing_layers.append(layer_full)
     existing_layers.sort(key=lambda name: str(name).count("::"), reverse=True)
     for layer_name in existing_layers:
         objects = rs.ObjectsByLayer(layer_name)
@@ -88,4 +89,5 @@ def create_layers(
     first_layer_index = sc.doc.Layers.FindByFullPath(first_layer, True)
     if first_layer_index >= 0:
         sc.doc.Layers.SetCurrentLayerIndex(first_layer_index, True)
-    rs.DeleteLayer(currnt_layer)
+    if current_layer and rs.IsLayer(current_layer) and rs.CurrentLayer() != current_layer:
+        rs.DeleteLayer(current_layer)

@@ -14,14 +14,35 @@ render_demo = importlib.import_module("utils_loc.render_demo")
 _LAST_MODEL_RESULT = None
 
 
+def _filter_layer_map_by_prefix(layer_map, prefixes):
+    layer_map = dict(layer_map or {})
+    normalized = [str(prefix).strip() for prefix in (prefixes or []) if str(prefix).strip()]
+    if not normalized:
+        return layer_map
+
+    def _is_excluded(layer_name):
+        name = str(layer_name or "")
+        for prefix in normalized:
+            if name == prefix or name.startswith(prefix + "::"):
+                return True
+        return False
+
+    return {
+        layer_name: value
+        for layer_name, value in layer_map.items()
+        if not _is_excluded(layer_name)
+    }
+
+
 def prepare(params=None):
     """Prepare the environment by importing materials and creating layers.
     Args:
         params (dict): Dictionary containing preparation parameters.
     """
     params = params or {}
-    colors = params.get("colors", {})
-    materials = params.get("materials", {})
+    exclude_layer_prefixes = params.get("exclude_layer_prefixes") or []
+    colors = _filter_layer_map_by_prefix(params.get("colors", {}), exclude_layer_prefixes)
+    materials = _filter_layer_map_by_prefix(params.get("materials", {}), exclude_layer_prefixes)
     texture_materials = params.get("texture_materials", {})
 
     # Materials
