@@ -1052,8 +1052,7 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng):
 
     inner_geometry = _extrude_polygon(inner_polygon, thickness)
 
-    inner_layer_key = "efflore_{}".format(cs_level.lower())
-    inner_layer = layer_map["geometry"].get(inner_layer_key) or layer_map["geometry"]["efflore"]
+    inner_layer = layer_map["geometry"]["efflore"]
     _assign_layer(inner_geometry, inner_layer)
 
     outer_geometry = []
@@ -1399,8 +1398,7 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng):
         exposed_mask_layer = _mask_layer_for_state(layer_map, "exposed_rebar", condition_state)
         mask_ids.extend(_add_mask_from_polygon(polygon, exposed_mask_layer, as_surface=False))
 
-    spall_layer_key = "spall_{}".format(condition_state.lower())
-    spall_layer_name = layer_map["geometry"].get(spall_layer_key) or layer_map["geometry"]["spall"]
+    spall_layer_name = layer_map["geometry"]["spall"]
     spall_ids, spall_metrics = _model_spall_from_polygon(
         polygon,
         candidate,
@@ -1422,7 +1420,11 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng):
             polygon,
             spall_depth=spall_depth,
             rebar_cfg=rebar_cfg,
-            layer_name=layer_map["geometry"]["rebar"],
+            layer_name=(
+                layer_map["geometry"].get("exposed_rebar")
+                or layer_map["geometry"].get("rebar")
+                or layer_map["geometry"]["spall"]
+            ),
             rng=rng,
         )
 
@@ -1465,10 +1467,9 @@ def _resolve_layer_map(cfg):
         }.items():
             layer_map["geometry"].setdefault(key, value)
         for key, value in {
-            "crack": "defects::mask::crack",
-            "crack_cs1": "defects::mask::crack_cs1",
-            "crack_cs2": "defects::mask::crack_cs2",
-            "crack_cs3": "defects::mask::crack_cs3",
+            "crack_cs1": "defects::mask::crack::cs1",
+            "crack_cs2": "defects::mask::crack::cs2",
+            "crack_cs3": "defects::mask::crack::cs3",
         }.items():
             layer_map["mask"].setdefault(key, value)
 
@@ -1476,34 +1477,25 @@ def _resolve_layer_map(cfg):
         for key, value in {
             "efflore": "defects::geometry::efflore",
             "efflore_outer": "defects::geometry::efflore_outer",
-            "efflore_cs2": "defects::geometry::efflore_cs2",
-            "efflore_cs3": "defects::geometry::efflore_cs3",
         }.items():
             layer_map["geometry"].setdefault(key, value)
         for key, value in {
-            "efflore": "defects::mask::efflore",
-            "efflore_cs2": "defects::mask::efflore_cs2",
-            "efflore_cs3": "defects::mask::efflore_cs3",
+            "efflore_cs2": "defects::mask::efflore::cs2",
+            "efflore_cs3": "defects::mask::efflore::cs3",
         }.items():
             layer_map["mask"].setdefault(key, value)
 
     if "spalling" in configured_types:
         for key, value in {
             "spall": "defects::geometry::spall",
-            "spall_cs2": "defects::geometry::spall_cs2",
-            "spall_cs3": "defects::geometry::spall_cs3",
-            "rebar": "defects::geometry::rebar",
+            "exposed_rebar": "defects::geometry::exposed_rebar",
         }.items():
             layer_map["geometry"].setdefault(key, value)
         for key, value in {
-            "spall": "defects::mask::spall",
-            "spall_cs2": "defects::mask::spall_cs2",
-            "spall_cs3": "defects::mask::spall_cs3",
-            "rebar": "defects::mask::rebar",
-            "exposed_rebar": "defects::mask::exposed_rebar",
-            "exposed_rebar_cs1": "defects::mask::exposed_rebar_cs1",
-            "exposed_rebar_cs2": "defects::mask::exposed_rebar_cs2",
-            "exposed_rebar_cs3": "defects::mask::exposed_rebar_cs3",
+            "spall_cs2": "defects::mask::spall::cs2",
+            "spall_cs3": "defects::mask::spall::cs3",
+            "exposed_rebar_cs2": "defects::mask::exposed_rebar::cs2",
+            "exposed_rebar_cs3": "defects::mask::exposed_rebar::cs3",
         }.items():
             layer_map["mask"].setdefault(key, value)
 

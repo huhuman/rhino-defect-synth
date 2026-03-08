@@ -58,14 +58,14 @@ modeling:
         column_min_width: 91.44
         edge_offset: 213.36
     layers:
-      slab: slab
-      parapet: parapet
-      beam: beam
-      bearing: bearing
-      pier: pier
+      slab: "component::slab"
+      parapet: "component::parapet"
+      beam: "component::beam"
+      bearing: "component::bearing"
+      pier: "component::pier"
     reference_points:
       enabled: true
-      layers: [slab, parapet, beam, pier]
+      layers: ["component::slab", "component::parapet", "component::beam", "component::pier"]
       sample_count_u: 1
       sample_count_v: 1
       trim_margin: 0.1

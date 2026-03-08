@@ -5,48 +5,34 @@ extends:
 
 preparation:
   materials:
-    slab: "Concrete rusty"
-    beam: "Concrete light"
-    parapet: "Concrete rusty"
-    bearing: "Black Sandblasted Plastic"
-    pier: "Concrete rusty"
+    "component::slab": "Concrete rusty"
+    "component::beam": "Concrete light"
+    "component::parapet": "Concrete rusty"
+    "component::bearing": "Metal029_2K"
+    "component::pier": "Concrete rusty"
     "defects::geometry::crack": "Concrete rusty"
     "defects::geometry::efflore": "Concrete light"
-    "defects::geometry::efflore_cs2": "Concrete light"
-    "defects::geometry::efflore_cs3": "Concrete light"
     "defects::geometry::efflore_outer": "Concrete rusty"
     "defects::geometry::spall": "Concrete rusty"
-    "defects::geometry::spall_cs2": "Concrete rusty"
-    "defects::geometry::spall_cs3": "Concrete rusty"
-    "defects::geometry::rebar": "Black Sandblasted Plastic"
+    "defects::geometry::exposed_rebar": "Metal029_2K"
   colors:
-    slab: Red
-    beam: Blue
-    parapet: Green
-    bearing: AliceBlue
-    pier: Brown
+    "component::slab": Red
+    "component::beam": Blue
+    "component::parapet": Green
+    "component::bearing": AliceBlue
+    "component::pier": Brown
     "defects::geometry::crack": OrangeRed
     "defects::geometry::efflore": LightYellow
-    "defects::geometry::efflore_cs2": LightYellow
-    "defects::geometry::efflore_cs3": Gold
     "defects::geometry::efflore_outer": Peru
     "defects::geometry::spall": Chocolate
-    "defects::geometry::spall_cs2": Chocolate
-    "defects::geometry::spall_cs3": SaddleBrown
-    "defects::geometry::rebar": DarkSlateGray
-    "defects::mask::crack": White
-    "defects::mask::crack_cs1": LightGreen
-    "defects::mask::crack_cs2": Yellow
-    "defects::mask::crack_cs3": OrangeRed
-    "defects::mask::efflore": White
-    "defects::mask::efflore_cs2": LightSkyBlue
-    "defects::mask::efflore_cs3": DeepSkyBlue
-    "defects::mask::spall": White
-    "defects::mask::spall_cs2": Gold
-    "defects::mask::spall_cs3": DarkOrange
-    "defects::mask::rebar": White
-    "defects::mask::exposed_rebar": White
-    "defects::mask::exposed_rebar_cs1": Gainsboro
-    "defects::mask::exposed_rebar_cs2": Silver
-    "defects::mask::exposed_rebar_cs3": Gray
+    "defects::geometry::exposed_rebar": DarkSlateGray
+    "defects::mask::crack::cs1": LightGreen
+    "defects::mask::crack::cs2": Yellow
+    "defects::mask::crack::cs3": OrangeRed
+    "defects::mask::efflore::cs2": LightSkyBlue
+    "defects::mask::efflore::cs3": DeepSkyBlue
+    "defects::mask::spall::cs2": Gold
+    "defects::mask::spall::cs3": DarkOrange
+    "defects::mask::exposed_rebar::cs2": Silver
+    "defects::mask::exposed_rebar::cs3": Gray
     "defects::seeds": Magenta

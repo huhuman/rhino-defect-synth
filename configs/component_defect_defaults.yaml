@@ -3,7 +3,7 @@ modeling:
     enabled: true
     seed: null
     record_output_path: null
-    target_layers: [slab, parapet, beam, pier]
+    target_layers: ["component::slab", "component::parapet", "component::beam", "component::pier"]
     max_attempts_per_instance: 40
     reference:
       sample_count_u: 2
@@ -30,28 +30,18 @@ modeling:
         crack: "defects::geometry::crack"
         efflore: "defects::geometry::efflore"
         efflore_outer: "defects::geometry::efflore_outer"
-        efflore_cs2: "defects::geometry::efflore_cs2"
-        efflore_cs3: "defects::geometry::efflore_cs3"
         spall: "defects::geometry::spall"
-        spall_cs2: "defects::geometry::spall_cs2"
-        spall_cs3: "defects::geometry::spall_cs3"
-        rebar: "defects::geometry::rebar"
+        exposed_rebar: "defects::geometry::exposed_rebar"
       mask:
-        crack: "defects::mask::crack"
-        crack_cs1: "defects::mask::crack_cs1"
-        crack_cs2: "defects::mask::crack_cs2"
-        crack_cs3: "defects::mask::crack_cs3"
-        efflore: "defects::mask::efflore"
-        efflore_cs2: "defects::mask::efflore_cs2"
-        efflore_cs3: "defects::mask::efflore_cs3"
-        spall: "defects::mask::spall"
-        spall_cs2: "defects::mask::spall_cs2"
-        spall_cs3: "defects::mask::spall_cs3"
-        rebar: "defects::mask::rebar"
-        exposed_rebar: "defects::mask::exposed_rebar"
-        exposed_rebar_cs1: "defects::mask::exposed_rebar_cs1"
-        exposed_rebar_cs2: "defects::mask::exposed_rebar_cs2"
-        exposed_rebar_cs3: "defects::mask::exposed_rebar_cs3"
+        crack_cs1: "defects::mask::crack::cs1"
+        crack_cs2: "defects::mask::crack::cs2"
+        crack_cs3: "defects::mask::crack::cs3"
+        efflore_cs2: "defects::mask::efflore::cs2"
+        efflore_cs3: "defects::mask::efflore::cs3"
+        spall_cs2: "defects::mask::spall::cs2"
+        spall_cs3: "defects::mask::spall::cs3"
+        exposed_rebar_cs2: "defects::mask::exposed_rebar::cs2"
+        exposed_rebar_cs3: "defects::mask::exposed_rebar::cs3"
     crack:
       enabled: true
       count: 0

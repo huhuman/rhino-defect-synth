@@ -24,7 +24,7 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `component.local.yaml` | Local machine override for component. |
 | `cube_defaults.yaml` | Cube modeling defaults (`modeling.cube`). |
 | `component_defaults.yaml` | Component modeling defaults (`modeling.component`). |
-| `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Defect defaults (`modeling.defect`). |
+| `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Defect config blocks (`modeling.defect`); runtime placement is currently component-only. |
 
 ## Top-level Parameters
 
@@ -45,7 +45,7 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
 |---|---|---|---|---|
 | `modeling.strategy` | `cube | component` | Selects branch in `pipeline.create_model`. | none | Required. |
-| `modeling.defect` | `dict` | If present and enabled, runs `apply_defect_pipeline`. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` + overrides | Strategy-specific defaults are applied (`cube`: crack-only, `component`: crack/efflore/spalling). |
+| `modeling.defect` | `dict` | Used by component branch to run `apply_defect_pipeline`; cube branch currently ignores this block. | `component_defect_defaults.yaml` + overrides | `cube_defect_defaults.yaml` is kept for config composition/compatibility. |
 
 ## Modeling: Cube
 
@@ -86,23 +86,23 @@ This document is table-first: each parameter is mapped to runtime behavior.
 
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
 |---|---|---|---|---|
-| `enabled` | `bool` | Master switch for defect placement. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Off returns empty defect result. |
-| `seed` | `int | null` | Local RNG seed for defect placement. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Isolated RNG state. |
-| `record_output_path` | `string | null` | Optional JSON output path for records. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Creates parent dir automatically. |
-| `target_layers` | `list[str] | null` | Limits candidate surfaces by layer. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | `null` means no layer filtering. |
-| `max_attempts_per_instance` | `int` | Retry budget per defect instance. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Prevents infinite placement loops. |
-| `reference.*` | mixed | Candidate point extraction controls. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Includes boundary distance threshold. |
-| `random.*` | mixed | Shared transform randomization bounds. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Scale/orientation/margin/offset. |
-| `shape_library.*` | mixed | Global fallback shape-template loading controls. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Used when defect-specific overview CSV is not set. |
-| `layers.seeds` | `string` | Seed marker layer. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Auto-created if missing. |
-| `layers.geometry.*` | `dict[str,string]` | Geometry output layers by defect type. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Auto-created if missing. |
-| `layers.mask.*` | `dict[str,string]` | Mask output layers by defect type. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Auto-created if missing. |
-| `crack.overview_csv_path` | `string | null` | Reads crack overview rows and resolves per-instance polygon JSON from `instance_mask_path`. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Supports `units -> polygon` path rewrite. |
-| `crack.target_width_cm` | `float` | Pixel-to-world baseline using `width_px`. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Final scale also multiplies `random.scale_*`. |
-| `crack.*` | mixed | Crack-specific count and geometry controls. | `component_defect_defaults.yaml / cube_defect_defaults.yaml` | Includes `d1_range`, `delta_depth_range`, and CS1/CS2/CS3 mapping. |
+| `enabled` | `bool` | Optional global gate for component defect placement. | `component_defect_defaults.yaml` | If false, component defect stage is skipped. |
+| `seed` | `int | null` | Local RNG seed for defect placement. | `component_defect_defaults.yaml` | Isolated RNG state. |
+| `record_output_path` | `string | null` | Optional JSON output path for records. | `component_defect_defaults.yaml` | Creates parent dir automatically. |
+| `target_layers` | `list[str] | null` | Limits candidate surfaces by layer. | `component_defect_defaults.yaml` | `null` means no layer filtering. |
+| `max_attempts_per_instance` | `int` | Retry budget per defect instance. | `component_defect_defaults.yaml` | Prevents infinite placement loops. |
+| `reference.*` | mixed | Candidate point extraction controls. | `component_defect_defaults.yaml` | Includes boundary distance threshold. |
+| `random.*` | mixed | Shared transform randomization bounds. | `component_defect_defaults.yaml` | Scale/orientation/margin/offset. |
+| `shape_library.*` | mixed | Global fallback shape-template loading controls. | `component_defect_defaults.yaml` | Used when defect-specific overview CSV is not set. |
+| `layers.seeds` | `string` | Seed marker layer. | `component_defect_defaults.yaml` | Auto-created if missing. |
+| `layers.geometry.*` | `dict[str,string]` | Geometry output layers by defect type. | `component_defect_defaults.yaml` | Auto-created if missing. |
+| `layers.mask.*` | `dict[str,string]` | Mask output layers by defect type. | `component_defect_defaults.yaml` | Auto-created if missing. |
+| `crack.overview_csv_path` | `string | null` | Reads crack overview rows and resolves per-instance polygon JSON from `instance_mask_path`. | `component_defect_defaults.yaml` | Supports `units -> polygon` path rewrite. |
+| `crack.target_width_cm` | `float` | Pixel-to-world baseline using `width_px`. | `component_defect_defaults.yaml` | Final scale also multiplies `random.scale_*`. |
+| `crack.*` | mixed | Crack-specific geometry/severity controls. | `component_defect_defaults.yaml` | Includes `d1_range`, `delta_depth_range`, and CS1/CS2/CS3 mapping. |
 | `efflore.*` | mixed | Component-only efflore controls. | `component_defect_defaults.yaml` | Uses CS2/CS3 only (no CS1). |
 | `spalling.*` | mixed | Component-only spalling/rebar controls. | `component_defect_defaults.yaml` | Uses CS2/CS3 only (no CS1). |
-| Cube defect scope | literal | Cube defect pipeline currently supports `crack` only. | `cube_defect_defaults.yaml` | `efflore`/`spalling` are not configured in cube defaults. |
+| Cube defect scope | literal | Cube modeling currently generates cracks directly from six face maps and does not invoke `modeling.defect`. | `cube_defaults.yaml` | `cube_defect_defaults.yaml` is retained for compatibility/config composition. |
 
 ## Rendering Parameters
 
@@ -169,7 +169,7 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | Scenario | Runtime mechanism |
 |---|---|
 | Component camera has neither `defects` nor record path | `pipeline.run_render()` tries latest `modeling.defect.camera_defects` in memory. |
-| `modeling.defect` omitted entirely | Defect stage does not run. |
+| `modeling.defect` omitted entirely | Component defect stage does not run. |
 | Layer names with `::` | Treated as hierarchical layers in layer creation and matching logic. |
 
 ## Minimal runnable examples
