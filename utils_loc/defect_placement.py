@@ -11,7 +11,7 @@ import rhinoscriptsyntax as rs
 
 from utils_loc.crack_modeling import create_crack
 from utils_loc.defect_shapes import load_shape_templates
-from utils_loc.defect_modeling import get_reference_points, get_surfaces
+from utils_loc.defect_modeling import get_reference_points, get_surfaces, subtract_surface
 
 
 def _deep_merge(base, override):
@@ -119,6 +119,12 @@ def _unit(v, fallback=(0.0, 0.0, 1.0)):
 def _distance(a, b):
     dx, dy, dz = _sub(a, b)
     return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def _point_key(point, precision=4):
+    x, y, z = _vec3(point)
+    p = max(0, _to_int(precision, 4))
+    return (round(x, p), round(y, p), round(z, p))
 
 
 def _ensure_closed(points):
@@ -691,7 +697,15 @@ def _collect_reference_candidates(cfg, model_result=None):
     if max_num_surfaces > 0:
         surface_ids = surface_ids[:max_num_surfaces]
 
+    normal_debug_cfg = ref_cfg.get("normal_debug") or {}
+    draw_normal_debug = bool(normal_debug_cfg.get("enabled", False))
+    normal_debug_layer = str(normal_debug_cfg.get("layer") or "defects::normal_debug")
+    normal_debug_length = max(1e-3, _to_float(normal_debug_cfg.get("length"), 60.0))
+    if draw_normal_debug:
+        ensure_layer(normal_debug_layer)
+
     candidates = []
+    seen_candidate_keys = set()
     su = max(1, _to_int(ref_cfg.get("sample_count_u"), 2))
     sv = max(1, _to_int(ref_cfg.get("sample_count_v"), 2))
     trim_margin = _to_float(ref_cfg.get("trim_margin"), 0.1)
@@ -712,13 +726,34 @@ def _collect_reference_candidates(cfg, model_result=None):
             surface_layer = rs.ObjectLayer(surface_id)
             for point, size, normal in zip(points, sizes, normals):
                 point_3d = _vec3(point)
+                if not rs.IsPointOnSurface(surface_id, point_3d):
+                    continue
                 normal_3d = _unit(normal, fallback=(0.0, 0.0, 1.0))
                 u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
                 boundary_dist = _distance_to_boundary(point, border_curves)
                 if boundary_dist < min_boundary_distance:
                     continue
+                candidate_key = (
+                    str(surface_layer or ""),
+                    _point_key(point_3d),
+                )
+                if candidate_key in seen_candidate_keys:
+                    continue
+                seen_candidate_keys.add(candidate_key)
+                normal_line_id = None
+                if draw_normal_debug:
+                    end_pt = _add(point_3d, _scale(normal_3d, normal_debug_length))
+                    normal_line_id = rs.AddLine(point_3d, end_pt)
+                    if normal_line_id:
+                        _assign_layer([normal_line_id], normal_debug_layer)
                 candidates.append(
                     {
+                        "candidate_key": "{}|{:.4f}|{:.4f}|{:.4f}".format(
+                            str(surface_layer or ""),
+                            point_3d[0],
+                            point_3d[1],
+                            point_3d[2],
+                        ),
                         "surface_id": surface_id,
                         "surface_layer": surface_layer,
                         "point": point_3d,
@@ -728,6 +763,7 @@ def _collect_reference_candidates(cfg, model_result=None):
                         "n_axis": n_axis,
                         "reference_size": float(size),
                         "boundary_dist": float(boundary_dist),
+                        "normal_debug_id": str(normal_line_id) if normal_line_id else None,
                     }
                 )
             for curve_id in border_curves:
@@ -829,14 +865,30 @@ def _pick_shape_points(shape):
     return offset_poly, base_poly, crack_polys, inside_polys, diff_polys
 
 
-def _create_seed_marker(candidate, layer_name):
+def _create_seed_marker(candidate, layer_name, radius_coef=0.04375, min_radius=0.625, axis_scale=1.6):
     ensure_layer(layer_name)
     if not rs.IsLayer(layer_name):
-        return None
-    marker = rs.AddPoint(candidate["point"])
-    if marker:
-        rs.ObjectLayer(marker, layer_name)
-    return marker
+        return []
+    point = candidate["point"]
+    ref_size = max(1.0, _to_float(candidate.get("reference_size"), 1.0))
+    radius = max(float(min_radius), ref_size * float(radius_coef))
+    line_half = radius * float(axis_scale)
+
+    marker_ids = []
+    sphere = rs.AddSphere(point, radius)
+    if sphere:
+        marker_ids.append(sphere)
+
+    u_axis, v_axis, n_axis = _candidate_axes(candidate)
+    for axis in (u_axis, v_axis, n_axis):
+        start = _add(point, _scale(axis, -line_half))
+        end = _add(point, _scale(axis, line_half))
+        line = rs.AddLine(start, end)
+        if line:
+            marker_ids.append(line)
+
+    _assign_layer(marker_ids, layer_name)
+    return _coerce_ids(marker_ids)
 
 
 def _record_common(defect_type, candidate, transform, shape):
@@ -981,6 +1033,7 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng):
     record["condition_state"] = cs_level
     record["geometry_ids"] = _as_strings(crack_geometry)
     record["mask_ids"] = _as_strings(mask_ids)
+    record["surface_cut_polygon"] = [list(_vec3(pt)) for pt in _ensure_closed(offset_3d)]
     record["crack_metrics"] = {
         "d1": crack_created.get("d1"),
         "d2": crack_created.get("d2"),
@@ -1302,6 +1355,30 @@ def _resolve_spalling_cfg(cfg):
     return spalling_cfg
 
 
+def get_active_defect_requests(cfg):
+    """Return enabled defect requests as (defect_type, defect_cfg, count)."""
+    if not isinstance(cfg, dict) or not cfg:
+        return []
+    if not bool(cfg.get("enabled", True)):
+        return []
+
+    requests = []
+    for defect_type in ("crack", "efflore"):
+        defect_cfg = cfg.get(defect_type)
+        if not isinstance(defect_cfg, dict):
+            continue
+        count = max(0, _to_int(defect_cfg.get("count"), 0))
+        if bool(defect_cfg.get("enabled", True)) and count > 0:
+            requests.append((defect_type, defect_cfg, count))
+
+    if "spalling" in cfg or "exposed_rebar" in cfg:
+        spalling_cfg = _resolve_spalling_cfg(cfg)
+        count = max(0, _to_int(spalling_cfg.get("count"), 0))
+        if bool(spalling_cfg.get("enabled", True)) and count > 0:
+            requests.append(("spalling", spalling_cfg, count))
+    return requests
+
+
 def _resolve_rebar_cfg(cfg, spalling_cfg):
     rebar_cfg = _deep_merge(cfg.get("exposed_rebar") or {}, (spalling_cfg or {}).get("rebar") or {})
     for key in (
@@ -1374,8 +1451,8 @@ def _should_place_rebar(shape, spalling_cfg, condition_state, rng):
     return rng.random() < probability
 
 
-def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng):
-    spalling_cfg = _resolve_spalling_cfg(cfg)
+def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, spalling_cfg=None):
+    spalling_cfg = dict(spalling_cfg or _resolve_spalling_cfg(cfg))
     offset_2d = shape.get("spall_poly") or shape.get("offset_poly") or shape.get("base_poly") or []
     polygon = _project_points_to_surface(offset_2d, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
     if len(polygon) < 4:
@@ -1440,6 +1517,7 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng):
     record["spall_geometry_ids"] = _as_strings(spall_ids)
     record["rebar_geometry_ids"] = _as_strings(rebar_ids)
     record["mask_ids"] = _as_strings(mask_ids)
+    record["surface_cut_polygon"] = [list(_vec3(pt)) for pt in _ensure_closed(polygon)]
     record["spall_metrics"] = dict(spall_metrics or {})
     record["spall_metrics"]["depth"] = float(spall_depth)
     record["spall_metrics"]["diameter_cm"] = float(diameter_cm)
@@ -1451,8 +1529,24 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng):
 
 def _resolve_layer_map(cfg):
     layers_cfg = cfg.get("layers") or {}
+    seed_cfg = layers_cfg.get("seeds")
+    if isinstance(seed_cfg, dict):
+        configured_seeds = dict(seed_cfg)
+        default_seed_layer = str(configured_seeds.get("default") or "defects::seeds")
+    else:
+        configured_seeds = {}
+        default_seed_layer = str(seed_cfg or "defects::seeds")
     layer_map = {
-        "seeds": layers_cfg.get("seeds", "defects::seeds"),
+        "seeds": {
+            "default": default_seed_layer,
+            "crack": str(configured_seeds.get("crack") or "{}::crack".format(default_seed_layer)),
+            "efflore": str(configured_seeds.get("efflore") or "{}::efflore".format(default_seed_layer)),
+            "spalling": str(
+                configured_seeds.get("spalling")
+                or configured_seeds.get("spall")
+                or "{}::spalling".format(default_seed_layer)
+            ),
+        },
         "geometry": dict((layers_cfg.get("geometry") or {})),
         "mask": dict((layers_cfg.get("mask") or {})),
     }
@@ -1499,7 +1593,8 @@ def _resolve_layer_map(cfg):
         }.items():
             layer_map["mask"].setdefault(key, value)
 
-    ensure_layer(layer_map["seeds"])
+    for layer_name in layer_map["seeds"].values():
+        ensure_layer(layer_name)
     for layer_name in layer_map["geometry"].values():
         ensure_layer(layer_name)
     for layer_name in layer_map["mask"].values():
@@ -1507,32 +1602,55 @@ def _resolve_layer_map(cfg):
     return layer_map
 
 
-def _build_instance_records_for_type(defect_type, cfg, candidates, shapes, layer_map, rng):
-    if defect_type not in ("crack", "efflore", "spalling"):
-        return []
-
-    if defect_type == "spalling":
-        defect_cfg = _resolve_spalling_cfg(cfg)
+def _seed_layer_for_type(layer_map, defect_type):
+    seeds = (layer_map or {}).get("seeds")
+    if not isinstance(seeds, dict):
+        return seeds
+    if defect_type in ("spalling", "exposed_rebar"):
+        key = "spalling"
+    elif defect_type == "efflore":
+        key = "efflore"
     else:
-        defect_cfg = cfg.get(defect_type) or {}
-    if not bool(defect_cfg.get("enabled", True)):
-        return []
-    count = max(0, _to_int(defect_cfg.get("count"), 0))
-    if count <= 0:
-        return []
-    if not shapes:
-        print("Defect {}: no shapes available for placement.".format(defect_type))
+        key = "crack"
+    return seeds.get(key) or seeds.get("default")
+
+
+def _build_instance_records_for_type(
+    defect_type,
+    defect_cfg,
+    count,
+    cfg,
+    candidates,
+    shapes,
+    layer_map,
+    rng,
+    used_candidate_keys=None,
+):
+    if not shapes or count <= 0:
         return []
 
     random_cfg = cfg.get("random") or {}
+    seed_cfg = cfg.get("seed_marker") or {}
+    seed_radius_coef = max(0.0, _to_float(seed_cfg.get("radius_coef"), 0.04375))
+    seed_min_radius = max(0.0, _to_float(seed_cfg.get("min_radius"), 0.625))
+    seed_axis_scale = max(0.0, _to_float(seed_cfg.get("axis_scale"), 1.6))
     max_attempts = max(1, _to_int(cfg.get("max_attempts_per_instance"), 40))
     records = []
+    used_candidate_keys = used_candidate_keys if used_candidate_keys is not None else set()
 
     for instance_idx in range(count):
         shape = shapes[instance_idx % len(shapes)]
         placed = None
-        for _attempt in range(max_attempts):
-            candidate = rng.choice(candidates)
+        available = [
+            candidate for candidate in candidates
+            if candidate.get("candidate_key") not in used_candidate_keys
+        ]
+        if not available:
+            print("Defect {}: no unused reference points left.".format(defect_type))
+            break
+
+        rng.shuffle(available)
+        for candidate in available[:max_attempts]:
             transform = _sample_transform(defect_cfg, random_cfg, candidate, shape, rng=rng)
             if transform is None:
                 continue
@@ -1542,7 +1660,15 @@ def _build_instance_records_for_type(defect_type, cfg, candidates, shapes, layer
             elif defect_type == "efflore":
                 placed = _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng=rng)
             else:
-                placed = _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng=rng)
+                placed = _model_spalling_instance(
+                    candidate,
+                    shape,
+                    transform,
+                    cfg,
+                    layer_map,
+                    rng=rng,
+                    spalling_cfg=defect_cfg,
+                )
 
             if placed is None:
                 continue
@@ -1560,9 +1686,20 @@ def _build_instance_records_for_type(defect_type, cfg, candidates, shapes, layer
                 placed = None
                 continue
 
-            seed_id = _create_seed_marker(candidate, layer_map["seeds"])
-            if seed_id:
-                placed["seed_id"] = str(seed_id)
+            key = candidate.get("candidate_key")
+            if key:
+                used_candidate_keys.add(key)
+
+            seed_ids = _create_seed_marker(
+                candidate,
+                _seed_layer_for_type(layer_map, defect_type),
+                radius_coef=seed_radius_coef,
+                min_radius=seed_min_radius,
+                axis_scale=seed_axis_scale,
+            )
+            if seed_ids:
+                placed["seed_id"] = str(seed_ids[0])
+                placed["seed_ids"] = _as_strings(seed_ids)
             records.append(placed)
             break
         if placed is None:
@@ -1574,9 +1711,89 @@ def _json_ready_records(records):
     ready = []
     for idx, record in enumerate(records):
         item = dict(record)
+        item.pop("surface_cut_polygon", None)
         item["instance_index"] = idx
         ready.append(item)
     return ready
+
+
+def _apply_surface_group_subtractions(records, cfg, model_result):
+    records = list(records or [])
+    if not records:
+        return {"groups": 0, "cutters": 0, "targets": 0}
+
+    source_ids = _collect_object_ids(model_result)
+    if not source_ids:
+        return {"groups": 0, "cutters": 0, "targets": 0}
+
+    target_surfaces = get_surfaces(
+        object_ids=source_ids,
+        layer_names=cfg.get("target_layers"),
+        convert_polylines=False,
+        explode_polysurfaces=False,
+        keep_input=True,
+    )
+    by_layer_surfaces = {}
+    for sid in target_surfaces:
+        if not sid or not rs.IsObject(sid):
+            continue
+        lname = rs.ObjectLayer(sid) or ""
+        by_layer_surfaces.setdefault(lname, []).append(sid)
+
+    sub_cfg = cfg.get("surface_subtraction") or {}
+    normal_extrude_distance = max(
+        0.0,
+        _to_float(
+            sub_cfg.get("normal_extrude_distance", sub_cfg.get("extrude_distance", 0.0)),
+            0.0,
+        ),
+    )
+
+    by_layer_records = {}
+    for record in records:
+        if record.get("type") not in ("crack", "spalling", "exposed_rebar"):
+            continue
+        polygon = record.get("surface_cut_polygon") or []
+        if len(polygon) < 4:
+            continue
+        layer_name = str(record.get("surface_layer") or "")
+        by_layer_records.setdefault(layer_name, []).append(record)
+
+    groups = 0
+    cutters = 0
+    targets = 0
+    for layer_name, layer_records in by_layer_records.items():
+        target_ids = [sid for sid in by_layer_surfaces.get(layer_name, []) if rs.IsObject(sid)]
+        if not target_ids:
+            continue
+
+        cutter_ids = []
+        for record in layer_records:
+            polygon = record.get("surface_cut_polygon") or []
+            curve_id = _add_polyline(polygon)
+            if curve_id:
+                cutter_ids.append(curve_id)
+                if normal_extrude_distance > 0.0:
+                    normal_vec = _unit(record.get("normal") or (0.0, 0.0, 1.0), fallback=(0.0, 0.0, 1.0))
+                    anchor = _vec3(polygon[0])
+                    start_pt = _add(anchor, _scale(normal_vec, -normal_extrude_distance))
+                    end_pt = _add(anchor, _scale(normal_vec, normal_extrude_distance))
+                    extruded = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
+                    if extruded and rs.IsObject(extruded):
+                        cutter_ids.append(extruded)
+        if not cutter_ids:
+            continue
+
+        try:
+            split_ids = subtract_surface(cutter_ids, target_surfaces=target_ids, delete_inputs=True) or []
+            _assign_layer(split_ids, layer_name)
+            groups += 1
+            cutters += len(cutter_ids)
+            targets += len(target_ids)
+        finally:
+            _delete_objects(cutter_ids)
+
+    return {"groups": groups, "cutters": cutters, "targets": targets}
 
 
 def _extract_camera_defects(records):
@@ -1653,7 +1870,7 @@ def defects_from_record_payload(payload, include_defect_types=None):
 
 def apply_defect_pipeline(params=None, model_result=None):
     """Place crack/efflore/spalling defects on model surfaces."""
-    cfg = copy.deepcopy(params or {})
+    cfg = params if isinstance(params, dict) else {}
     if not bool(cfg.get("enabled", True)):
         return {
             "enabled": False,
@@ -1664,13 +1881,24 @@ def apply_defect_pipeline(params=None, model_result=None):
             "layer_map": _resolve_layer_map(cfg),
         }
 
+    active_requests = get_active_defect_requests(cfg)
+    layer_map = _resolve_layer_map(cfg)
+    if not active_requests:
+        return {
+            "enabled": True,
+            "records": [],
+            "camera_defects": [],
+            "record_output_path": None,
+            "summary": {"total": 0},
+            "layer_map": layer_map,
+        }
+
     seed = cfg.get("seed")
     if seed is not None:
         rng = random.Random(_to_int(seed, 0))
     else:
         rng = random.Random()
 
-    layer_map = _resolve_layer_map(cfg)
     candidates = _collect_reference_candidates(cfg, model_result=model_result)
     if not candidates:
         print("Defect pipeline: no valid placement candidates were found.")
@@ -1684,19 +1912,8 @@ def apply_defect_pipeline(params=None, model_result=None):
         }
 
     records = []
-    defect_types = [name for name in ("crack", "efflore", "spalling") if name in cfg]
-    if "spalling" not in defect_types and "exposed_rebar" in cfg:
-        defect_types.append("spalling")
-
-    for defect_type in defect_types:
-        if defect_type == "spalling":
-            defect_cfg = _resolve_spalling_cfg(cfg)
-        else:
-            defect_cfg = cfg.get(defect_type) or {}
-        if not bool(defect_cfg.get("enabled", True)) or max(0, _to_int(defect_cfg.get("count"), 0)) == 0:
-            continue
-
-        count = max(0, _to_int(defect_cfg.get("count"), 0))
+    used_candidate_keys = set()
+    for defect_type, defect_cfg, count in active_requests:
         shapes = _resolve_shapes_for_type(
             defect_type=defect_type,
             cfg=cfg,
@@ -1710,13 +1927,18 @@ def apply_defect_pipeline(params=None, model_result=None):
         records.extend(
             _build_instance_records_for_type(
                 defect_type,
+                defect_cfg,
+                count,
                 cfg,
                 candidates,
                 shapes,
                 layer_map,
                 rng=rng,
+                used_candidate_keys=used_candidate_keys,
             )
         )
+
+    subtraction = _apply_surface_group_subtractions(records, cfg, model_result)
 
     json_ready = _json_ready_records(records)
     camera_defects = _extract_camera_defects(json_ready)
@@ -1733,6 +1955,7 @@ def apply_defect_pipeline(params=None, model_result=None):
         "camera_defects": camera_defects,
         "summary": summary,
         "layer_map": layer_map,
+        "surface_subtraction": subtraction,
     }
     output_path = save_defect_records(cfg.get("record_output_path"), payload)
 
@@ -1743,4 +1966,5 @@ def apply_defect_pipeline(params=None, model_result=None):
         "record_output_path": output_path,
         "summary": summary,
         "layer_map": layer_map,
+        "surface_subtraction": subtraction,
     }

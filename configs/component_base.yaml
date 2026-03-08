@@ -21,6 +21,13 @@ preparation:
     "component::parapet": Green
     "component::bearing": AliceBlue
     "component::pier": Brown
+    "component::normal_arrows": Cyan
+    "component::normal_arrows::slab": Cyan
+    "component::normal_arrows::parapet": DeepSkyBlue
+    "component::normal_arrows::beam": SpringGreen
+    "component::normal_arrows::bearing": YellowGreen
+    "component::normal_arrows::pier": Orange
+    "component::normal_arrows::unknown": White
     "defects::geometry::crack": OrangeRed
     "defects::geometry::efflore": LightYellow
     "defects::geometry::efflore_outer": Peru
@@ -36,3 +43,6 @@ preparation:
     "defects::mask::exposed_rebar::cs2": Silver
     "defects::mask::exposed_rebar::cs3": Gray
     "defects::seeds": Magenta
+    "defects::seeds::crack": Magenta
+    "defects::seeds::efflore": DeepPink
+    "defects::seeds::spalling": Violet

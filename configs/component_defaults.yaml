@@ -63,6 +63,15 @@ modeling:
       beam: "component::beam"
       bearing: "component::bearing"
       pier: "component::pier"
+    surface_normals:
+      enabled: true
+      layer: "component::normal_arrows"
+      by_component: true
+      unknown_component: "unknown"
+      length: 80.0
+      head_length_ratio: 0.25
+      head_width_ratio: 0.35
+      max_surfaces: 0
     reference_points:
       enabled: true
       layers: ["component::slab", "component::parapet", "component::beam", "component::pier"]

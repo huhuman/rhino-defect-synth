@@ -68,6 +68,12 @@ def _scale(v, scalar):
     return vx * s, vy * s, vz * s
 
 
+def _cross(a, b):
+    ax, ay, az = _xyz(a)
+    bx, by, bz = _xyz(b)
+    return ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
+
+
 def _unit(v, fallback=(0.0, 0.0, 1.0)):
     vx, vy, vz = _xyz(v)
     length = math.sqrt(vx * vx + vy * vy + vz * vz)
@@ -112,7 +118,34 @@ def _layer_name(cfg, logical_name):
     return (cfg.get("layers") or {}).get(logical_name, logical_name)
 
 
+def _layer_path_parts(layer_name):
+    return [part.strip() for part in str(layer_name).split("::") if part.strip()]
+
+
+def _ensure_layer(layer_name):
+    if not layer_name:
+        return None
+    if rs.IsLayer(layer_name):
+        return layer_name
+
+    parts = _layer_path_parts(layer_name)
+    if not parts:
+        return None
+
+    current = None
+    for part in parts:
+        full_path = part if current is None else "{}::{}".format(current, part)
+        if rs.IsLayer(full_path):
+            current = full_path
+            continue
+        created = rs.AddLayer(name=part, parent=current)
+        current = created or full_path
+    return current
+
+
 def _assign_layer(obj_id, layer_name):
+    if obj_id and layer_name:
+        _ensure_layer(layer_name)
     if obj_id and layer_name and rs.IsLayer(layer_name):
         rs.ObjectLayer(obj_id, layer_name)
 
@@ -324,29 +357,45 @@ def _build_slab_and_parapet(result, base_pts, norm_dirs, cfg):
     if len(section_points) > 1:
         cap_indices.append(len(section_points) - 1)
     for station_idx in cap_indices:
-        for section in section_points[station_idx]:
+        for i, section in enumerate(section_points[station_idx]):
+            if i == 1:
+                section = section[::-1]
+            if station_idx == 0:
+                section = section[::-1]
             _add_polygon(result, "slab", slab_layer, section, cfg)
         if parapet_enabled:
-            for rail in rail_points[station_idx]:
-                _add_polygon(result, "parapet", parapet_layer, rail[:5], cfg)
-                _add_polygon(result, "parapet", parapet_layer, rail[5:] + rail[4:6], cfg)
+            for i, rail in enumerate(rail_points[station_idx]):
+                upper = rail[:5][::-1] if i == 1 else rail[:5]
+                lower = rail[5:] + rail[4:6] if i == 1 else (rail[5:] + rail[4:6])[::-1]
+                if station_idx == 0:
+                    upper = upper[::-1]
+                    lower = lower[::-1]
+                _add_polygon(result, "parapet", parapet_layer, upper, cfg)
+                _add_polygon(result, "parapet", parapet_layer, lower, cfg)
 
     for sid in range(1, len(section_points)):
         prev_sections = section_points[sid - 1]
         cur_sections = section_points[sid]
-        for prev, cur in zip(prev_sections, cur_sections):
+        for i, (prev, cur) in enumerate(zip(prev_sections, cur_sections)):
             for edge_idx in range(len(cur) - 1):
-                quad = [cur[edge_idx], cur[edge_idx + 1], prev[edge_idx + 1], prev[edge_idx]]
+                quad = [prev[edge_idx], prev[edge_idx + 1], cur[edge_idx + 1], cur[edge_idx]]
+                if edge_idx == 1 and i == 1:
+                    quad = quad[::-1]
                 _add_polygon(result, "slab", slab_layer, quad, cfg)
 
         if parapet_enabled:
             prev_rails = rail_points[sid - 1]
             cur_rails = rail_points[sid]
-            for prev, cur in zip(prev_rails, cur_rails):
+            for i, (prev, cur) in enumerate(zip(prev_rails, cur_rails)):
+                # left/right
                 for edge_idx in range(len(cur) - 1):
                     quad = [cur[edge_idx], cur[edge_idx + 1], prev[edge_idx + 1], prev[edge_idx]]
+                    if i == 0 :
+                        quad = quad[::-1]
                     _add_polygon(result, "parapet", parapet_layer, quad, cfg)
                 quad = [cur[0], cur[4], prev[4], prev[0]]
+                if i == 0 :
+                    quad = quad[::-1]
                 _add_polygon(result, "parapet", parapet_layer, quad, cfg)
 
     return {
@@ -793,6 +842,121 @@ def _build_piers(result, anchor_pts, road_dirs, norm_dirs, cfg):
     return used_indices
 
 
+def _surface_sample_point_and_uv(surface_id):
+    point = None
+    centroid = rs.SurfaceAreaCentroid(surface_id)
+    if centroid:
+        centroid_pt = centroid[0] if isinstance(centroid, (list, tuple)) else centroid
+        try:
+            point = _xyz(centroid_pt)
+        except (TypeError, ValueError, IndexError):
+            point = None
+
+    if point is None or not rs.IsPointOnSurface(surface_id, point):
+        domain_u = rs.SurfaceDomain(surface_id, 0)
+        domain_v = rs.SurfaceDomain(surface_id, 1)
+        if not domain_u or not domain_v:
+            return None, None
+        u = 0.5 * (float(domain_u[0]) + float(domain_u[1]))
+        v = 0.5 * (float(domain_v[0]) + float(domain_v[1]))
+        eval_pt = rs.EvaluateSurface(surface_id, u, v)
+        if not eval_pt:
+            return None, None
+        point = _xyz(eval_pt)
+
+    uv = rs.SurfaceClosestPoint(surface_id, point)
+    if uv is None:
+        return None, None
+    return point, uv
+
+
+def _surface_frame_axes(surface_id, uv, normal):
+    frame = None
+    try:
+        frame = rs.SurfaceFrame(surface_id, uv)
+    except Exception:
+        frame = None
+
+    if frame and hasattr(frame, "XAxis") and hasattr(frame, "YAxis"):
+        x_axis = _unit(frame.XAxis, fallback=(1.0, 0.0, 0.0))
+        y_axis = _unit(frame.YAxis, fallback=(0.0, 1.0, 0.0))
+        return x_axis, y_axis
+
+    ref = (0.0, 0.0, 1.0) if abs(normal[2]) < 0.95 else (0.0, 1.0, 0.0)
+    x_axis = _unit(_cross(ref, normal), fallback=(1.0, 0.0, 0.0))
+    y_axis = _unit(_cross(normal, x_axis), fallback=(0.0, 1.0, 0.0))
+    return x_axis, y_axis
+
+
+def _add_surface_normal_arrows(result, cfg):
+    normal_cfg = cfg.get("surface_normals") or {}
+    if not bool(normal_cfg.get("enabled", False)):
+        return
+
+    layer_name = str(normal_cfg.get("layer") or "component::normal_arrows")
+    by_component = bool(normal_cfg.get("by_component", True))
+    unknown_component = str(normal_cfg.get("unknown_component") or "unknown")
+    length = max(1e-3, _to_float(normal_cfg.get("length"), 80.0))
+    head_length_ratio = max(1e-3, _to_float(normal_cfg.get("head_length_ratio"), 0.25))
+    head_width_ratio = max(1e-3, _to_float(normal_cfg.get("head_width_ratio"), 0.35))
+    max_surfaces = max(0, _to_int(normal_cfg.get("max_surfaces"), 0))
+
+    surfaces = [sid for sid in (result.get("surfaces") or []) if sid and rs.IsSurface(sid)]
+    if max_surfaces > 0:
+        surfaces = surfaces[:max_surfaces]
+
+    component_lookup = {}
+    if by_component:
+        by_component_ids = result.get("objects_by_component") or {}
+        surface_keys = {str(sid) for sid in surfaces}
+        for component_name, ids in by_component_ids.items():
+            if component_name.startswith("normal_arrows"):
+                continue
+            for obj_id in ids or []:
+                key = str(obj_id)
+                if key in surface_keys and key not in component_lookup:
+                    component_lookup[key] = str(component_name)
+
+    created = []
+    for surface_id in surfaces:
+        component_name = component_lookup.get(str(surface_id))
+        component_key = component_name or unknown_component
+        arrow_layer = layer_name
+        if by_component:
+            arrow_layer = "{}::{}".format(layer_name, component_key)
+
+        point, uv = _surface_sample_point_and_uv(surface_id)
+        if point is None or uv is None:
+            continue
+
+        normal = _unit(rs.SurfaceNormal(surface_id, uv), fallback=(0.0, 0.0, 1.0))
+        x_axis, y_axis = _surface_frame_axes(surface_id, uv, normal)
+        head_len = min(length * head_length_ratio, length * 0.9)
+        head_width = max(1e-3, head_len * head_width_ratio)
+
+        shaft_end = _add(point, _scale(normal, length - head_len))
+        tip = _add(point, _scale(normal, length))
+        arrow_ids = []
+
+        shaft_id = rs.AddLine(point, shaft_end)
+        if shaft_id:
+            arrow_ids.append(shaft_id)
+
+        for axis in (x_axis, _scale(x_axis, -1.0), y_axis, _scale(y_axis, -1.0)):
+            wing_end = _add(shaft_end, _scale(axis, head_width))
+            wing_id = rs.AddLine(tip, wing_end)
+            if wing_id:
+                arrow_ids.append(wing_id)
+
+        for obj_id in arrow_ids:
+            _assign_layer(obj_id, arrow_layer)
+            _append_component_object(result, "normal_arrows::{}".format(component_key), obj_id)
+        created.extend(arrow_ids)
+        result["normal_arrows_by_component"].setdefault(component_key, []).extend(arrow_ids)
+
+    result["normal_arrows"].extend(created)
+
+
 def _collect_reference_points(result, cfg):
     reference_cfg = cfg.get("reference_points") or {}
     if not bool(reference_cfg.get("enabled", True)):
@@ -898,6 +1062,8 @@ def create_bridge_component(params=None):
         "surfaces": [],
         "polylines": [],
         "solids": [],
+        "normal_arrows": [],
+        "normal_arrows_by_component": {},
         "reference_points": [],
         "reference_sizes": [],
         "reference_normals": [],
@@ -936,5 +1102,6 @@ def create_bridge_component(params=None):
         rs.DeleteObject(centerline_id)
         result["centerline_id"] = None
 
+    _add_surface_normal_arrows(result, cfg)
     _collect_reference_points(result, cfg)
     return result

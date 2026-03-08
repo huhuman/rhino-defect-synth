@@ -5,39 +5,13 @@ from utils_loc.materials import create_materials_from_texture_dir, import_materi
 from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
 from utils_loc.component_modeling import create_bridge_component
-from utils_loc.defect_placement import apply_defect_pipeline
+from utils_loc.defect_placement import apply_defect_pipeline, get_active_defect_requests
 
 import importlib
 render = importlib.import_module("utils_loc.render")
 render_demo = importlib.import_module("utils_loc.render_demo")
 
 _LAST_MODEL_RESULT = None
-
-
-def _to_int(value, default=0):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
-
-
-def _should_run_defect_pipeline(defect_cfg):
-    if not isinstance(defect_cfg, dict) or not defect_cfg:
-        return False
-
-    # Keep supporting the legacy/global switch when it is explicitly set.
-    if "enabled" in defect_cfg and not bool(defect_cfg.get("enabled", True)):
-        return False
-
-    for defect_type in ("crack", "efflore", "spalling", "exposed_rebar"):
-        type_cfg = defect_cfg.get(defect_type)
-        if not isinstance(type_cfg, dict):
-            continue
-        if not bool(type_cfg.get("enabled", True)):
-            continue
-        if _to_int(type_cfg.get("count"), 0) > 0:
-            return True
-    return False
 
 
 def prepare(params=None):
@@ -122,27 +96,28 @@ def create_model(params):
 
         result = create_bridge_component(component_cfg)
         defect_cfg = params.get("defect") or {}
-        if _should_run_defect_pipeline(defect_cfg):
+        if get_active_defect_requests(defect_cfg):
             print("-------- Start Defect Placement -------")
             defect_result = apply_defect_pipeline(defect_cfg, model_result=result)
             result["defect"] = defect_result
+            summary = defect_result.get("summary", {})
             print(
                 "-------- Defect Placement Complete ------- "
                 "(total: {}, crack: {}, efflore: {}, spalling: {}, exposed_rebar: {})".format(
-                    defect_result.get("summary", {}).get("total", 0),
-                    defect_result.get("summary", {}).get("crack", 0),
-                    defect_result.get("summary", {}).get("efflore", 0),
-                    defect_result.get("summary", {}).get("spalling", 0),
-                    defect_result.get("summary", {}).get("exposed_rebar", 0),
+                    summary.get("total", 0),
+                    summary.get("crack", 0),
+                    summary.get("efflore", 0),
+                    summary.get("spalling", 0),
+                    summary.get("exposed_rebar", 0),
                 )
             )
         print(
             "-------- Component Modeling Complete ------- "
             "(surfaces: {}, polylines: {}, solids: {}, reference_points: {})".format(
-                len(result.get("surfaces", [])),
-                len(result.get("polylines", [])),
-                len(result.get("solids", [])),
-                len(result.get("reference_points", [])),
+                len(result["surfaces"]),
+                len(result["polylines"]),
+                len(result["solids"]),
+                len(result["reference_points"]),
             )
         )
         _LAST_MODEL_RESULT = result

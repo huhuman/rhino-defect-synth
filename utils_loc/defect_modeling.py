@@ -196,6 +196,8 @@ def get_reference_points(
                 if not point:
                     continue
                 point = _xyz(point)
+                if not rs.IsPointOnSurface(surface, point):
+                    continue
                 normal = rs.SurfaceNormal(surface, (u, v))
                 normal = _unit(normal, fallback=(0.0, 0.0, 1.0))
 

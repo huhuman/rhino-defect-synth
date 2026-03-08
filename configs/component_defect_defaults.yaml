@@ -11,6 +11,12 @@ modeling:
       trim_margin: 0.1
       max_num_surfaces: 0
       min_boundary_distance: 20.0
+    surface_subtraction:
+      normal_extrude_distance: 8.0
+    seed_marker:
+      radius_coef: 0.04375
+      min_radius: 0.625
+      axis_scale: 1.6
     random:
       scale_min: 0.6
       scale_max: 1.4
@@ -25,7 +31,10 @@ modeling:
       pattern: "*.json"
       file_format: auto
     layers:
-      seeds: "defects::seeds"
+      seeds:
+        crack: "defects::seeds::crack"
+        efflore: "defects::seeds::efflore"
+        spalling: "defects::seeds::spalling"
       geometry:
         crack: "defects::geometry::crack"
         efflore: "defects::geometry::efflore"
