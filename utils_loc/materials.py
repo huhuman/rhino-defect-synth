@@ -3,12 +3,13 @@ import Rhino
 import scriptcontext as sc
 import rhinoscriptsyntax as rs
 import os
+import re
 
 
 _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".tga", ".exr")
 _MAP_SUFFIXES = {
-    "albedo": ("basecolor", "base_color", "albedo", "diffuse", "color", "col"),
-    "normal": ("normal", "norm", "nrm", "nor"),
+    "albedo": ("ao",),
+    "normal": ("normal", "norm", "nrm", "nor", "normal_opengl", "normal_directx"),
     "occlusion": ("ao", "oc", "ambientocclusion", "ambient_occlusion", "occlusion"),
     "roughness": ("roughness", "rough", "rgh"),
     "metallic": ("metallic", "metalness", "metal"),
@@ -16,6 +17,16 @@ _MAP_SUFFIXES = {
     "opacity": ("opacity", "alpha", "mask", "transparency"),
     "specular": ("specular", "spec", "glossiness", "gloss"),
 }
+_PBR_CHANNEL_KEYS = [
+    "albedo",
+    "normal",
+    "occlusion",
+    "roughness",
+    "metallic",
+    "height",
+    "opacity",
+    "specular",
+]
 _ALL_SUFFIXES = tuple(
     suffix for suffixes in _MAP_SUFFIXES.values() for suffix in suffixes
 )
@@ -31,37 +42,37 @@ _PBR_ENUM_CANDIDATES = {
 }
 
 # Last update by 2025/02/13
-Vray_Material_Metadata = {
-    "/Rubber Rough 001": ["1712823064", "cc427c2f-b935-412f-85a2-e3e521608178"],
-    "/Iron Rough Rusty": ["1712822095", "82bd9e0c-bf27-4e59-956d-701daa7b4750"],
-    "/Concrete Weathered 300cm": ["1712821438", "08ac88c2-bb86-4ba4-ac47-8622ad8be5e9"],
-    "/Concrete Simple 001 300cm": ["1712821428", "7a028bb4-a297-4e2b-b85d-b3e5dbb5a2e9"],
-    "/Concrete Simple B01 200cm": ["1667490677", "79ba2bea-7908-470f-b6c0-3c9ee9f3d174"],
-    "/Concrete Simple C01 200cm": ["1667490683", "e03680fe-36bb-4504-9b76-a650d9ee83ed"],
-    "/Concrete Simple E02 400cm": ["1667490753", "50226111-aae5-4b14-8bac-7f6c4fae51a8"],
-    "/Concrete Simple F01 200cm": ["1667490764", "ce5ed96c-5b12-4478-8018-95b9899de5d1"],
-    "/Concrete Simple G01 400cm": ["1667490775", "64c6d606-08b5-45b1-bcd3-df4ac8727721"],
-    "/Concrete Floor Satin 300cm": ["1712821423", "786f9bed-d9fe-4563-8b93-9fef469e3473"],
-    "/Concrete Grey 03 100cm": ["1639468414", "c6515288-34c2-49d8-b32e-1a5eb30c5c4b"],
-    "/Concrete Grey 06 100cm": ["1639468424", "d83b8f99-c819-4ad2-83e5-0a921279af79"],
-}
+# Vray_Material_Metadata = {
+#     "/Rubber Rough 001": ["1712823064", "cc427c2f-b935-412f-85a2-e3e521608178"],
+#     "/Iron Rough Rusty": ["1712822095", "82bd9e0c-bf27-4e59-956d-701daa7b4750"],
+#     "/Concrete Weathered 300cm": ["1712821438", "08ac88c2-bb86-4ba4-ac47-8622ad8be5e9"],
+#     "/Concrete Simple 001 300cm": ["1712821428", "7a028bb4-a297-4e2b-b85d-b3e5dbb5a2e9"],
+#     "/Concrete Simple B01 200cm": ["1667490677", "79ba2bea-7908-470f-b6c0-3c9ee9f3d174"],
+#     "/Concrete Simple C01 200cm": ["1667490683", "e03680fe-36bb-4504-9b76-a650d9ee83ed"],
+#     "/Concrete Simple E02 400cm": ["1667490753", "50226111-aae5-4b14-8bac-7f6c4fae51a8"],
+#     "/Concrete Simple F01 200cm": ["1667490764", "ce5ed96c-5b12-4478-8018-95b9899de5d1"],
+#     "/Concrete Simple G01 400cm": ["1667490775", "64c6d606-08b5-45b1-bcd3-df4ac8727721"],
+#     "/Concrete Floor Satin 300cm": ["1712821423", "786f9bed-d9fe-4563-8b93-9fef469e3473"],
+#     "/Concrete Grey 03 100cm": ["1639468414", "c6515288-34c2-49d8-b32e-1a5eb30c5c4b"],
+#     "/Concrete Grey 06 100cm": ["1639468424", "d83b8f99-c819-4ad2-83e5-0a921279af79"],
+# }
 
 
 def _get_render_material_names():
     return [mat.DisplayName for mat in sc.doc.RenderMaterials]
 
 
-def import_Vray_materials():
-    all_render_materials = _get_render_material_names()
-    for mat, info in Vray_Material_Metadata.items():
-        is_exist = False
-        for render_mat in all_render_materials:
-            if mat in render_mat:
-                is_exist = True
-                break
-        if not is_exist:
-            print(f'Importing material: {mat}')
-            rs.Command(f"-_vrayCosmos _Import _Revision={info[0]} _Triplanar=On {info[1]}")
+# def import_Vray_materials():
+#     all_render_materials = _get_render_material_names()
+#     for mat, info in Vray_Material_Metadata.items():
+#         is_exist = False
+#         for render_mat in all_render_materials:
+#             if mat in render_mat:
+#                 is_exist = True
+#                 break
+#         if not is_exist:
+#             print(f'Importing material: {mat}')
+#             rs.Command(f"-_vrayCosmos _Import _Revision={info[0]} _Triplanar=On {info[1]}")
 
 
 def import_materials(category="Architectural", subcategory1="Wall", subcategory2="Concrete"):
@@ -117,6 +128,49 @@ def _find_map_from_index(image_index, root_stem, suffixes):
     return None
 
 
+def _expand_token_variants(token):
+    token = (token or "").lower()
+    variants = {token}
+    if "_" in token:
+        variants.add(token.replace("_", "-"))
+    if "-" in token:
+        variants.add(token.replace("-", "_"))
+    return tuple(sorted((v for v in variants if v), key=len, reverse=True))
+
+
+def _find_map_by_color_replacement(image_index, color_stem, target_kind):
+    """Try map lookup by replacing color-like token with target channel names."""
+    if not color_stem:
+        return None
+
+    target_suffixes = _MAP_SUFFIXES.get(target_kind, ())
+    color_tokens = sorted(_MAP_SUFFIXES["albedo"], key=len, reverse=True)
+    base_stem = color_stem.lower()
+
+    for color_token in color_tokens:
+        for source_variant in _expand_token_variants(color_token):
+            if source_variant not in base_stem:
+                continue
+            pattern = re.compile(re.escape(source_variant), flags=re.IGNORECASE)
+            for target_suffix in target_suffixes:
+                for target_variant in _expand_token_variants(target_suffix):
+                    key = pattern.sub(target_variant, base_stem).lower()
+                    if key in image_index:
+                        return image_index[key]
+    return None
+
+
+def _stem_contains_color_token(stem):
+    if not stem:
+        return False
+    stem_lc = stem.lower()
+    for color_token in _MAP_SUFFIXES["albedo"]:
+        for token_variant in _expand_token_variants(color_token):
+            if token_variant in stem_lc:
+                return True
+    return False
+
+
 def find_texture_bitmaps(texture_jpg_path):
     """Find companion bitmap maps next to a base texture path.
 
@@ -143,6 +197,20 @@ def find_texture_bitmaps(texture_jpg_path):
         if bitmaps[kind]:
             continue
         bitmaps[kind] = _find_map_from_index(image_index, root_stem, suffixes)
+
+    # If color/albedo map exists, try replacing its channel token to find peers:
+    # e.g. *_COLOR.* -> *_roughness.*, *_normal.*, ...
+    color_stem = None
+    if bitmaps.get("albedo"):
+        color_stem = os.path.splitext(os.path.basename(bitmaps["albedo"]))[0]
+    elif _stem_contains_color_token(stem):
+        color_stem = stem
+
+    if color_stem:
+        for kind in _PBR_CHANNEL_KEYS:
+            if kind == "albedo" or bitmaps.get(kind):
+                continue
+            bitmaps[kind] = _find_map_by_color_replacement(image_index, color_stem, kind)
 
     # If caller passed *_normal.jpg, etc., still try to find root/albedo textures.
     if not bitmaps["albedo"]:
@@ -268,10 +336,28 @@ def _create_materials_from_single_texture_dir(texture_dir):
 
     created = []
     processed_roots = set()
+    all_files = sorted(os.listdir(texture_dir))
+    color_candidates = []
 
-    for filename in sorted(os.listdir(texture_dir)):
+    for filename in all_files:
         stem, ext = os.path.splitext(filename)
-        if ext.lower() not in (".jpg", ".jpeg"):
+        if ext.lower() not in _IMAGE_EXTENSIONS:
+            continue
+        if _stem_contains_color_token(stem):
+            color_candidates.append(filename)
+
+    candidate_files = color_candidates
+    if not candidate_files:
+        # Backward compatibility for texture sets without explicit "color" token.
+        candidate_files = [
+            name
+            for name in all_files
+            if os.path.splitext(name)[1].lower() in (".jpg", ".jpeg")
+        ]
+
+    for filename in candidate_files:
+        stem, ext = os.path.splitext(filename)
+        if ext.lower() not in _IMAGE_EXTENSIONS:
             continue
         kind = _guess_map_kind_from_stem(stem)
         if kind and kind != "albedo":
@@ -297,7 +383,7 @@ def create_materials_from_texture_dir(texture_dir, recursive=False):
     """Create materials from a texture directory.
 
     Args:
-        texture_dir (str): Directory containing JPG/JPEG textures and companion maps.
+        texture_dir (str): Directory containing texture images and companion maps.
         recursive (bool): If True, walk subdirectories and process each one.
     """
     texture_dir = os.path.abspath(texture_dir)
@@ -313,7 +399,7 @@ def create_materials_from_texture_dir(texture_dir, recursive=False):
 
     created = []
     for root, _, files in os.walk(texture_dir):
-        if not any(name.lower().endswith((".jpg", ".jpeg")) for name in files):
+        if not any(os.path.splitext(name)[1].lower() in _IMAGE_EXTENSIONS for name in files):
             continue
         created.extend(_create_materials_from_single_texture_dir(root))
 
