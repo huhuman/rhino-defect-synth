@@ -12,6 +12,18 @@ from utils_loc.defect_shapes import read_cube_contour_json
 CUBE_LENGTH = 500.0  # mm
 
 
+def _severity_to_mask_layer(severity):
+    token = str(severity or "").strip().upper()
+    if not token:
+        return None
+    if token.startswith("CS"):
+        suffix = token[2:]
+        return "mask::CS{}".format(suffix)
+    if token.isdigit():
+        return "mask::CS{}".format(token)
+    return "mask::{}".format(token)
+
+
 def __create_cube_faces():
     """
     Create a cube from -CUBE_LENGTH to +CUBE_LENGTH in all axes,
@@ -236,6 +248,7 @@ def create_cube(cube_map_dir, start_face_index=0):
     face_cracks = {}
     for face_dir, filepath in zip(faces.keys(), filepaths):
         face = faces[face_dir]
+        rs.ObjectLayer(face, "geometry::cube")
         rs.HideObject(face)
 
         contours, base_contours, erode_contours, diff_contours, severities = read_contour_json(filepath)
@@ -270,7 +283,9 @@ def create_cube(cube_map_dir, start_face_index=0):
                     diff_poly_ids.append(diff_poly_id)
 
             severity = severities[i]
-            layer_name = "crack_{}".format(severity)
+            layer_name = _severity_to_mask_layer(severity)
+            if not layer_name:
+                raise ValueError("Invalid crack severity '{}' on face '{}'.".format(severity, face_dir))
             if not rs.IsLayer(layer_name):
                 raise ValueError("Layer '{}' does not exist. Please run preparation step first.".format(layer_name))
 

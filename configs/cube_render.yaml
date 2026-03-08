@@ -1,10 +1,8 @@
 view_setup:
   hide_layers:
-    - crack_CS1
-    - crack_CS2
-    - crack_CS3
-    - "defects::mask"
-    - "defects::seeds"
+    - "mask::CS1"
+    - "mask::CS2"
+    - "mask::CS3"
 
 rendering:
   width: 1920
@@ -14,15 +12,12 @@ rendering:
   outputs:
     scene:
       hide_layers:
-        - crack_CS1
-        - crack_CS2
-        - crack_CS3
-        - "defects::mask"
-        - "defects::seeds"
+        - "mask::CS1"
+        - "mask::CS2"
+        - "mask::CS3"
     mask:
       hide_layers:
-        - crack_extrusion
-        - "defects::geometry"
+        - "geometry::crack"
   lighting:
     # Sun is still configurable; face lights are randomized in code.
     sun:

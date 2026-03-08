@@ -24,14 +24,12 @@ modeling:
       pattern: "*.json"
       file_format: auto
     layers:
-      seeds: "defects::seeds"
       geometry:
-        crack: "defects::geometry::crack"
+        crack: "geometry::crack"
       mask:
-        crack: "defects::mask::crack"
-        crack_cs1: "defects::mask::crack_cs1"
-        crack_cs2: "defects::mask::crack_cs2"
-        crack_cs3: "defects::mask::crack_cs3"
+        crack_cs1: "mask::CS1"
+        crack_cs2: "mask::CS2"
+        crack_cs3: "mask::CS3"
     crack:
       enabled: true
       overview_csv_path: null
