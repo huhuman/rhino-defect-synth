@@ -75,7 +75,12 @@ def _load_plugin_from_path(plugin_path):
 def ensure_plugin_commands(plugin_cfg):
     cfg = dict(plugin_cfg or {})
     if not cfg:
+        print("Preparation plugin autoload: not configured.")
         return
+    if not bool(cfg.get("enabled", True)):
+        print("Preparation plugin autoload: disabled by config.")
+        return
+    verbose = bool(cfg.get("verbose", True))
 
     required_commands = _normalize_command_list(
         cfg.get("required_commands") or cfg.get("commands")
@@ -85,6 +90,11 @@ def ensure_plugin_commands(plugin_cfg):
 
     missing_before = [name for name in required_commands if not _is_command_available(name)]
     if not missing_before:
+        if verbose:
+            print(
+                "Preparation plugin autoload: required commands already available -> "
+                + ", ".join(required_commands)
+            )
         return
 
     plugin_path = cfg.get("path")
@@ -108,4 +118,3 @@ def ensure_plugin_commands(plugin_cfg):
         if strict:
             raise RuntimeError(message)
         print("Warning:", message)
-

@@ -43,7 +43,9 @@ def prepare(params=None):
         params (dict): Dictionary containing preparation parameters.
     """
     params = params or {}
-    ensure_plugin_commands(params.get("plugin_autoload"))
+    plugin_autoload_cfg = params.get("plugin_autoload")
+    print("Preparation plugin autoload: checking configuration...")
+    ensure_plugin_commands(plugin_autoload_cfg)
 
     exclude_layer_prefixes = params.get("exclude_layer_prefixes") or []
     colors = _filter_layer_map_by_prefix(params.get("colors", {}), exclude_layer_prefixes)

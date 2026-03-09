@@ -4,6 +4,14 @@ extends:
   - component_render.yaml
 
 preparation:
+  plugin_autoload:
+    enabled: true
+    path: "/path/to/rhino_channels_plugin/bin/Debug/net7.0-windows/RhinoChannelsPlugin.dll"
+    required_commands:
+      - CaptureRenderChannels
+      - CaptureBaseColorMask
+    strict: true
+    verbose: true
   builtin_material_library:
     category: ["Architectural", "Metal"]
     subcategory1: ["Wall", "Corten"]
