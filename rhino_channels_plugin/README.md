@@ -1,6 +1,8 @@
 Rhino Channels Plugin
 
-This plugin provides the `CaptureRenderChannels` command for writing linear depth/normal PFM files.
+This plugin provides:
+- `CaptureRenderChannels` for writing linear depth/normal PFM files.
+- `CaptureBaseColorMask` for writing a quantized base-color PNG mask (no gradient edge colors).
 
 Build
 1) Set `RhinoCommonPath` in `rhino_channels_plugin/RhinoChannelsPlugin.csproj` to your RhinoCommon.dll.
@@ -13,10 +15,12 @@ Build
    - (Optional) Rename/copy the `.dll` to `.rhp` if you prefer the Rhino convention.
 
 Usage (from Python)
--Command form in Rhino:
+- Command form in Rhino (depth/normal):
   -CaptureRenderChannels "C:\\path\\depth.pfm" "C:\\path\\normal.pfm" "Perspective" 1920 1080 _Enter
+- Command form in Rhino (mask):
+  -CaptureBaseColorMask "C:\\path\\mask.png" "Perspective" 1920 1080
 
-Arguments are prompted in this order:
+`CaptureRenderChannels` arguments are prompted in this order:
 1) `DepthPath` (required)
 2) `NormalPath` (required)
 3) `ViewName` (optional; press Enter for active view)
@@ -24,8 +28,15 @@ Arguments are prompted in this order:
 5) `Height` (optional; `0` uses viewport height)
 6) `RendererId` (accepted for compatibility but ignored in current viewport-capture implementation)
 
+`CaptureBaseColorMask` arguments are prompted in this order:
+1) `MaskPath` (required)
+2) `ViewName` (optional; press Enter for active view)
+3) `Width` (optional; `0` uses viewport width)
+4) `Height` (optional; `0` uses viewport height)
+
 Notes
-- This command captures from the current viewport using `ZBufferCapture` and world-point-derived normals.
-- It does not invoke the offline render engine, so it should return quickly and avoid long `Processing geometry table` waits.
+- `CaptureRenderChannels` captures from the current viewport using `ZBufferCapture` and world-point-derived normals.
+- `CaptureBaseColorMask` captures base-color style output and quantizes pixels to currently visible layer colors, using Z-buffer validity to force background pixels to a fixed background color.
+- These commands do not invoke the offline render engine, so they should return quickly and avoid long `Processing geometry table` waits.
 
 The Python pipeline calls this command from `utils_loc/outputs.py`.

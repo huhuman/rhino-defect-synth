@@ -300,6 +300,35 @@ def _capture_render_channels_to_files(rhino_view, depth_path, normal_path, width
         raise RuntimeError("CaptureRenderChannels command failed. Is the plugin loaded?")
 
 
+def _capture_mask_basecolor_to_file(rhino_view, mask_path, width=None, height=None):
+    """
+    Use the CaptureBaseColorMask Rhino command (from the C# plugin) to write a crisp PNG mask.
+    """
+    if not mask_path:
+        raise ValueError("mask_path is required.")
+    view_name = rhino_view.ActiveViewport.Name
+    width_value = int(width) if width else 0
+    height_value = int(height) if height else 0
+
+    rs.CurrentView(view_name)
+    rhino_view.Redraw()
+    rs.Sleep(50)
+
+    cmd_parts = [
+        "-CaptureBaseColorMask",
+        f'"{mask_path}"',
+        "_Enter",
+        str(width_value),
+        str(height_value),
+    ]
+    ok = rs.Command(" ".join(cmd_parts), echo=False)
+    if not ok:
+        raise RuntimeError("CaptureBaseColorMask command failed. Is the plugin loaded?")
+    if not os.path.isfile(mask_path):
+        raise RuntimeError(f"CaptureBaseColorMask completed but output was not found: {mask_path}")
+    return mask_path
+
+
 def render_image(rhino_view, out_path=None, preset=None, width=None, height=None, max_length=None):
     """
     Render the active/named view to an image file.
@@ -360,7 +389,7 @@ def render_normal(rhino_view, out_path=None, width=None, height=None, max_length
 
 def render_mask(rhino_view, out_path=None, width=None, height=None, max_length=None):
     """
-    Render an object mask pass using explicit display attributes for crisp layer colors.
+    Render an object mask pass using plugin-based base-color capture only.
     """
     rs.CurrentView(rhino_view.ActiveViewport.Name)
     viewport = rhino_view.ActiveViewport
@@ -372,24 +401,25 @@ def render_mask(rhino_view, out_path=None, width=None, height=None, max_length=N
         viewport.ConstructionGridVisible = False
     if prev_cplane is not None:
         viewport.ConstructionPlaneVisible = False
+    capture_width, capture_height = _resolve_capture_size(
+        rhino_view=rhino_view,
+        width=width,
+        height=height,
+        max_length=max_length,
+    )
     changed_sources = _force_visible_objects_color_by_layer()
     try:
         try:
-            bitmap = _capture_mask_bitmap(rhino_view, width=width, height=height, max_length=max_length)
-        except Exception:
-            # Compatibility fallback to previous behavior if custom capture fails.
-            flat_mode = _mask_display_mode()
-            if flat_mode:
-                viewport.DisplayMode = flat_mode
-            rhino_view.Redraw()
-            bitmap = _capture_bitmap(
+            return _capture_mask_basecolor_to_file(
                 rhino_view,
-                width=width,
-                height=height,
-                max_length=max_length,
-                transparent=False,
+                mask_path=out_path,
+                width=capture_width,
+                height=capture_height,
             )
-        return _save_bitmap(bitmap, out_path)
+        except Exception as exc:
+            msg = f"CaptureBaseColorMask failed for '{out_path}': {exc}"
+            print(f"ERROR: {msg}")
+            raise RuntimeError(msg) from exc
     finally:
         _restore_object_color_sources(changed_sources)
         viewport.DisplayMode = prev_mode
