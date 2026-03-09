@@ -39,15 +39,16 @@ main.run(
 )
 ```
 
-### `main_nested.py`
+### `main_cube_batch.py`
 Nested loop dataset generation (`model loop x render loop`).
 Current limitation: only supports `modeling.strategy: cube`.
 
 ```python
-import main_nested
-main_nested.run(
+import main_cube_batch
+main_cube_batch.run(
     config_name="cube_render.yaml",
     renders_per_model=4,
+    max_iter=3,
     start_face_index=0,
     faces_per_model=6,
     seed=42,
@@ -197,12 +198,18 @@ Pipeline behavior:
 - `only_layers`: render mask with only selected layers visible
 - `hide_layers`: hide selected layers when capturing mask
 
-### 4) `nested_loop` (for `main_nested.py`)
-Optional section to drive randomized render variants per generated cube model:
+### 4) `nested_loop` (for `main_cube_batch.py`)
+Optional section to control batch iterations and per-model render variants:
 - `renders_per_model`
+- `max_iter` (caps model iterations; actual iterations = `min(max_iter, available_iters)`)
+- `output_index_start` (starting index for `view_XXX` naming)
 - `seed`
-- `layer_material_choices`
 - `rendering_sampler`
+
+Batch flow in `main_cube_batch.py`:
+- Per model iteration: `reset -> preparation -> view_setup -> modeling`
+- Per render iteration: `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+- Render view indices are continuous across iterations via `output_index_offset`, preventing filename overwrite.
 
 ## Output Structure
 For each camera pose, outputs are saved under:
@@ -215,7 +222,7 @@ For each camera pose, outputs are saved under:
 - `depth_buffer/<basename>.pfm`
 - `normal_buffer/<basename>.pfm`
 
-By default, `basename` is `view_XXX`. Nested runs can override basename patterns.
+By default, `basename` is `view_XXX`. In batch mode, indices continue across iterations to avoid overwrite.
 
 ## Layering Notes
 - Hierarchical layer paths (for example `defects::mask::crack`) are supported and auto-created.
@@ -240,7 +247,7 @@ By default, `basename` is `view_XXX`. Nested runs can override basename patterns
 
 ## Project Layout
 - `main.py`: stage runner
-- `main_nested.py`: nested model/render dataset loop (cube)
+- `main_cube_batch.py`: nested model/render dataset loop (cube)
 - `main_demo.py`: demo utilities
 - `configs/`: YAML configs
 - `utils_loc/pipeline.py`: orchestration (`prepare`, `create_model`, `run_render`, `run_render_demo`)

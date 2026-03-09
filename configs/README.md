@@ -45,6 +45,22 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `preparation.plugin_autoload.strict` | `bool` | Whether missing commands / load failures should stop pipeline. | `true` | Set `false` to warn and continue. |
 | `modeling` | `dict` | Passed to `pipeline.create_model`. | config | Must include `strategy`. |
 | `rendering` | `dict` | Passed to `pipeline.run_render`. | config | Required for render stage. |
+| `nested_loop` | `dict` | Used by `main_cube_batch.run` for batched cube dataset generation. | none | Optional; ignored by `main.py`. |
+
+## Batch Loop Parameters (`nested_loop`, for `main_cube_batch.py`)
+
+| Parameter path | Type | Runtime mechanism | Default source | Notes |
+|---|---|---|---|---|
+| `renders_per_model` | `int` | Number of render iterations per modeled cube. | `1` | Clamped to at least `1`. |
+| `max_iter` | `int \| null` | Cap for model iterations. | none | Actual iterations = `min(max_iter, available_iters)`; `null` means no cap. |
+| `seed` | `int \| null` | Seed for nested-loop randomization. | none | Used by rendering sampler and any batch random choices. |
+| `rendering_sampler` | `dict \| list \| scalar` | Randomized override spec merged into `rendering` per render iteration. | none | Must resolve to a dict after sampling. |
+| `output_index_start` | `int` | Starting offset for `view_XXX` numbering in batch mode. | `0` | Combined with per-render captured-frame count to keep filenames continuous. |
+
+Batch runtime flow in `main_cube_batch.py`:
+- Per model iteration: `reset -> preparation -> view_setup -> modeling`
+- Per render iteration: `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+- View indices are kept continuous across all iterations to prevent overwrite.
 
 ## Modeling: Common
 

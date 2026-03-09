@@ -39,15 +39,16 @@ main.run(
 )
 ```
 
-### `main_nested.py`
+### `main_cube_batch.py`
 資料集用巢狀迴圈（`model loop x render loop`）。
 目前限制：只支援 `modeling.strategy: cube`。
 
 ```python
-import main_nested
-main_nested.run(
+import main_cube_batch
+main_cube_batch.run(
     config_name="cube_render.yaml",
     renders_per_model=4,
+    max_iter=3,
     start_face_index=0,
     faces_per_model=6,
     seed=42,
@@ -197,12 +198,18 @@ main_nested.run(
 - `only_layers`：只顯示指定圖層來輸出 mask
 - `hide_layers`：輸出 mask 時隱藏指定圖層
 
-### 4) `nested_loop`（`main_nested.py`）
-可選區塊，用於每個 cube 模型產生多組隨機渲染：
+### 4) `nested_loop`（`main_cube_batch.py`）
+可選區塊，用於控制 batch iteration 與每個模型的多組渲染：
 - `renders_per_model`
+- `max_iter`（限制模型 iteration 上限；實際次數 = `min(max_iter, available_iters)`）
+- `output_index_start`（`view_XXX` 命名起始編號）
 - `seed`
-- `layer_material_choices`
 - `rendering_sampler`
+
+`main_cube_batch.py` 目前流程：
+- 每個模型 iteration：`reset -> preparation -> view_setup -> modeling`
+- 每個渲染 iteration：`clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+- 透過 `output_index_offset` 讓 render view id 跨 iteration 連續，避免覆蓋檔案。
 
 ## 輸出結構
 每個相機姿態的輸出在：
@@ -215,7 +222,7 @@ main_nested.run(
 - `depth_buffer/<basename>.pfm`
 - `normal_buffer/<basename>.pfm`
 
-預設 `basename` 為 `view_XXX`。nested run 可覆寫命名格式。
+預設 `basename` 為 `view_XXX`。batch 模式下會跨 iteration 連續編號，避免覆蓋。
 
 ## 圖層管理重點
 - 支援階層式圖層路徑（例如 `defects::mask::crack`），會自動建立。
@@ -226,7 +233,7 @@ main_nested.run(
 - 方便透過 hide/show layer 進行 mask annotation capture。
 
 ## 設定檔範例
-- Cube 本機設定（建議執行入口）：`configs/cube_render.local.yaml`
+- Cube 本機設定（建議執行入口）：`configs/cube.local.yaml`
 - Component 本機設定（建議執行入口）：`configs/component.local.yaml`
 - Render 區塊：`configs/cube_render.yaml`、`configs/component_render.yaml`
 - 建模預設值：`configs/cube_defaults.yaml`、`configs/component_defaults.yaml`
@@ -236,7 +243,7 @@ main_nested.run(
 
 ## 專案結構
 - `main.py`：stage runner
-- `main_nested.py`：巢狀模型/渲染迴圈（cube）
+- `main_cube_batch.py`：巢狀模型/渲染迴圈（cube）
 - `main_demo.py`：demo 工具
 - `configs/`：YAML 設定檔
 - `utils_loc/pipeline.py`：流程編排（`prepare`、`create_model`、`run_render`、`run_render_demo`）

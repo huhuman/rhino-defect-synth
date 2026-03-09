@@ -18,7 +18,7 @@
 |---|---|
 | `cube_base.yaml` | cube 基底組合（`cube_defaults + cube_defect_defaults + cube_render`）加上 `preparation`。 |
 | `cube_render.yaml` | cube 的 render/view 區塊。 |
-| `cube_render.local.yaml` | cube 本機覆蓋設定。 |
+| `cube.local.yaml` | cube 本機覆蓋設定。 |
 | `component_base.yaml` | component 基底組合（`component_defaults + component_defect_defaults + component_render`）加上 `preparation`。 |
 | `component_render.yaml` | component 的 render/view 區塊。 |
 | `component.local.yaml` | component 本機覆蓋設定。 |
@@ -45,6 +45,22 @@
 | `preparation.plugin_autoload.strict` | `bool` | 命令缺失或載入失敗時是否直接中止流程。 | `true` | 設 `false` 則警告後繼續。 |
 | `modeling` | `dict` | 傳入 `pipeline.create_model`。 | config | 需包含 `strategy`。 |
 | `rendering` | `dict` | 傳入 `pipeline.run_render`。 | config | render stage 必要。 |
+| `nested_loop` | `dict` | 由 `main_cube_batch.run` 使用，用於 cube 批次資料產生。 | 無 | 可選；`main.py` 不會使用。 |
+
+## Batch 迴圈參數（`nested_loop`，給 `main_cube_batch.py`）
+
+| 參數路徑 | 型別 | 運作機制 | 預設來源 | 備註 |
+|---|---|---|---|---|
+| `renders_per_model` | `int` | 每個模型 iteration 要跑幾次 render iteration。 | `1` | 會至少夾到 `1`。 |
+| `max_iter` | `int \| null` | 模型 iteration 上限。 | 無 | 實際次數 = `min(max_iter, available_iters)`；`null` 代表不限制。 |
+| `seed` | `int \| null` | nested-loop 隨機化種子。 | 無 | 用於 rendering sampler 與 batch 隨機抽樣。 |
+| `rendering_sampler` | `dict \| list \| scalar` | 每次 render iteration 對 `rendering` 的隨機覆蓋規格。 | 無 | 抽樣後必須可解析為 dict。 |
+| `output_index_start` | `int` | batch 模式 `view_XXX` 命名起始 offset。 | `0` | 會和每次 capture 影格數累加，確保檔名連續。 |
+
+`main_cube_batch.py` 目前執行流程：
+- 每個模型 iteration：`reset -> preparation -> view_setup -> modeling`
+- 每個渲染 iteration：`clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+- view index 會跨 iteration 連續，避免覆蓋前次輸出。
 
 ## Modeling：共用
 
