@@ -1,15 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Rhino;
 using Rhino.Commands;
+using Rhino.DocObjects;
 using Rhino.Display;
 using Rhino.Geometry;
 using Rhino.Input;
@@ -19,6 +18,22 @@ namespace RhinoChannelsPlugin.Commands
     [SupportedOSPlatform("windows")]
     public sealed class CaptureBaseColorMaskCommand : Command
     {
+        private readonly struct LayerMaskEntry
+        {
+            public LayerMaskEntry(int index, Color color, string name, Guid[] objectIds)
+            {
+                Index = index;
+                Color = color;
+                Name = name;
+                ObjectIds = objectIds;
+            }
+
+            public int Index { get; }
+            public Color Color { get; }
+            public string Name { get; }
+            public Guid[] ObjectIds { get; }
+        }
+
         public override string EnglishName => "CaptureBaseColorMask";
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
@@ -71,36 +86,72 @@ namespace RhinoChannelsPlugin.Commands
                 RhinoApp.WriteLine(
                     $"CaptureBaseColorMask: using view '{view.ActiveViewport.Name}', source={srcSize.Width}x{srcSize.Height}, output={outWidth}x{outHeight}.");
 
-                var previousMode = view.ActiveViewport.DisplayMode;
-                var maskMode = FindMaskDisplayMode();
-                if (maskMode != null)
-                    view.ActiveViewport.DisplayMode = maskMode;
-
+                var objectVisibilitySnapshot = SnapshotObjectVisibility(doc);
                 var changedAa = TrySetOpenGlAntialiasLevel(0, out var prevAaLevel);
+
                 try
                 {
                     view.Redraw();
 
-                    using var captured = CaptureMaskBitmap(view, outWidth, outHeight);
-                    var validMask = CaptureValidMask(view.ActiveViewport, srcSize.Width, srcSize.Height);
-                    var layerPalette = CollectVisibleLayerColors(doc);
-                    using var quantized = QuantizeToLayerColors(
-                        captured,
-                        validMask,
-                        srcSize.Width,
-                        srcSize.Height,
-                        outWidth,
-                        outHeight,
-                        layerPalette,
-                        Color.White);
+                    var maskLayers = CollectVisibleLayersWithObjects(doc);
+                    RhinoApp.WriteLine($"CaptureBaseColorMask: visible mask layers with objects={maskLayers.Count}.");
 
-                    WritePng(maskPath, quantized);
+                    var srcWidth = srcSize.Width;
+                    var srcHeight = srcSize.Height;
+                    var pixelCount = srcWidth * srcHeight;
+
+                    var basePoints = new Point3d[pixelCount];
+                    var baseValid = new bool[pixelCount];
+                    CaptureWorldPoints(view.ActiveViewport, srcWidth, srcHeight, basePoints, baseValid);
+
+                    var srcArgb = new int[pixelCount];
+                    var backgroundArgb = Color.White.ToArgb();
+                    for (var i = 0; i < srcArgb.Length; i++)
+                        srcArgb[i] = backgroundArgb;
+
+                    var pointTolerance = Math.Max(doc.ModelAbsoluteTolerance * 0.1, 1e-6);
+                    var pointToleranceSq = pointTolerance * pointTolerance;
+                    var initiallyVisibleObjectIds = new List<Guid>();
+                    foreach (var pair in objectVisibilitySnapshot)
+                    {
+                        if (pair.Value)
+                            initiallyVisibleObjectIds.Add(pair.Key);
+                    }
+
+                    foreach (var layer in maskLayers)
+                    {
+                        SetOnlyObjectsVisible(doc, initiallyVisibleObjectIds, layer.ObjectIds);
+                        view.Redraw();
+
+                        var layerPoints = new Point3d[pixelCount];
+                        var layerValid = new bool[pixelCount];
+                        CaptureWorldPoints(view.ActiveViewport, srcWidth, srcHeight, layerPoints, layerValid);
+
+                        var layerArgb = layer.Color.ToArgb();
+                        var hitCount = 0;
+
+                        for (var idx = 0; idx < pixelCount; idx++)
+                        {
+                            if (!baseValid[idx] || !layerValid[idx])
+                                continue;
+
+                            if (!PointsMatch(basePoints[idx], layerPoints[idx], pointToleranceSq))
+                                continue;
+
+                            srcArgb[idx] = layerArgb;
+                            hitCount++;
+                        }
+
+                        RhinoApp.WriteLine($"CaptureBaseColorMask: layer '{layer.Name}' visible pixels={hitCount}.");
+                    }
+
+                    WriteMaskPng(maskPath, srcArgb, srcWidth, srcHeight, outWidth, outHeight);
                 }
                 finally
                 {
+                    RestoreObjectVisibility(doc, objectVisibilitySnapshot);
                     if (changedAa)
                         TrySetOpenGlAntialiasLevel(prevAaLevel, out _);
-                    view.ActiveViewport.DisplayMode = previousMode;
                     view.Redraw();
                 }
 
@@ -125,44 +176,106 @@ namespace RhinoChannelsPlugin.Commands
             return value;
         }
 
-        private static Bitmap CaptureMaskBitmap(RhinoView view, int outWidth, int outHeight)
+        private static Dictionary<Guid, bool> SnapshotObjectVisibility(RhinoDoc doc)
         {
-            var capture = new ViewCapture
+            var snapshot = new Dictionary<Guid, bool>();
+            foreach (var obj in doc.Objects)
             {
-                Width = outWidth,
-                Height = outHeight,
-                ScaleScreenItems = false,
-                DrawAxes = false,
-                DrawGrid = false,
-                DrawGridAxes = false,
-                TransparentBackground = false,
-            };
+                if (obj == null || obj.IsDeleted)
+                    continue;
+                snapshot[obj.Id] = obj.Attributes.Visible;
+            }
+            return snapshot;
+        }
 
-            var bitmap = capture.CaptureToBitmap(view);
-            if (bitmap == null)
-                throw new InvalidOperationException("ViewCapture.CaptureToBitmap returned no bitmap for mask output.");
-
-            if (bitmap.Width == outWidth && bitmap.Height == outHeight)
-                return bitmap;
-
-            using (bitmap)
+        private static void RestoreObjectVisibility(RhinoDoc doc, IReadOnlyDictionary<Guid, bool> snapshot)
+        {
+            foreach (var pair in snapshot)
             {
-                return ResizeBitmap(bitmap, outWidth, outHeight);
+                var obj = doc.Objects.FindId(pair.Key);
+                if (obj == null || obj.IsDeleted)
+                    continue;
+                SetObjectVisible(doc, pair.Key, pair.Value);
             }
         }
 
-        private static Bitmap ResizeBitmap(Bitmap source, int width, int height)
+        private static List<LayerMaskEntry> CollectVisibleLayersWithObjects(RhinoDoc doc)
         {
-            var resized = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            using var g = Graphics.FromImage(resized);
-            g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.SmoothingMode = SmoothingMode.None;
-            g.DrawImage(source, new Rectangle(0, 0, width, height));
-            return resized;
+            var objectIdsByLayer = new Dictionary<int, List<Guid>>();
+            foreach (var obj in doc.Objects)
+            {
+                if (obj == null || obj.IsDeleted)
+                    continue;
+                if (!obj.Attributes.Visible)
+                    continue;
+
+                var layerIndex = obj.Attributes.LayerIndex;
+                if (layerIndex < 0 || layerIndex >= doc.Layers.Count)
+                    continue;
+
+                var layer = doc.Layers[layerIndex];
+                if (layer == null || layer.IsDeleted || !layer.IsVisible)
+                    continue;
+
+                if (!objectIdsByLayer.TryGetValue(layerIndex, out var ids))
+                {
+                    ids = new List<Guid>();
+                    objectIdsByLayer[layerIndex] = ids;
+                }
+                ids.Add(obj.Id);
+            }
+
+            var layers = new List<LayerMaskEntry>();
+            for (var i = 0; i < doc.Layers.Count; i++)
+            {
+                if (!objectIdsByLayer.TryGetValue(i, out var ids))
+                    continue;
+
+                var layer = doc.Layers[i];
+                if (layer == null || layer.IsDeleted || !layer.IsVisible)
+                    continue;
+
+                var name = string.IsNullOrWhiteSpace(layer.FullPath)
+                    ? (string.IsNullOrWhiteSpace(layer.Name) ? $"Layer_{i}" : layer.Name)
+                    : layer.FullPath;
+                layers.Add(new LayerMaskEntry(i, layer.Color, name, ids.ToArray()));
+            }
+
+            return layers;
         }
 
-        private static bool[] CaptureValidMask(RhinoViewport viewport, int width, int height)
+        private static void SetOnlyObjectsVisible(
+            RhinoDoc doc,
+            IReadOnlyList<Guid> candidateObjectIds,
+            IReadOnlyList<Guid> targetVisibleObjectIds)
+        {
+            var targetSet = new HashSet<Guid>(targetVisibleObjectIds);
+            foreach (var objectId in candidateObjectIds)
+            {
+                var shouldBeVisible = targetSet.Contains(objectId);
+                SetObjectVisible(doc, objectId, shouldBeVisible);
+            }
+        }
+
+        private static void SetObjectVisible(RhinoDoc doc, Guid objectId, bool visible)
+        {
+            var obj = doc.Objects.FindId(objectId);
+            if (obj == null || obj.IsDeleted)
+                return;
+            if (obj.Attributes.Visible == visible)
+                return;
+
+            var attrs = obj.Attributes.Duplicate();
+            attrs.Visible = visible;
+            doc.Objects.ModifyAttributes(objectId, attrs, true);
+        }
+
+        private static void CaptureWorldPoints(
+            RhinoViewport viewport,
+            int width,
+            int height,
+            Point3d[] points,
+            bool[] valid)
         {
             using var zcap = new ZBufferCapture(viewport);
             zcap.ShowIsocurves(false);
@@ -173,73 +286,54 @@ namespace RhinoChannelsPlugin.Commands
             zcap.ShowAnnotations(false);
             zcap.ShowLights(false);
 
-            var valid = new bool[width * height];
             for (var y = 0; y < height; y++)
             {
                 for (var x = 0; x < width; x++)
                 {
                     var idx = (y * width) + x;
-                    valid[idx] = zcap.WorldPointAt(x, y).IsValid;
+                    var p = zcap.WorldPointAt(x, y);
+                    points[idx] = p;
+                    valid[idx] = p.IsValid;
                 }
             }
-            return valid;
         }
 
-        private static Bitmap QuantizeToLayerColors(
-            Bitmap source,
-            bool[] validMask,
+        private static bool PointsMatch(Point3d a, Point3d b, double toleranceSquared)
+        {
+            return a.IsValid && b.IsValid && a.DistanceToSquared(b) <= toleranceSquared;
+        }
+
+        private static void WriteMaskPng(
+            string path,
+            int[] srcArgb,
             int srcWidth,
             int srcHeight,
             int outWidth,
-            int outHeight,
-            IReadOnlyList<Color> layerPalette,
-            Color background)
+            int outHeight)
         {
-            using var sourceArgb = ConvertToArgb32(source);
-            var output = new Bitmap(outWidth, outHeight, PixelFormat.Format32bppArgb);
-
+            using var bitmap = new Bitmap(outWidth, outHeight, PixelFormat.Format32bppArgb);
             var rect = new Rectangle(0, 0, outWidth, outHeight);
-            var srcData = sourceArgb.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-            var dstData = output.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            var dstData = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
 
             try
             {
-                var srcStride = Math.Abs(srcData.Stride);
                 var dstStride = Math.Abs(dstData.Stride);
-                var srcBytes = new byte[srcStride * outHeight];
                 var dstBytes = new byte[dstStride * outHeight];
-                Marshal.Copy(srcData.Scan0, srcBytes, 0, srcBytes.Length);
 
                 for (var y = 0; y < outHeight; y++)
                 {
                     var sy = MapCoord(y, outHeight, srcHeight);
-                    var srcRow = srcData.Stride >= 0 ? y * srcStride : (outHeight - 1 - y) * srcStride;
                     var dstRow = dstData.Stride >= 0 ? y * dstStride : (outHeight - 1 - y) * dstStride;
                     for (var x = 0; x < outWidth; x++)
                     {
                         var sx = MapCoord(x, outWidth, srcWidth);
-                        var validIdx = (sy * srcWidth) + sx;
+                        var srcIdx = (sy * srcWidth) + sx;
+                        var argb = srcArgb[srcIdx];
+
                         var dstIdx = dstRow + (x * 4);
-                        Color outColor;
-
-                        if (!validMask[validIdx])
-                        {
-                            outColor = background;
-                        }
-                        else
-                        {
-                            var srcIdx = srcRow + (x * 4);
-                            var sample = Color.FromArgb(
-                                srcBytes[srcIdx + 3],
-                                srcBytes[srcIdx + 2],
-                                srcBytes[srcIdx + 1],
-                                srcBytes[srcIdx]);
-                            outColor = FindNearestColor(sample, layerPalette);
-                        }
-
-                        dstBytes[dstIdx] = outColor.B;
-                        dstBytes[dstIdx + 1] = outColor.G;
-                        dstBytes[dstIdx + 2] = outColor.R;
+                        dstBytes[dstIdx] = (byte)(argb & 0xFF); // B
+                        dstBytes[dstIdx + 1] = (byte)((argb >> 8) & 0xFF); // G
+                        dstBytes[dstIdx + 2] = (byte)((argb >> 16) & 0xFF); // R
                         dstBytes[dstIdx + 3] = 255;
                     }
                 }
@@ -248,74 +342,14 @@ namespace RhinoChannelsPlugin.Commands
             }
             finally
             {
-                sourceArgb.UnlockBits(srcData);
-                output.UnlockBits(dstData);
+                bitmap.UnlockBits(dstData);
             }
 
-            return output;
-        }
-
-        private static Bitmap ConvertToArgb32(Bitmap bitmap)
-        {
-            if (bitmap.PixelFormat == PixelFormat.Format32bppArgb &&
-                bitmap.Width > 0 &&
-                bitmap.Height > 0)
-            {
-                return (Bitmap)bitmap.Clone();
-            }
-
-            var converted = new Bitmap(bitmap.Width, bitmap.Height, PixelFormat.Format32bppArgb);
-            using var g = Graphics.FromImage(converted);
-            g.DrawImage(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
-            return converted;
-        }
-
-        private static Color FindNearestColor(Color sample, IReadOnlyList<Color> palette)
-        {
-            if (palette.Count == 0)
-                return sample;
-
-            var best = palette[0];
-            var bestDist = ColorDistanceSquared(sample, best);
-            for (var i = 1; i < palette.Count; i++)
-            {
-                var candidate = palette[i];
-                var dist = ColorDistanceSquared(sample, candidate);
-                if (dist < bestDist)
-                {
-                    bestDist = dist;
-                    best = candidate;
-                }
-            }
-
-            return best;
-        }
-
-        private static int ColorDistanceSquared(Color a, Color b)
-        {
-            var dr = a.R - b.R;
-            var dg = a.G - b.G;
-            var db = a.B - b.B;
-            return (dr * dr) + (dg * dg) + (db * db);
-        }
-
-        private static List<Color> CollectVisibleLayerColors(RhinoDoc doc)
-        {
-            var colors = new List<Color>();
-            var seen = new HashSet<int>();
-
-            foreach (var layer in doc.Layers)
-            {
-                if (layer == null || layer.IsDeleted || !layer.IsVisible)
-                    continue;
-
-                var color = layer.Color;
-                var argb = color.ToArgb();
-                if (seen.Add(argb))
-                    colors.Add(color);
-            }
-
-            return colors;
+            var dir = Path.GetDirectoryName(path);
+            if (string.IsNullOrEmpty(dir))
+                dir = ".";
+            Directory.CreateDirectory(dir);
+            bitmap.Save(path, ImageFormat.Png);
         }
 
         private static int MapCoord(int coord, int outSize, int srcSize)
@@ -331,52 +365,17 @@ namespace RhinoChannelsPlugin.Commands
             return mapped;
         }
 
-        private static void WritePng(string path, Bitmap bitmap)
-        {
-            var dir = Path.GetDirectoryName(path);
-            if (string.IsNullOrEmpty(dir))
-                dir = ".";
-            Directory.CreateDirectory(dir);
-            bitmap.Save(path, ImageFormat.Png);
-        }
-
-        private static DisplayModeDescription? FindMaskDisplayMode()
-        {
-            return DisplayModeDescription.FindByName("Flat Shade")
-                   ?? DisplayModeDescription.FindByName("Base Color");
-        }
-
         private static bool TrySetOpenGlAntialiasLevel(int level, out int previousLevel)
         {
             previousLevel = 0;
 
             try
             {
-                var oglType = typeof(Rhino.ApplicationSettings.OpenGLSettings);
-                var prop = oglType.GetProperty("AntialiasLevel", BindingFlags.Public | BindingFlags.Static);
-                if (prop == null || !prop.CanRead || !prop.CanWrite)
-                    return false;
-
-                var currentRaw = prop.GetValue(null, null);
-                if (currentRaw == null)
-                    return false;
-
-                previousLevel = Convert.ToInt32(currentRaw, CultureInfo.InvariantCulture);
+                previousLevel = (int)Rhino.ApplicationSettings.OpenGLSettings.AntialiasLevel;
                 if (previousLevel == level)
                     return false;
 
-                var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
-                object coerced;
-                if (targetType.IsEnum)
-                {
-                    coerced = Enum.ToObject(targetType, level);
-                }
-                else
-                {
-                    coerced = Convert.ChangeType(level, targetType, CultureInfo.InvariantCulture) ?? level;
-                }
-
-                prop.SetValue(null, coerced, null);
+                Rhino.ApplicationSettings.OpenGLSettings.AntialiasLevel = (Rhino.AntialiasLevel)level;
                 return true;
             }
             catch
