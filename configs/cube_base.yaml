@@ -145,7 +145,7 @@ preparation:
     "crack::CS3": *cube_erosion_materials
   colors:
     "cube::face": Black
-    "cube::erosion": Gray
+    "cube::erosion": Black
     "crack::CS1": Green
     "crack::CS2": Yellow
     "crack::CS3": Orange

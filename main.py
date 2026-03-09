@@ -74,6 +74,8 @@ def setup_render_view(cfg=None):
     view_setup_cfg = cfg.get("view_setup") or {}
     only_set = _normalize_layer_name_set(view_setup_cfg.get("only_layers"))
     hide_set = _normalize_layer_name_set(view_setup_cfg.get("hide_layers"))
+    if not only_set and not hide_set:
+        return
 
     for layer in sc.doc.Layers:
         if not layer.Name:
