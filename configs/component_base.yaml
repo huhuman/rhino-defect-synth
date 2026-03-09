@@ -4,17 +4,21 @@ extends:
   - component_render.yaml
 
 preparation:
+  builtin_material_library:
+    category: ["Architectural"]
+    subcategory1: ["Wall"]
+    subcategory2: ["Concrete"]
   materials:
-    "component::slab": "Concrete rusty"
-    "component::beam": "Concrete light"
-    "component::parapet": "Concrete rusty"
-    "component::bearing": "Metal029_2K"
-    "component::pier": "Concrete rusty"
-    "defects::geometry::crack": "Concrete rusty"
-    "defects::geometry::efflore": "Concrete light"
-    "defects::geometry::efflore_outer": "Concrete rusty"
-    "defects::geometry::spall": "Concrete rusty"
-    "defects::geometry::exposed_rebar": "Metal029_2K"
+    "component::slab": ["Concrete rusty"]
+    "component::beam": ["Concrete light"]
+    "component::parapet": ["Concrete rusty"]
+    "component::bearing": ["Metal029_2K"]
+    "component::pier": ["Concrete rusty"]
+    "defects::geometry::crack": ["Concrete rusty"]
+    "defects::geometry::efflore": ["Concrete light"]
+    "defects::geometry::efflore_outer": ["Concrete rusty"]
+    "defects::geometry::spall": ["Concrete rusty"]
+    "defects::geometry::exposed_rebar": ["Metal029_2K"]
   colors:
     "component::slab": Red
     "component::beam": Blue

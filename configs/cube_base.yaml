@@ -4,12 +4,16 @@ extends:
   - cube_render.yaml
 
 preparation:
+  builtin_material_library:
+    category: ["Architectural"]
+    subcategory1: ["Wall"]
+    subcategory2: ["Concrete"]
   texture_materials:
     texture_root_dir: "C:/path/to/your/texture_root"
     recursive: true
   materials:
-    "geometry::cube": Concrete light
-    "geometry::crack": Concrete rusty
+    "geometry::cube": ["Concrete light"]
+    "geometry::crack": ["Concrete rusty"]
   colors:
     "geometry::cube": Black
     "geometry::crack": Red

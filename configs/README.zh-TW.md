@@ -33,10 +33,13 @@
 | `extends` | `string | list[string]` | 載入父設定（可多個）並先行合併。 | 無 | 路徑在 `configs/` 下解析。 |
 | `view_setup.only_layers` | `string | list[string]` | `main.setup_render_view` 只顯示匹配層。 | 無 | 支援 `a::b` 階層匹配。 |
 | `view_setup.hide_layers` | `string | list[string]` | 額外隱藏指定層。 | 無 | 在可見性流程後套用。 |
-| `preparation.materials` | `dict[str,str]` | `pipeline.prepare` 的圖層材質映射。 | base config | 交給 `create_layers`。 |
+| `preparation.materials` | `dict[str,str \| list[str]]` | 每個圖層可設定多個材質選項；preparation 會先過濾不存在者、隨機挑一個，並只匯入被選中的材質。 | base config | 交給 `create_layers`。 |
+| `preparation.seed` | `int \| null` | preparation 材質選項隨機挑選的 seed。 | 無 | `null` 代表非固定。 |
 | `preparation.colors` | `dict[str,str]` | `pipeline.prepare` 的圖層顏色映射。 | base config | 建立圖層時使用。 |
 | `preparation.texture_materials.texture_root_dir` | `string | null` | 若設定，從資料夾建立材質。 | 無 | 可選。 |
 | `preparation.texture_materials.recursive` | `bool` | 紋理遞迴掃描開關。 | `true` | 僅在設定 texture root 時生效。 |
+| `preparation.material_search_paths` | `string \| list[string] \| null` | 額外材質資料夾（用材質名稱找檔案）。 | 無 | 可掛自訂 material library。 |
+| `preparation.builtin_material_library.{category,subcategory1,subcategory2}` | `list[string]` | 內建材質資料夾查找路徑設定。 | `["Architectural"] / ["Wall"] / ["Concrete"]` | 三個 list 以同 index 配對；只使用 `min(len(category), len(subcategory1), len(subcategory2))` 組。 |
 | `modeling` | `dict` | 傳入 `pipeline.create_model`。 | config | 需包含 `strategy`。 |
 | `rendering` | `dict` | 傳入 `pipeline.run_render`。 | config | render stage 必要。 |
 

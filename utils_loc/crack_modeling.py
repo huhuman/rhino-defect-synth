@@ -63,8 +63,8 @@ def create_crack(
     inward_dir=None,
     d1_range=(0.5, 2.5),
     delta_depth_range=(10.0, 30.0),
-    layer_crack_extrusion="crack_extrusion",
-    layer_parent_surface="cube",
+    layer_crack_extrusion="geometry::crack",
+    layer_parent_surface="geometry::cube",
     cleanup_inputs=True,
     rng=None,
 ):

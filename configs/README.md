@@ -33,10 +33,13 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `extends` | `string | list[string]` | Parent config(s) to merge before current config. | none | Paths are resolved under `configs/`. |
 | `view_setup.only_layers` | `string | list[string]` | If set, only matched layers are visible in `main.setup_render_view`. | none | Supports hierarchical matching like `a::b`. |
 | `view_setup.hide_layers` | `string | list[string]` | Hides layers after visibility pass. | none | Applied in addition to `only_layers`. |
-| `preparation.materials` | `dict[str,str]` | Layer-to-render-material mapping in `pipeline.prepare`. | base config | Used by `create_layers`. |
+| `preparation.materials` | `dict[str,str \| list[str]]` | Per-layer material options; preparation filters unavailable options, randomly picks one, then imports only selected materials. | base config | Used by `create_layers`. |
+| `preparation.seed` | `int \| null` | Optional random seed for material-option selection in preparation. | none | `null` keeps non-deterministic selection. |
 | `preparation.colors` | `dict[str,str]` | Layer color mapping in `pipeline.prepare`. | base config | Required by layer creation. |
 | `preparation.texture_materials.texture_root_dir` | `string | null` | If set, imports texture materials from this folder. | none | Optional convenience. |
 | `preparation.texture_materials.recursive` | `bool` | Recursive texture scan toggle. | `true` | Used only when texture root is set. |
+| `preparation.material_search_paths` | `string \| list[string] \| null` | Extra folders to resolve named material files. | none | Helpful for custom material libraries outside built-in path. |
+| `preparation.builtin_material_library.{category,subcategory1,subcategory2}` | `list[string]` | Built-in material folder selectors for name-based lookup/import. | `["Architectural"] / ["Wall"] / ["Concrete"]` | Lists are matched by index; only `min(len(category), len(subcategory1), len(subcategory2))` triplets are used. |
 | `modeling` | `dict` | Passed to `pipeline.create_model`. | config | Must include `strategy`. |
 | `rendering` | `dict` | Passed to `pipeline.run_render`. | config | Required for render stage. |
 

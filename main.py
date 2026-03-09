@@ -6,6 +6,7 @@ import scriptcontext as sc
 import rhinoscriptsyntax as rs
 
 from utils_loc.config import load_config
+from utils_loc.materials import clear_imported_materials_from_doc
 from utils_loc.pipeline import create_model, prepare, run_render
 
 STAGE_ORDER = (
@@ -33,6 +34,7 @@ def reset():
     )
     if objs:
         rs.DeleteObjects(objs)
+    clear_imported_materials_from_doc()
 
 
 def _normalize_layer_name_set(layer_names):
@@ -155,7 +157,20 @@ def run(
     cfg = context["cfg"] or {}
 
     if "preparation" in selected_stages:
-        time_stage("preparation", prepare, stage_times, params=cfg.get("preparation"))
+        preparation_params = dict(cfg.get("preparation") or {})
+        exclude_layer_prefixes = list(preparation_params.get("exclude_layer_prefixes") or [])
+
+        modeling_cfg = dict(cfg.get("modeling") or {})
+        if str(modeling_cfg.get("strategy") or "").lower() == "component":
+            component_cfg = dict(modeling_cfg.get("component") or {})
+            normal_cfg = dict(component_cfg.get("surface_normals") or {})
+            if not bool(normal_cfg.get("enabled", False)):
+                normal_layer = str(normal_cfg.get("layer") or "component::normal_arrows")
+                exclude_layer_prefixes.append(normal_layer)
+
+        if exclude_layer_prefixes:
+            preparation_params["exclude_layer_prefixes"] = exclude_layer_prefixes
+        time_stage("preparation", prepare, stage_times, params=preparation_params)
 
     if "view_setup" in selected_stages:
         time_stage("view_setup", setup_render_view, stage_times, cfg=cfg)
@@ -213,19 +228,19 @@ if __name__ == "__main__":
     # 3) Preparation only:
     #    run(stages=["preparation"])
 
-    # run(
-    #     config_name="cube_render.yaml",
-    #     stages=["preparation"],
-    #     skip=[],
-    #     start_face_index=0,
-    #     show_cameras=False,
-    #     print_timings=True,
-    # )
-
     run(
-        config_name="component_render.yaml",
+        config_name="cube.local.yaml",
         stages=["reset", "load_config", "preparation", "view_setup", "modeling"],
         skip=[],
+        start_face_index=0,
         show_cameras=False,
         print_timings=True,
     )
+
+    # run(
+    #     config_name="component.local.yaml",
+    #     stages=["reset", "load_config", "preparation", "view_setup", "modeling"],
+    #     skip=[],
+    #     show_cameras=False,
+    #     print_timings=True,
+    # )

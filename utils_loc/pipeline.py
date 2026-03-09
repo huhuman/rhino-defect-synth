@@ -1,7 +1,7 @@
 """Simple entry point orchestrating material, modeling, and rendering steps."""
 
 from utils_loc.crack_modeling import create_crack
-from utils_loc.materials import create_materials_from_texture_dir, import_materials
+from utils_loc.materials import choose_and_import_layer_materials
 from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
 from utils_loc.component_modeling import create_bridge_component
@@ -42,24 +42,33 @@ def prepare(params=None):
     params = params or {}
     exclude_layer_prefixes = params.get("exclude_layer_prefixes") or []
     colors = _filter_layer_map_by_prefix(params.get("colors", {}), exclude_layer_prefixes)
-    materials = _filter_layer_map_by_prefix(params.get("materials", {}), exclude_layer_prefixes)
+    material_choices = _filter_layer_map_by_prefix(params.get("materials", {}), exclude_layer_prefixes)
     texture_materials = params.get("texture_materials", {})
+    builtin_cfg = params.get("builtin_material_library", {}) or {}
 
-    # Materials
-    import_materials()
-    # import_Vray_materials()
-
-    # Optional: build materials from a user texture directory.
-    texture_root_dir = texture_materials.get("texture_root_dir")
-    if texture_root_dir:
-        create_materials_from_texture_dir(
-            texture_root_dir,
-            recursive=texture_materials.get("recursive", True),
+    # Materials: pick one available option per layer, then import only selected ones.
+    selected_materials = choose_and_import_layer_materials(
+        layer_material_choices=material_choices,
+        rng_seed=params.get("seed"),
+        texture_root_dir=texture_materials.get("texture_root_dir"),
+        texture_recursive=texture_materials.get("recursive", True),
+        builtin_category=builtin_cfg.get("category", "Architectural"),
+        builtin_subcategory1=builtin_cfg.get("subcategory1", "Wall"),
+        builtin_subcategory2=builtin_cfg.get("subcategory2", "Concrete"),
+        material_search_paths=params.get("material_search_paths"),
+    )
+    if selected_materials:
+        print(
+            "Preparation layer materials: "
+            + ", ".join(
+                "{}={}".format(layer_name, material_name)
+                for layer_name, material_name in sorted(selected_materials.items())
+            )
         )
-    
+
     # Layers
     create_layers(
-        layer_material_dict=materials,
+        layer_material_dict=selected_materials,
         layer_color_dict=colors,
     )
 
