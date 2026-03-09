@@ -8,6 +8,7 @@ from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
 from utils_loc.component_modeling import create_bridge_component
 from utils_loc.defect_placement import apply_defect_pipeline, get_active_defect_requests
+from utils_loc.plugin_autoload import ensure_plugin_commands
 
 import importlib
 render = importlib.import_module("utils_loc.render")
@@ -42,6 +43,8 @@ def prepare(params=None):
         params (dict): Dictionary containing preparation parameters.
     """
     params = params or {}
+    ensure_plugin_commands(params.get("plugin_autoload"))
+
     exclude_layer_prefixes = params.get("exclude_layer_prefixes") or []
     colors = _filter_layer_map_by_prefix(params.get("colors", {}), exclude_layer_prefixes)
     material_choices = _filter_layer_map_by_prefix(params.get("materials", {}), exclude_layer_prefixes)
