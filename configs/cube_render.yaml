@@ -1,8 +1,4 @@
-view_setup:
-  hide_layers:
-    - "mask::CS1"
-    - "mask::CS2"
-    - "mask::CS3"
+view_setup: {}
 
 rendering:
   width: 1920
@@ -10,14 +6,12 @@ rendering:
   output_dir: "C:/path/to/your/rendered"
   background_wallpaper_dir: "C:/path/to/your/background_wallpapers"
   outputs:
-    scene:
-      hide_layers:
-        - "mask::CS1"
-        - "mask::CS2"
-        - "mask::CS3"
+    scene: {}
     mask:
-      hide_layers:
-        - "geometry::crack"
+      only_layers:
+        - "crack::CS1"
+        - "crack::CS2"
+        - "crack::CS3"
   lighting:
     # Sun is still configurable; face lights are randomized in code.
     sun:

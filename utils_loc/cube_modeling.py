@@ -3,7 +3,6 @@ import Rhino
 import scriptcontext as sc
 import rhinoscriptsyntax as rs
 import os
-import random
 
 from utils_loc.defect_shapes import read_cube_contour_json
 
@@ -11,17 +10,22 @@ from utils_loc.defect_shapes import read_cube_contour_json
 # So the cube spans from -CUBE_LENGTH to +CUBE_LENGTH (edge length = 2 * CUBE_LENGTH).
 CUBE_LENGTH = 500.0  # mm
 
+LAYER_CUBE_FACE = "cube::face"
+LAYER_CUBE_EROSION = "cube::erosion"
 
-def _severity_to_mask_layer(severity):
+
+def _severity_to_crack_layer(severity):
     token = str(severity or "").strip().upper()
     if not token:
         return None
     if token.startswith("CS"):
         suffix = token[2:]
-        return "mask::CS{}".format(suffix)
+        return "crack::CS{}".format(suffix)
     if token.isdigit():
-        return "mask::CS{}".format(token)
-    return "mask::{}".format(token)
+        return "crack::CS{}".format(token)
+    if token.startswith("CRACK::"):
+        return token
+    return "crack::{}".format(token)
 
 
 def _face_projector(face):
@@ -60,9 +64,14 @@ def _build_mask_surfaces(crack_poly_id, hole_poly_ids=None):
     if surface_ids:
         return [sid for sid in surface_ids if sid and rs.IsObject(sid)]
 
-    # Fallback: at least keep the crack boundary as mask if hole trimming fails.
     fallback_ids = rs.AddPlanarSrf(crack_poly_id) or []
     return [sid for sid in fallback_ids if sid and rs.IsObject(sid)]
+
+
+def _delete_objects_if_exist(obj_ids):
+    ids = [obj_id for obj_id in set(obj_ids or []) if obj_id and rs.IsObject(obj_id)]
+    if ids:
+        rs.DeleteObjects(ids)
 
 
 def __create_cube_faces():
@@ -187,6 +196,8 @@ def split_face_and_keep_outer(base_srf_id, cutters):
 
     tol = sc.doc.ModelAbsoluteTolerance
 
+    base_layer = rs.ObjectLayer(base_srf_id)
+
     # Coerce base surface to Brep
     base_brep = rs.coercebrep(base_srf_id)
     if not base_brep:
@@ -237,11 +248,17 @@ def split_face_and_keep_outer(base_srf_id, cutters):
         print("Failed to add outer split Brep.")
         return base_srf_id
 
+    if base_layer and rs.IsLayer(base_layer):
+        rs.ObjectLayer(outer_id, base_layer)
     rs.DeleteObject(base_srf_id)
     return outer_id
 
 
 def create_cube(cube_map_dir, start_face_index=0):
+    for required_layer in (LAYER_CUBE_FACE, LAYER_CUBE_EROSION):
+        if not rs.IsLayer(required_layer):
+            raise ValueError("Layer '{}' does not exist. Please run preparation step first.".format(required_layer))
+
     faces = __create_cube_faces()
 
     filenames = sorted([e for e in os.listdir(cube_map_dir) if e.endswith(".json")])
@@ -252,7 +269,7 @@ def create_cube(cube_map_dir, start_face_index=0):
     layer_cache = {}
     for face_dir, filepath in zip(faces.keys(), filepaths):
         face = faces[face_dir]
-        rs.ObjectLayer(face, "geometry::cube")
+        rs.ObjectLayer(face, LAYER_CUBE_FACE)
         rs.HideObject(face)
 
         contours, base_contours, erode_contours, diff_contours, severities = read_contour_json(filepath)
@@ -267,6 +284,7 @@ def create_cube(cube_map_dir, start_face_index=0):
         crack_items = []
         
         for i in range(n_bases):
+            transient_ids = []
             erode_pts_3d = _center_and_project_points(
                 erode_contours[i]["points"], projector, width_half, height_half
             )
@@ -274,6 +292,8 @@ def create_cube(cube_map_dir, start_face_index=0):
             if not erode_poly_id:
                 print("Skipping empty erode contour at index {} on face {}".format(i, face_dir))
                 continue
+            transient_ids.append(erode_poly_id)
+            rs.ObjectLayer(erode_poly_id, LAYER_CUBE_EROSION)
             
             base_pts_3d = _center_and_project_points(
                 base_contours[i]["points"], projector, width_half, height_half
@@ -281,7 +301,10 @@ def create_cube(cube_map_dir, start_face_index=0):
             base_poly_id = add_polygon_curve(base_pts_3d, close_curve=True)
             if not base_poly_id:
                 print("Skipping empty base contour at index {} on face {}".format(i, face_dir))
+                _delete_objects_if_exist(transient_ids)
                 continue
+            transient_ids.append(base_poly_id)
+            rs.ObjectLayer(base_poly_id, LAYER_CUBE_FACE)
             
             diff_poly_ids = []
             for diff_cnt in diff_contours[i]:
@@ -290,13 +313,15 @@ def create_cube(cube_map_dir, start_face_index=0):
                 )
                 diff_poly_id = add_polygon_curve(diff_pts_3d, close_curve=True)
                 if diff_poly_id:
+                    rs.ObjectLayer(diff_poly_id, LAYER_CUBE_FACE)
                     diff_poly_ids.append(diff_poly_id)
+            transient_ids.extend(diff_poly_ids)
 
             severity = severities[i]
             severity_key = str(severity)
             layer_name = layer_cache.get(severity_key)
             if layer_name is None:
-                layer_name = _severity_to_mask_layer(severity)
+                layer_name = _severity_to_crack_layer(severity)
                 if not layer_name:
                     raise ValueError("Invalid crack severity '{}' on face '{}'.".format(severity, face_dir))
                 if not rs.IsLayer(layer_name):
@@ -304,10 +329,8 @@ def create_cube(cube_map_dir, start_face_index=0):
                 layer_cache[severity_key] = layer_name
 
             crack_poly_ids = []
-            crack_poly_indices = []
             noncrack_poly_ids = []
-            holes_by_parent_index = {}
-            for contour_idx, contour in enumerate(contours[i]):
+            for contour in contours[i]:
                 pts_3d = _center_and_project_points(
                     contour["points"], projector, width_half, height_half
                 )
@@ -317,38 +340,49 @@ def create_cube(cube_map_dir, start_face_index=0):
                 if poly_id:
                     parent_idx = int(contour.get("parent", -1))
                     if parent_idx != -1:
+                        rs.ObjectLayer(poly_id, LAYER_CUBE_FACE)
                         noncrack_poly_ids.append(poly_id)
-                        holes_by_parent_index.setdefault(parent_idx, []).append(poly_id)
                     else:
-                        crack_poly_indices.append(contour_idx)
                         crack_poly_ids.append(poly_id)
+            transient_ids.extend(crack_poly_ids)
+            transient_ids.extend(noncrack_poly_ids)
 
             if not crack_poly_ids:
                 print("Skipping empty contour at index {} on face {}".format(i, face_dir))
+                _delete_objects_if_exist(transient_ids)
                 continue
             
             for poly_id in crack_poly_ids:
                 rs.ObjectLayer(poly_id, layer_name)
-            mask_surface_ids = []
-            for crack_idx, crack_poly_id in zip(crack_poly_indices, crack_poly_ids):
-                crack_holes = holes_by_parent_index.get(crack_idx, [])
-                srf_ids = _build_mask_surfaces(crack_poly_id, crack_holes)
-                for sid in srf_ids:
-                    rs.ObjectLayer(sid, layer_name)
-                mask_surface_ids.extend(srf_ids)
 
-            if mask_surface_ids:
-                cutters.extend(mask_surface_ids)
+            # Keep mask preparation logic for quick re-enable, but skip execution for now.
+            # mask_surface_ids = []
+            # for crack_idx, crack_poly_id in zip(crack_poly_indices, crack_poly_ids):
+            #     crack_holes = holes_by_parent_index.get(crack_idx, [])
+            #     srf_ids = _build_mask_surfaces(crack_poly_id, crack_holes)
+            #     for sid in srf_ids:
+            #         rs.ObjectLayer(sid, layer_name)
+            #     mask_surface_ids.extend(srf_ids)
+
+            erode_surface_ids = rs.AddPlanarSrf(erode_poly_id) or []
+            erode_surface_ids = [sid for sid in erode_surface_ids if sid and rs.IsObject(sid)]
+            if erode_surface_ids:
+                cutters.extend(erode_surface_ids)
                 crack_items.append({
                     "crack_polys": crack_poly_ids,
                     "inside_polys": noncrack_poly_ids,
                     "base_poly": base_poly_id,
                     "offset_poly": erode_poly_id,
                     "diff_polys": diff_poly_ids,
+                    "crack_layer": layer_name,
                 })
+            else:
+                _delete_objects_if_exist(transient_ids)
 
-        split_face_and_keep_outer(face, cutters)
-        rs.ShowObject(face)
+        outer_face = split_face_and_keep_outer(face, cutters)
+        _delete_objects_if_exist(cutters)
+        if outer_face and rs.IsObject(outer_face):
+            rs.ShowObject(outer_face)
         face_cracks[face_dir] = crack_items
         print("Processed face {}: {} contours.".format(face_dir, len(cutters)))
     

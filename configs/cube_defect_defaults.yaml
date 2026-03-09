@@ -23,13 +23,6 @@ modeling:
       recursive: true
       pattern: "*.json"
       file_format: auto
-    layers:
-      geometry:
-        crack: "geometry::crack"
-      mask:
-        crack_cs1: "mask::CS1"
-        crack_cs2: "mask::CS2"
-        crack_cs3: "mask::CS3"
     crack:
       enabled: true
       overview_csv_path: null

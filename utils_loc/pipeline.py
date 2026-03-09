@@ -1,5 +1,7 @@
 """Simple entry point orchestrating material, modeling, and rendering steps."""
 
+import rhinoscriptsyntax as rs
+
 from utils_loc.crack_modeling import create_crack
 from utils_loc.materials import choose_and_import_layer_materials
 from utils_loc.layers import create_layers
@@ -100,18 +102,26 @@ def create_model(params):
             "+z": (0, 0, -1),
             "-z": (0, 0, 1),
         }
-        for face, crack_items in crack_faces.items():
-            print(f"-------- Modeling cracks on face {face} -------")
-            inward = inward_dirs.get(face)
-            for item in crack_items:
-                create_crack(
-                    item.get("crack_polys"),
-                    item.get("inside_polys"),
-                    item.get("base_poly"),
-                    item.get("offset_poly"),
-                    item.get("diff_polys"),
-                    inward_dir=inward,
-                )
+        redraw_was_enabled = bool(rs.EnableRedraw(False))
+        try:
+            for face, crack_items in crack_faces.items():
+                print(f"-------- Modeling cracks on face {face} -------")
+                inward = inward_dirs.get(face)
+                for item in crack_items:
+                    create_crack(
+                        item.get("crack_polys"),
+                        item.get("inside_polys"),
+                        item.get("base_poly"),
+                        item.get("offset_poly"),
+                        item.get("diff_polys"),
+                        inward_dir=inward,
+                        layer_crack_extrusion=item.get("crack_layer") or "crack::CS1",
+                        layer_parent_surface="cube::face",
+                        disable_redraw=False,
+                    )
+        finally:
+            if redraw_was_enabled:
+                rs.EnableRedraw(True)
 
         # Cube workflow uses face crack maps directly; no secondary defect placement stage.
         model_result = {"strategy": "cube", "crack_faces": crack_faces}

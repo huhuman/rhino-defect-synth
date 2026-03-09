@@ -18,7 +18,7 @@ This document is table-first: each parameter is mapped to runtime behavior.
 |---|---|
 | `cube_base.yaml` | Cube base composition (`cube_defaults + cube_defect_defaults + cube_render`) plus `preparation`. |
 | `cube_render.yaml` | Cube render/view block only. |
-| `cube_render.local.yaml` | Local machine override for cube. |
+| `cube.local.yaml` | Local machine override for cube. |
 | `component_base.yaml` | Component base composition (`component_defaults + component_defect_defaults + component_render`) plus `preparation`. |
 | `component_render.yaml` | Component render/view block only. |
 | `component.local.yaml` | Local machine override for component. |
@@ -57,6 +57,7 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `modeling.cube.cube_map_dir` | `string` | Input folder for cube contour/crack maps. | `cube_defaults.yaml` | Required for cube. |
 | `modeling.cube.start_face_index` | `int` | Face offset used by cube modeling. | `cube_defaults.yaml` | Can be overridden by `main.run(start_face_index=...)`. |
 | `modeling.start_face_index` | `int` | Optional runtime override consumed by pipeline for cube branch. | `main.run` argument | If set, takes precedence over `modeling.cube.start_face_index`. |
+| `preparation.colors` (cube) | `dict[str,str]` | Defines strict cube layers checked by runtime before modeling. | `cube_base.yaml` | Must include `cube::face`, `cube::erosion`, and `crack::CS1/2/3`. |
 
 ## Modeling: Component (`modeling.component`)
 
