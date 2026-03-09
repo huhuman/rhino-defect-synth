@@ -119,6 +119,7 @@ def create_model(params):
                         item.get("diff_polys"),
                         inward_dir=inward,
                         layer_crack_extrusion=item.get("crack_layer") or "crack::CS1",
+                        layer_erosion=item.get("crack_layer") or "crack::CS1",
                         layer_parent_surface="cube::face",
                         disable_redraw=False,
                     )

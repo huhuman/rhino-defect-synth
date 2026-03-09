@@ -11,7 +11,6 @@ from utils_loc.defect_shapes import read_cube_contour_json
 CUBE_LENGTH = 500.0  # mm
 
 LAYER_CUBE_FACE = "cube::face"
-LAYER_CUBE_EROSION = "cube::erosion"
 
 
 def _severity_to_crack_layer(severity):
@@ -255,7 +254,7 @@ def split_face_and_keep_outer(base_srf_id, cutters):
 
 
 def create_cube(cube_map_dir, start_face_index=0):
-    for required_layer in (LAYER_CUBE_FACE, LAYER_CUBE_EROSION):
+    for required_layer in (LAYER_CUBE_FACE,):
         if not rs.IsLayer(required_layer):
             raise ValueError("Layer '{}' does not exist. Please run preparation step first.".format(required_layer))
 
@@ -293,7 +292,6 @@ def create_cube(cube_map_dir, start_face_index=0):
                 print("Skipping empty erode contour at index {} on face {}".format(i, face_dir))
                 continue
             transient_ids.append(erode_poly_id)
-            rs.ObjectLayer(erode_poly_id, LAYER_CUBE_EROSION)
             
             base_pts_3d = _center_and_project_points(
                 base_contours[i]["points"], projector, width_half, height_half
@@ -352,6 +350,7 @@ def create_cube(cube_map_dir, start_face_index=0):
                 _delete_objects_if_exist(transient_ids)
                 continue
             
+            rs.ObjectLayer(erode_poly_id, layer_name)
             for poly_id in crack_poly_ids:
                 rs.ObjectLayer(poly_id, layer_name)
 

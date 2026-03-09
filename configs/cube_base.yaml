@@ -88,7 +88,7 @@ preparation:
       "Concrete039_2K-PNG",
       "Concrete040_2K-PNG"
     ]
-    "cube::erosion": &cube_erosion_materials [
+    "crack::CS1": &cube_crack_materials [
       "Conc dark gray",
       "Concrete dark",
       "Concrete rusty",
@@ -140,12 +140,10 @@ preparation:
       "Concrete039_2K-PNG",
       "Concrete040_2K-PNG"
     ]
-    "crack::CS1": *cube_erosion_materials
-    "crack::CS2": *cube_erosion_materials
-    "crack::CS3": *cube_erosion_materials
+    "crack::CS2": *cube_crack_materials
+    "crack::CS3": *cube_crack_materials
   colors:
     "cube::face": Black
-    "cube::erosion": Black
     "crack::CS1": Green
     "crack::CS2": Yellow
     "crack::CS3": Orange
