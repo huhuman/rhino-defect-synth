@@ -221,7 +221,6 @@ By default, `basename` is `view_XXX`. Nested runs can override basename patterns
 - Hierarchical layer paths (for example `defects::mask::crack`) are supported and auto-created.
 - Cube workflow currently uses strict preparation-defined layers:
   - `cube::face`
-  - `cube::erosion`
   - `crack::CS1`, `crack::CS2`, `crack::CS3`
 - In cube mode, mask-surface preparation code is kept in `utils_loc/cube_modeling.py` but intentionally disabled (commented) for now.
 - Defect pipeline separates:

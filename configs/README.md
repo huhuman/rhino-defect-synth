@@ -40,6 +40,9 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `preparation.texture_materials.recursive` | `bool` | Recursive texture scan toggle. | `true` | Used only when texture root is set. |
 | `preparation.material_search_paths` | `string \| list[string] \| null` | Extra folders to resolve named material files. | none | Helpful for custom material libraries outside built-in path. |
 | `preparation.builtin_material_library.{category,subcategory1,subcategory2}` | `list[string]` | Built-in material folder selectors for name-based lookup/import. | `["Architectural"] / ["Wall"] / ["Concrete"]` | Lists are matched by index; only `min(len(category), len(subcategory1), len(subcategory2))` triplets are used. |
+| `preparation.plugin_autoload.path` | `string \| null` | Plugin file path (`.rhp` or `.dll`) used by preparation auto-load. | none | Used only when required commands are missing. |
+| `preparation.plugin_autoload.required_commands` | `string \| list[string]` | Command names that must be available before continuing. | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | If any command is missing, preparation attempts plugin auto-load. |
+| `preparation.plugin_autoload.strict` | `bool` | Whether missing commands / load failures should stop pipeline. | `true` | Set `false` to warn and continue. |
 | `modeling` | `dict` | Passed to `pipeline.create_model`. | config | Must include `strategy`. |
 | `rendering` | `dict` | Passed to `pipeline.run_render`. | config | Required for render stage. |
 
@@ -57,7 +60,7 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `modeling.cube.cube_map_dir` | `string` | Input folder for cube contour/crack maps. | `cube_defaults.yaml` | Required for cube. |
 | `modeling.cube.start_face_index` | `int` | Face offset used by cube modeling. | `cube_defaults.yaml` | Can be overridden by `main.run(start_face_index=...)`. |
 | `modeling.start_face_index` | `int` | Optional runtime override consumed by pipeline for cube branch. | `main.run` argument | If set, takes precedence over `modeling.cube.start_face_index`. |
-| `preparation.colors` (cube) | `dict[str,str]` | Defines strict cube layers checked by runtime before modeling. | `cube_base.yaml` | Must include `cube::face`, `cube::erosion`, and `crack::CS1/2/3`. |
+| `preparation.colors` (cube) | `dict[str,str]` | Defines strict cube layers checked by runtime before modeling. | `cube_base.yaml` | Must include `cube::face` and `crack::CS1/2/3`. |
 
 ## Modeling: Component (`modeling.component`)
 

@@ -36,7 +36,7 @@ Usage (from Python)
 
 Notes
 - `CaptureRenderChannels` captures from the current viewport using `ZBufferCapture` and world-point-derived normals.
-- `CaptureBaseColorMask` captures base-color style output and quantizes pixels to currently visible layer colors, using Z-buffer validity to force background pixels to a fixed background color.
+- `CaptureBaseColorMask` uses `ZBufferCapture` only (no `ViewCapture`) to build a hard-edge mask: it compares full-scene depth points against per-layer depth points and writes each visible pixel as that layer's color.
 - These commands do not invoke the offline render engine, so they should return quickly and avoid long `Processing geometry table` waits.
 
 The Python pipeline calls this command from `utils_loc/outputs.py`.

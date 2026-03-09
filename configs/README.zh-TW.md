@@ -40,6 +40,9 @@
 | `preparation.texture_materials.recursive` | `bool` | 紋理遞迴掃描開關。 | `true` | 僅在設定 texture root 時生效。 |
 | `preparation.material_search_paths` | `string \| list[string] \| null` | 額外材質資料夾（用材質名稱找檔案）。 | 無 | 可掛自訂 material library。 |
 | `preparation.builtin_material_library.{category,subcategory1,subcategory2}` | `list[string]` | 內建材質資料夾查找路徑設定。 | `["Architectural"] / ["Wall"] / ["Concrete"]` | 三個 list 以同 index 配對；只使用 `min(len(category), len(subcategory1), len(subcategory2))` 組。 |
+| `preparation.plugin_autoload.path` | `string \| null` | preparation 自動載入 plugin 的檔案路徑（`.rhp` 或 `.dll`）。 | 無 | 僅在必要命令缺失時使用。 |
+| `preparation.plugin_autoload.required_commands` | `string \| list[string]` | 進入後續流程前必須可用的 Rhino command 名稱。 | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | 任一缺失即觸發 plugin 自動載入。 |
+| `preparation.plugin_autoload.strict` | `bool` | 命令缺失或載入失敗時是否直接中止流程。 | `true` | 設 `false` 則警告後繼續。 |
 | `modeling` | `dict` | 傳入 `pipeline.create_model`。 | config | 需包含 `strategy`。 |
 | `rendering` | `dict` | 傳入 `pipeline.run_render`。 | config | render stage 必要。 |
 
