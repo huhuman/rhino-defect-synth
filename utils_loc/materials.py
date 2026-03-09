@@ -39,6 +39,8 @@ _DEFAULT_BUILTIN_CATEGORY = "Architectural"
 _DEFAULT_BUILTIN_SUBCATEGORY1 = "Wall"
 _DEFAULT_BUILTIN_SUBCATEGORY2 = "Concrete"
 _IMPORTED_RENDER_MATERIAL_NAMES = set()
+_TRACK_SECTION = "rhino_defect_synth"
+_TRACK_ENTRY_IMPORTED_MATERIALS = "imported_render_material_names"
 
 # Last update by 2025/02/13
 # Vray_Material_Metadata = {
@@ -184,7 +186,110 @@ def _index_material_files(material_dirs):
 def _record_imported_material_name(name):
     normalized = _normalize_material_name(name)
     if normalized:
-        _IMPORTED_RENDER_MATERIAL_NAMES.add(normalized.lower())
+        tracked = _get_tracked_material_names()
+        tracked.add(normalized.lower())
+        _set_tracked_material_names(tracked)
+
+
+def _read_doc_string(section, entry):
+    table = getattr(sc.doc, "Strings", None)
+    if table is None:
+        return ""
+
+    key = "{}::{}".format(section, entry)
+    for method_name, args in (
+        ("GetValue", (section, entry)),
+        ("GetString", (section, entry)),
+        ("GetValue", (key,)),
+        ("GetString", (key,)),
+    ):
+        method = getattr(table, method_name, None)
+        if method is None:
+            continue
+        try:
+            value = method(*args)
+        except Exception:
+            continue
+        if value is None:
+            continue
+        text = str(value)
+        if text:
+            return text
+    return ""
+
+
+def _write_doc_string(section, entry, value):
+    table = getattr(sc.doc, "Strings", None)
+    if table is None:
+        return False
+
+    key = "{}::{}".format(section, entry)
+    text = str(value or "")
+    if text:
+        for method_name, args in (
+            ("SetString", (section, entry, text)),
+            ("SetValue", (section, entry, text)),
+            ("SetString", (key, text)),
+            ("SetValue", (key, text)),
+        ):
+            method = getattr(table, method_name, None)
+            if method is None:
+                continue
+            try:
+                method(*args)
+                return True
+            except Exception:
+                continue
+        return False
+
+    for method_name, args in (
+        ("Delete", (section, entry)),
+        ("Delete", (key,)),
+        ("SetString", (section, entry, "")),
+        ("SetValue", (section, entry, "")),
+        ("SetString", (key, "")),
+        ("SetValue", (key, "")),
+    ):
+        method = getattr(table, method_name, None)
+        if method is None:
+            continue
+        try:
+            method(*args)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _load_persisted_tracked_material_names():
+    names = set()
+    payload = _read_doc_string(_TRACK_SECTION, _TRACK_ENTRY_IMPORTED_MATERIALS)
+    for token in payload.splitlines():
+        name = _normalize_material_name(token).lower()
+        if name:
+            names.add(name)
+    return names
+
+
+def _set_tracked_material_names(names):
+    normalized = {
+        _normalize_material_name(name).lower()
+        for name in (names or [])
+        if _normalize_material_name(name)
+    }
+    _IMPORTED_RENDER_MATERIAL_NAMES.clear()
+    _IMPORTED_RENDER_MATERIAL_NAMES.update(normalized)
+    payload = "\n".join(sorted(normalized))
+    _write_doc_string(_TRACK_SECTION, _TRACK_ENTRY_IMPORTED_MATERIALS, payload)
+
+
+def _get_tracked_material_names():
+    tracked = set(_IMPORTED_RENDER_MATERIAL_NAMES)
+    tracked.update(_load_persisted_tracked_material_names())
+    if tracked != _IMPORTED_RENDER_MATERIAL_NAMES:
+        _IMPORTED_RENDER_MATERIAL_NAMES.clear()
+        _IMPORTED_RENDER_MATERIAL_NAMES.update(tracked)
+    return tracked
 
 
 def _import_material_file(filepath):
@@ -877,27 +982,214 @@ def _remove_table_item_at(table, index):
             ]
         )
 
+    before_count = _get_table_count(table)
     for method_name, args in attempts:
         method = getattr(table, method_name, None)
         if method is None:
             continue
         try:
-            method(*args)
-            return True
+            result = method(*args)
         except Exception:
             continue
+        if isinstance(result, bool) and not result:
+            continue
+
+        after_count = _get_table_count(table)
+        if after_count < before_count:
+            return True
+
+        # Some Rhino table APIs return bool success without changing table count
+        # immediately; accept explicit True as successful removal.
+        if isinstance(result, bool) and result:
+            return True
+
+        if item is not None:
+            try:
+                current = table[index]
+            except Exception:
+                return True
+            if current is not item:
+                return True
     return False
+
+
+def _to_index(value, default=-1):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _render_material_name(material):
+    return _normalize_material_name(
+        getattr(material, "DisplayName", None) or getattr(material, "Name", None)
+    ).lower()
+
+
+def _basic_material_name(material):
+    return _normalize_material_name(
+        getattr(material, "Name", None) or getattr(material, "DisplayName", None)
+    ).lower()
+
+
+def _render_material_name_from_index(index):
+    idx = _to_index(index, default=-1)
+    if idx < 0:
+        return ""
+    try:
+        return _render_material_name(sc.doc.RenderMaterials[idx])
+    except Exception:
+        return ""
+
+
+def _basic_material_name_from_index(index):
+    idx = _to_index(index, default=-1)
+    if idx < 0:
+        return ""
+    try:
+        return _basic_material_name(sc.doc.Materials[idx])
+    except Exception:
+        return ""
+
+
+def _collect_table_names(table, name_getter):
+    names = set()
+    for idx in range(_get_table_count(table)):
+        try:
+            item = table[idx]
+        except Exception:
+            continue
+        name = _normalize_material_name(name_getter(item)).lower()
+        if name:
+            names.add(name)
+    return names
+
+
+def _clear_layer_material_references(tracked_names=None):
+    detached = 0
+    for layer in sc.doc.Layers:
+        try:
+            if bool(getattr(layer, "IsDeleted", False)):
+                continue
+        except Exception:
+            pass
+
+        render_name = _render_material_name(getattr(layer, "RenderMaterial", None))
+        if not render_name:
+            render_name = _render_material_name_from_index(
+                getattr(layer, "RenderMaterialIndex", -1)
+            )
+        render_idx = _to_index(getattr(layer, "RenderMaterialIndex", -1), default=-1)
+        basic_idx = _to_index(getattr(layer, "MaterialIndex", -1), default=-1)
+        basic_name = _basic_material_name_from_index(basic_idx)
+
+        if tracked_names is not None:
+            if render_name not in tracked_names and basic_name not in tracked_names:
+                continue
+        else:
+            has_render_ref = bool(render_name) or render_idx >= 0
+            has_basic_ref = bool(basic_name) or basic_idx >= 0
+            if not (has_render_ref or has_basic_ref):
+                continue
+
+        changed = False
+        for attr_name, value in (
+            ("RenderMaterial", None),
+            ("RenderMaterialIndex", -1),
+            ("MaterialIndex", -1),
+        ):
+            if not hasattr(layer, attr_name):
+                continue
+            try:
+                current = getattr(layer, attr_name)
+                if current == value:
+                    continue
+            except Exception:
+                pass
+            try:
+                setattr(layer, attr_name, value)
+                changed = True
+            except Exception:
+                continue
+
+        if not changed:
+            continue
+
+        commit = getattr(layer, "CommitChanges", None)
+        if callable(commit):
+            try:
+                commit()
+            except Exception:
+                pass
+        detached += 1
+    return detached
+
+
+def _clear_object_material_references(tracked_names=None):
+    detached = 0
+    try:
+        material_from_layer = Rhino.DocObjects.ObjectMaterialSource.MaterialFromLayer
+    except Exception:
+        material_from_layer = None
+
+    for rh_obj in sc.doc.Objects:
+        try:
+            attrs = rh_obj.Attributes.Duplicate()
+        except Exception:
+            continue
+
+        material_idx = _to_index(getattr(attrs, "MaterialIndex", -1), default=-1)
+        if tracked_names is not None:
+            basic_name = _basic_material_name_from_index(material_idx)
+            if basic_name not in tracked_names:
+                continue
+        else:
+            if material_idx == -1:
+                continue
+
+        changed = False
+        if hasattr(attrs, "MaterialIndex"):
+            try:
+                if _to_index(attrs.MaterialIndex, default=-1) != -1:
+                    attrs.MaterialIndex = -1
+                    changed = True
+            except Exception:
+                pass
+        if material_from_layer is not None and hasattr(attrs, "MaterialSource"):
+            try:
+                if attrs.MaterialSource != material_from_layer:
+                    attrs.MaterialSource = material_from_layer
+                    changed = True
+            except Exception:
+                pass
+
+        if not changed:
+            continue
+        try:
+            sc.doc.Objects.ModifyAttributes(rh_obj, attrs, True)
+            detached += 1
+        except Exception:
+            continue
+    return detached
+
+
+def _is_default_material(item):
+    try:
+        return bool(getattr(item, "IsDefaultMaterial", False))
+    except Exception:
+        return False
 
 
 def clear_imported_materials_from_doc():
     """
-    Remove materials that were imported/created by this pipeline session.
+    Remove non-default materials from current document tables.
     """
-    if not _IMPORTED_RENDER_MATERIAL_NAMES:
-        return 0
-
     removed = 0
-    tracked = set(_IMPORTED_RENDER_MATERIAL_NAMES)
+    removed_render = 0
+    removed_basic = 0
+
+    detached_layers = _clear_layer_material_references(tracked_names=None)
+    detached_objects = _clear_object_material_references(tracked_names=None)
 
     render_table = sc.doc.RenderMaterials
     for idx in range(_get_table_count(render_table) - 1, -1, -1):
@@ -905,13 +1197,11 @@ def clear_imported_materials_from_doc():
             mat = render_table[idx]
         except Exception:
             continue
-        name = _normalize_material_name(
-            getattr(mat, "DisplayName", None) or getattr(mat, "Name", None)
-        ).lower()
-        if not name or name not in tracked:
+        if _is_default_material(mat):
             continue
         if _remove_table_item_at(render_table, idx):
             removed += 1
+            removed_render += 1
 
     basic_table = sc.doc.Materials
     for idx in range(_get_table_count(basic_table) - 1, -1, -1):
@@ -919,13 +1209,22 @@ def clear_imported_materials_from_doc():
             mat = basic_table[idx]
         except Exception:
             continue
-        name = _normalize_material_name(getattr(mat, "Name", None)).lower()
-        if not name or name not in tracked:
+        if idx == 0 or _is_default_material(mat):
             continue
         if _remove_table_item_at(basic_table, idx):
             removed += 1
+            removed_basic += 1
+    _set_tracked_material_names(set())
 
-    _IMPORTED_RENDER_MATERIAL_NAMES.clear()
-    if removed:
-        print("Removed {} imported material entries during reset.".format(removed))
+    print(
+        "Material cleanup: detached {} layer refs, {} object refs, removed render {}, removed basic {}, total removed {}, remaining render {}, remaining basic {}.".format(
+            detached_layers,
+            detached_objects,
+            removed_render,
+            removed_basic,
+            removed,
+            _get_table_count(render_table),
+            _get_table_count(basic_table),
+        )
+    )
     return removed
