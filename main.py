@@ -26,7 +26,7 @@ STAGE_DEPENDENCIES = {
 
 
 def reset():
-    """Delete all objects from the active document."""
+    """Delete all objects, layers, and imported materials from the active document."""
     objs = rs.AllObjects(
         select=False,
         include_lights=True,
@@ -34,7 +34,44 @@ def reset():
     )
     if objs:
         rs.DeleteObjects(objs)
+    _clear_all_layers()
     clear_imported_materials_from_doc()
+
+
+def _clear_all_layers(base_layer_name="Default"):
+    """Delete all layers except a single base layer."""
+    if not rs.IsLayer(base_layer_name):
+        created = rs.AddLayer(base_layer_name)
+        if created:
+            base_layer_name = created
+
+    if rs.IsLayer(base_layer_name):
+        try:
+            rs.CurrentLayer(base_layer_name)
+        except Exception:
+            pass
+
+    layer_names = rs.LayerNames(sort=True) or []
+    delete_candidates = [
+        name for name in layer_names if name and name != base_layer_name
+    ]
+    delete_candidates.sort(
+        key=lambda name: (name.count("::"), len(name)),
+        reverse=True,
+    )
+
+    for layer_name in delete_candidates:
+        if not rs.IsLayer(layer_name):
+            continue
+
+        deleted = False
+        for delete_fn in (rs.DeleteLayer, rs.PurgeLayer):
+            try:
+                deleted = bool(delete_fn(layer_name))
+            except Exception:
+                deleted = False
+            if deleted:
+                break
 
 
 def _normalize_layer_name_set(layer_names):
@@ -66,7 +103,7 @@ def _layer_matches(layer, names):
 def setup_render_view(cfg=None):
     """Set active view mode and configure layer visibility from config."""
     render_view = sc.doc.Views.ActiveView
-    mode = Rhino.Display.DisplayModeDescription.FindByName("Rendered")
+    mode = Rhino.Display.DisplayModeDescription.FindByName("Shaded")
     if mode:
         render_view.ActiveViewport.DisplayMode = mode
 
@@ -230,19 +267,19 @@ if __name__ == "__main__":
     # 3) Preparation only:
     #    run(stages=["preparation"])
 
-    run(
-        config_name="cube.local.yaml",
-        stages=["reset", "load_config", "preparation", "view_setup", "modeling"],
-        skip=[],
-        start_face_index=0,
-        show_cameras=False,
-        print_timings=True,
-    )
-
     # run(
-    #     config_name="component.local.yaml",
-    #     stages=["reset", "load_config", "preparation", "view_setup", "modeling"],
+    #     config_name="cube.local.yaml",
+    #     stages=["preparation", "rendering"],
     #     skip=[],
+    #     start_face_index=0,
     #     show_cameras=False,
     #     print_timings=True,
     # )
+
+    run(
+        config_name="component.local.yaml",
+        stages=["reset", "load_config", "preparation", "view_setup", "modeling"],
+        skip=[],
+        show_cameras=False,
+        print_timings=True,
+    )
