@@ -46,6 +46,25 @@ def _center_and_project_points(points_2d, projector, width_half, height_half):
     return [projector(x - width_half, y - height_half) for x, y in points_2d]
 
 
+def _build_mask_surfaces(crack_poly_id, hole_poly_ids=None):
+    """Build planar mask surfaces from one crack polygon and its inner holes."""
+    if not crack_poly_id or not rs.IsPolyline(crack_poly_id):
+        return []
+
+    input_curves = [crack_poly_id]
+    for hole_id in hole_poly_ids or []:
+        if hole_id and rs.IsPolyline(hole_id):
+            input_curves.append(hole_id)
+
+    surface_ids = rs.AddPlanarSrf(input_curves) or []
+    if surface_ids:
+        return [sid for sid in surface_ids if sid and rs.IsObject(sid)]
+
+    # Fallback: at least keep the crack boundary as mask if hole trimming fails.
+    fallback_ids = rs.AddPlanarSrf(crack_poly_id) or []
+    return [sid for sid in fallback_ids if sid and rs.IsObject(sid)]
+
+
 def __create_cube_faces():
     """
     Create a cube from -CUBE_LENGTH to +CUBE_LENGTH in all axes,
@@ -285,8 +304,10 @@ def create_cube(cube_map_dir, start_face_index=0):
                 layer_cache[severity_key] = layer_name
 
             crack_poly_ids = []
+            crack_poly_indices = []
             noncrack_poly_ids = []
-            for contour in contours[i]:
+            holes_by_parent_index = {}
+            for contour_idx, contour in enumerate(contours[i]):
                 pts_3d = _center_and_project_points(
                     contour["points"], projector, width_half, height_half
                 )
@@ -294,9 +315,12 @@ def create_cube(cube_map_dir, start_face_index=0):
                     continue
                 poly_id = add_polygon_curve(pts_3d, close_curve=True)
                 if poly_id:
-                    if contour["parent"] != -1:
+                    parent_idx = int(contour.get("parent", -1))
+                    if parent_idx != -1:
                         noncrack_poly_ids.append(poly_id)
+                        holes_by_parent_index.setdefault(parent_idx, []).append(poly_id)
                     else:
+                        crack_poly_indices.append(contour_idx)
                         crack_poly_ids.append(poly_id)
 
             if not crack_poly_ids:
@@ -305,13 +329,17 @@ def create_cube(cube_map_dir, start_face_index=0):
             
             for poly_id in crack_poly_ids:
                 rs.ObjectLayer(poly_id, layer_name)
-            rs.ObjectLayer(erode_poly_id, layer_name)
-            offset_srf_id = rs.AddPlanarSrf(erode_poly_id)[0]
-            if offset_srf_id:
-                rs.ObjectLayer(offset_srf_id, layer_name)
-                cutters.append(offset_srf_id)
+            mask_surface_ids = []
+            for crack_idx, crack_poly_id in zip(crack_poly_indices, crack_poly_ids):
+                crack_holes = holes_by_parent_index.get(crack_idx, [])
+                srf_ids = _build_mask_surfaces(crack_poly_id, crack_holes)
+                for sid in srf_ids:
+                    rs.ObjectLayer(sid, layer_name)
+                mask_surface_ids.extend(srf_ids)
+
+            if mask_surface_ids:
+                cutters.extend(mask_surface_ids)
                 crack_items.append({
-                    "offset_surface": offset_srf_id,
                     "crack_polys": crack_poly_ids,
                     "inside_polys": noncrack_poly_ids,
                     "base_poly": base_poly_id,
