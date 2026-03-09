@@ -24,6 +24,28 @@ def _severity_to_mask_layer(severity):
     return "mask::{}".format(token)
 
 
+def _face_projector(face):
+    face_key = face.strip().lower()
+    half = CUBE_LENGTH / 2.0
+    if face_key == "+x":
+        return lambda u, v: (half, u, v)
+    if face_key == "-x":
+        return lambda u, v: (-half, u, v)
+    if face_key == "+y":
+        return lambda u, v: (u, half, v)
+    if face_key == "-y":
+        return lambda u, v: (u, -half, v)
+    if face_key == "+z":
+        return lambda u, v: (u, v, half)
+    if face_key == "-z":
+        return lambda u, v: (u, v, -half)
+    raise ValueError('Unknown face "{}". Use +x, -x, +y, -y, +z, -z.'.format(face))
+
+
+def _center_and_project_points(points_2d, projector, width_half, height_half):
+    return [projector(x - width_half, y - height_half) for x, y in points_2d]
+
+
 def __create_cube_faces():
     """
     Create a cube from -CUBE_LENGTH to +CUBE_LENGTH in all axes,
@@ -100,37 +122,6 @@ def center_2d_points(points_2d, width_mm=None, height_mm=None):
     return centered
 
 
-def map_2d_to_cube_face(points_2d_mm, face):
-    """
-    Map 2D points (in mm) to 3D coordinates on a cube face.
-
-    points_2d_mm : iterable of (x_mm, y_mm) in local 2D
-    face         : one of "+x", "-x", "+y", "-y", "+z", "-z"
-
-    Uses global CUBE_LENGTH as the face coordinate:
-      +x face is at X = +CUBE_LENGTH, etc.
-
-    Returns: list of (x, y, z) tuples.
-    """
-    face = face.strip().lower()
-    pts_3d = []
-
-    for (u, v) in points_2d_mm:
-        if face == "+x":
-            pts_3d.append((CUBE_LENGTH/2, u, v))
-        elif face == "-x":
-            pts_3d.append((-CUBE_LENGTH/2, u, v))
-        elif face == "+y":
-            pts_3d.append((u, CUBE_LENGTH/2, v))
-        elif face == "-y":
-            pts_3d.append((u, -CUBE_LENGTH/2, v))
-        elif face == "+z":
-            pts_3d.append((u, v, CUBE_LENGTH/2))
-        elif face == "-z":
-            pts_3d.append((u, v, -CUBE_LENGTH/2))
-        else:
-            raise ValueError('Unknown face "{}". Use +x, -x, +y, -y, +z, -z.'.format(face))
-    return pts_3d
 
 
 def add_polygon_curve(points_3d, close_curve=True):
@@ -204,37 +195,30 @@ def split_face_and_keep_outer(base_srf_id, cutters):
         print("Brep.Split failed or produced no pieces.")
         return base_srf_id
 
-    # Add split pieces to the document
-    piece_ids = []
-    for b in split_breps:
-        pid = sc.doc.Objects.AddBrep(b)
-        piece_ids.append(pid)
-
-    # Delete original base surface
-    rs.DeleteObject(base_srf_id)
-
-    # Compute areas and keep largest
-    areas = []
-    for pid in piece_ids:
-        brep = rs.coercebrep(pid)
-        if not brep:
-            areas.append(0.0)
-            continue
+    # Compute areas and keep only the largest split piece.
+    idx_max = -1
+    max_area = -1.0
+    for idx, brep in enumerate(split_breps):
         amp = Rhino.Geometry.AreaMassProperties.Compute(brep)
-        areas.append(amp.Area if amp else 0.0)
+        area = amp.Area if amp else 0.0
+        if amp:
+            dispose = getattr(amp, "Dispose", None)
+            if dispose:
+                dispose()
+        if area > max_area:
+            max_area = area
+            idx_max = idx
 
-    if not areas:
+    if idx_max < 0:
         print("No valid areas from split pieces.")
-        return None
+        return base_srf_id
 
-    idx_max = areas.index(max(areas))
-    outer_id = piece_ids[idx_max]
+    outer_id = sc.doc.Objects.AddBrep(split_breps[idx_max])
+    if not outer_id:
+        print("Failed to add outer split Brep.")
+        return base_srf_id
 
-    # Delete all smaller pieces
-    for i, pid in enumerate(piece_ids):
-        if i != idx_max and rs.IsObject(pid):
-            rs.DeleteObject(pid)
-
+    rs.DeleteObject(base_srf_id)
     return outer_id
 
 
@@ -246,12 +230,16 @@ def create_cube(cube_map_dir, start_face_index=0):
 
     # Process each file / face
     face_cracks = {}
+    layer_cache = {}
     for face_dir, filepath in zip(faces.keys(), filepaths):
         face = faces[face_dir]
         rs.ObjectLayer(face, "geometry::cube")
         rs.HideObject(face)
 
         contours, base_contours, erode_contours, diff_contours, severities = read_contour_json(filepath)
+        width_half = CUBE_LENGTH / 2.0
+        height_half = CUBE_LENGTH / 2.0
+        projector = _face_projector(face_dir)
 
         assert len(contours) == len(severities) == len(erode_contours) == len(base_contours) == len(diff_contours), \
             f"Mismatch in number of contours ({len(contours)}), severities ({len(severities)}), erode contours ({len(erode_contours)}), base contours ({len(base_contours)}), or diff contours ({len(diff_contours)})."
@@ -260,15 +248,17 @@ def create_cube(cube_map_dir, start_face_index=0):
         crack_items = []
         
         for i in range(n_bases):
-            erode_pts_mm_centered = center_2d_points(erode_contours[i]["points"])
-            erode_pts_3d = map_2d_to_cube_face(erode_pts_mm_centered, face_dir)
+            erode_pts_3d = _center_and_project_points(
+                erode_contours[i]["points"], projector, width_half, height_half
+            )
             erode_poly_id = add_polygon_curve(erode_pts_3d, close_curve=True)
             if not erode_poly_id:
                 print("Skipping empty erode contour at index {} on face {}".format(i, face_dir))
                 continue
             
-            base_pts_mm_centered = center_2d_points(base_contours[i]["points"])
-            base_pts_3d = map_2d_to_cube_face(base_pts_mm_centered, face_dir)
+            base_pts_3d = _center_and_project_points(
+                base_contours[i]["points"], projector, width_half, height_half
+            )
             base_poly_id = add_polygon_curve(base_pts_3d, close_curve=True)
             if not base_poly_id:
                 print("Skipping empty base contour at index {} on face {}".format(i, face_dir))
@@ -276,24 +266,30 @@ def create_cube(cube_map_dir, start_face_index=0):
             
             diff_poly_ids = []
             for diff_cnt in diff_contours[i]:
-                diff_pts_mm_centered = center_2d_points(diff_cnt["points"])
-                diff_pts_3d = map_2d_to_cube_face(diff_pts_mm_centered, face_dir)
+                diff_pts_3d = _center_and_project_points(
+                    diff_cnt["points"], projector, width_half, height_half
+                )
                 diff_poly_id = add_polygon_curve(diff_pts_3d, close_curve=True)
                 if diff_poly_id:
                     diff_poly_ids.append(diff_poly_id)
 
             severity = severities[i]
-            layer_name = _severity_to_mask_layer(severity)
-            if not layer_name:
-                raise ValueError("Invalid crack severity '{}' on face '{}'.".format(severity, face_dir))
-            if not rs.IsLayer(layer_name):
-                raise ValueError("Layer '{}' does not exist. Please run preparation step first.".format(layer_name))
+            severity_key = str(severity)
+            layer_name = layer_cache.get(severity_key)
+            if layer_name is None:
+                layer_name = _severity_to_mask_layer(severity)
+                if not layer_name:
+                    raise ValueError("Invalid crack severity '{}' on face '{}'.".format(severity, face_dir))
+                if not rs.IsLayer(layer_name):
+                    raise ValueError("Layer '{}' does not exist. Please run preparation step first.".format(layer_name))
+                layer_cache[severity_key] = layer_name
 
             crack_poly_ids = []
             noncrack_poly_ids = []
             for contour in contours[i]:
-                pts_mm_centered = center_2d_points(contour["points"])
-                pts_3d = map_2d_to_cube_face(pts_mm_centered, face_dir)
+                pts_3d = _center_and_project_points(
+                    contour["points"], projector, width_half, height_half
+                )
                 if len(pts_3d) < 3:
                     continue
                 poly_id = add_polygon_curve(pts_3d, close_curve=True)
