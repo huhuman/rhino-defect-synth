@@ -455,6 +455,8 @@ def _layer_matches(layer, names):
 def _apply_scene_layer_visibility(scene_only_layers=None, scene_hide_layers=None):
     only_set = _normalize_layer_name_set(scene_only_layers)
     hide_set = _normalize_layer_name_set(scene_hide_layers)
+    if not only_set and not hide_set:
+        return
 
     for layer in sc.doc.Layers:
         if not layer.Name:
@@ -470,6 +472,8 @@ def _apply_scene_layer_visibility(scene_only_layers=None, scene_hide_layers=None
 def _apply_mask_layer_visibility(mask_only_layers=None, mask_hide_layers=None):
     only_set = _normalize_layer_name_set(mask_only_layers)
     hide_set = _normalize_layer_name_set(mask_hide_layers)
+    if not only_set and not hide_set:
+        return
 
     if only_set:
         for layer in sc.doc.Layers:
