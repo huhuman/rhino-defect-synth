@@ -5,6 +5,8 @@ import copy
 import importlib
 import os
 import random
+import sys
+from datetime import datetime
 from time import perf_counter
 
 import Rhino
@@ -16,6 +18,67 @@ from utils_loc.materials import clear_imported_materials_from_doc
 from utils_loc.pipeline import create_model, prepare
 
 render = importlib.import_module("utils_loc.render")
+
+
+class _TeeWriter:
+    """Mirror writes to multiple stream targets."""
+
+    def __init__(self, *targets):
+        self._targets = [target for target in targets if target is not None]
+
+    def write(self, data):
+        for target in self._targets:
+            target.write(data)
+        return len(data)
+
+    def flush(self):
+        for target in self._targets:
+            target.flush()
+
+    def isatty(self):
+        for target in self._targets:
+            if hasattr(target, "isatty"):
+                try:
+                    return bool(target.isatty())
+                except Exception:
+                    continue
+        return False
+
+
+def _start_batch_logging(log_path):
+    log_file = open(log_path, "w", encoding="utf-8")
+    stdout_backup = sys.stdout
+    stderr_backup = sys.stderr
+    sys.stdout = _TeeWriter(stdout_backup, log_file)
+    sys.stderr = _TeeWriter(stderr_backup, log_file)
+    return log_file, stdout_backup, stderr_backup
+
+
+def _stop_batch_logging(log_file, stdout_backup, stderr_backup):
+    if stdout_backup is not None:
+        sys.stdout = stdout_backup
+    if stderr_backup is not None:
+        sys.stderr = stderr_backup
+    if log_file is not None:
+        log_file.close()
+
+
+def _create_timestamped_subdir(base_output_dir):
+    if not str(base_output_dir or "").strip():
+        raise ValueError("Config must include rendering.output_dir for batch runs.")
+
+    base_dir = os.path.abspath(os.path.expanduser(str(base_output_dir)))
+    os.makedirs(base_dir, exist_ok=True)
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = os.path.join(base_dir, stamp)
+    suffix = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(base_dir, f"{stamp}_{suffix:02d}")
+        suffix += 1
+
+    os.makedirs(candidate, exist_ok=False)
+    return candidate
 
 
 def _reset_scene_objects():
@@ -203,29 +266,12 @@ def run(
     """
     stage_times = []
     timer_start = perf_counter()
+    log_file = None
+    stdout_backup = None
+    stderr_backup = None
 
     cfg = load_config(config_name)
     nested_cfg = cfg.get("nested_loop", {})
-
-    if seed is None:
-        seed = nested_cfg.get("seed")
-    if seed is not None:
-        rng = random.Random(int(seed))
-        print(f"Random seed: {int(seed)}")
-    else:
-        rng = random.Random()
-
-    if renders_per_model is None:
-        renders_per_model = int(nested_cfg.get("renders_per_model", 1))
-    renders_per_model = max(1, int(renders_per_model))
-
-    if max_iter is None:
-        max_iter = nested_cfg.get("max_iter")
-    if max_iter is not None:
-        max_iter = max(0, int(max_iter))
-
-    rendering_sampler = nested_cfg.get("rendering_sampler", {})
-    preparation_params = dict(cfg.get("preparation") or {})
 
     modeling_params = dict(cfg.get("modeling", {}))
     if not modeling_params:
@@ -240,98 +286,129 @@ def run(
     if not base_rendering:
         raise ValueError("Config must include a 'rendering' section.")
 
-    json_files = _list_json_files(cube_params.get("cube_map_dir"))
-    model_starts, leftovers = _compute_model_start_indices(
-        total_files=len(json_files),
-        start_face_index=start_face_index,
-        faces_per_model=faces_per_model,
-    )
-    total_model_iters = len(model_starts)
-    if max_iter is not None:
-        model_starts = model_starts[:max_iter]
+    batch_output_dir = _create_timestamped_subdir(base_rendering.get("output_dir"))
+    base_rendering["output_dir"] = batch_output_dir
+    batch_log_path = os.path.join(batch_output_dir, "batch_log.txt")
 
-    if leftovers > 0:
+    try:
+        log_file, stdout_backup, stderr_backup = _start_batch_logging(batch_log_path)
+        print(f"Batch output directory: {batch_output_dir}")
+        print(f"Batch log path: {batch_log_path}")
+
+        if seed is None:
+            seed = nested_cfg.get("seed")
+        if seed is not None:
+            rng = random.Random(int(seed))
+            print(f"Random seed: {int(seed)}")
+        else:
+            rng = random.Random()
+
+        if renders_per_model is None:
+            renders_per_model = int(nested_cfg.get("renders_per_model", 1))
+        renders_per_model = max(1, int(renders_per_model))
+
+        if max_iter is None:
+            max_iter = nested_cfg.get("max_iter")
+        if max_iter is not None:
+            max_iter = max(0, int(max_iter))
+
+        rendering_sampler = nested_cfg.get("rendering_sampler", {})
+        preparation_params = dict(cfg.get("preparation") or {})
+
+        json_files = _list_json_files(cube_params.get("cube_map_dir"))
+        model_starts, leftovers = _compute_model_start_indices(
+            total_files=len(json_files),
+            start_face_index=start_face_index,
+            faces_per_model=faces_per_model,
+        )
+        total_model_iters = len(model_starts)
+        if max_iter is not None:
+            model_starts = model_starts[:max_iter]
+
+        if leftovers > 0:
+            print(
+                f"Skipping trailing {leftovers} face maps because each model iteration needs "
+                f"{int(faces_per_model)} maps."
+            )
+
         print(
-            f"Skipping trailing {leftovers} face maps because each model iteration needs "
-            f"{int(faces_per_model)} maps."
+            f"Nested run: models={len(model_starts)}, renders_per_model={renders_per_model}, "
+            f"total_renders={len(model_starts) * renders_per_model}"
         )
+        if max_iter is not None:
+            print(
+                f"Iteration cap: max_iter={max_iter}, available_iters={total_model_iters}, "
+                f"using_iters={len(model_starts)}"
+            )
 
-    print(
-        f"Nested run: models={len(model_starts)}, renders_per_model={renders_per_model}, "
-        f"total_renders={len(model_starts) * renders_per_model}"
-    )
-    if max_iter is not None:
-        print(
-            f"Iteration cap: max_iter={max_iter}, available_iters={total_model_iters}, "
-            f"using_iters={len(model_starts)}"
-        )
+        next_output_index = int(nested_cfg.get("output_index_start", 0))
+        stop_after_preview = False
 
-    next_output_index = int(nested_cfg.get("output_index_start", 0))
-    stop_after_preview = False
+        for model_iter, face_idx in enumerate(model_starts):
+            print(f"=== model_iter={model_iter}, start_face_index={face_idx} ===")
 
-    for model_iter, face_idx in enumerate(model_starts):
-        print(f"=== model_iter={model_iter}, start_face_index={face_idx} ===")
-
-        time_model_stage_start = perf_counter()
-        _reset_scene_objects()
-        clear_imported_materials_from_doc()
-        prepare(dict(preparation_params))
-        _setup_render_view(cfg=cfg)
-
-        model_params = dict(modeling_params)
-        model_params["start_face_index"] = int(face_idx)
-        create_model(model_params)
-        stage_times.append(
-            (f"reset->modeling[{model_iter}]", perf_counter() - time_model_stage_start)
-        )
-
-        for render_iter in range(renders_per_model):
-            time_render_stage_start = perf_counter()
+            time_model_stage_start = perf_counter()
+            _reset_scene_objects()
             clear_imported_materials_from_doc()
             prepare(dict(preparation_params))
             _setup_render_view(cfg=cfg)
 
-            render_params = _sample_rendering_params(
-                base_rendering=base_rendering,
-                rendering_sampler=rendering_sampler,
-                rng=rng,
-            )
-            render_params["model_iter"] = model_iter
-            render_params["render_iter"] = render_iter
-            render_params["output_index_offset"] = next_output_index
-
-            captured_count, preview_used = _run_render_with_frame_count(
-                params=render_params,
-                show_cameras=show_cameras,
-            )
-            next_output_index += int(captured_count)
-            if captured_count > 0:
-                print(
-                    f"render_iter={render_iter}: captured_views={captured_count}, "
-                    f"next_view_id={next_output_index}"
-                )
+            model_params = dict(modeling_params)
+            model_params["start_face_index"] = int(face_idx)
+            create_model(model_params)
             stage_times.append(
-                (
-                    f"preparation->rendering[{model_iter},{render_iter}]",
-                    perf_counter() - time_render_stage_start,
-                )
+                (f"reset->modeling[{model_iter}]", perf_counter() - time_model_stage_start)
             )
 
-            if preview_used:
-                # Camera preview mode intentionally exits after first render pass.
-                stop_after_preview = True
+            for render_iter in range(renders_per_model):
+                time_render_stage_start = perf_counter()
+                clear_imported_materials_from_doc()
+                prepare(dict(preparation_params))
+                _setup_render_view(cfg=cfg)
+
+                render_params = _sample_rendering_params(
+                    base_rendering=base_rendering,
+                    rendering_sampler=rendering_sampler,
+                    rng=rng,
+                )
+                render_params["model_iter"] = model_iter
+                render_params["render_iter"] = render_iter
+                render_params["output_index_offset"] = next_output_index
+
+                captured_count, preview_used = _run_render_with_frame_count(
+                    params=render_params,
+                    show_cameras=show_cameras,
+                )
+                next_output_index += int(captured_count)
+                if captured_count > 0:
+                    print(
+                        f"render_iter={render_iter}: captured_views={captured_count}, "
+                        f"next_view_id={next_output_index}"
+                    )
+                stage_times.append(
+                    (
+                        f"preparation->rendering[{model_iter},{render_iter}]",
+                        perf_counter() - time_render_stage_start,
+                    )
+                )
+
+                if preview_used:
+                    # Camera preview mode intentionally exits after first render pass.
+                    stop_after_preview = True
+                    break
+            if stop_after_preview:
                 break
-        if stop_after_preview:
-            break
 
-    if print_timings:
-        total = perf_counter() - timer_start
-        print("======== Nested Stage Timings ========")
-        for name, duration in stage_times:
-            print(f"{name}: {duration:.2f}s")
-        print(f"total: {total:.2f}s")
+        if print_timings:
+            total = perf_counter() - timer_start
+            print("======== Nested Stage Timings ========")
+            for name, duration in stage_times:
+                print(f"{name}: {duration:.2f}s")
+            print(f"total: {total:.2f}s")
 
-    return stage_times
+        return stage_times
+    finally:
+        _stop_batch_logging(log_file, stdout_backup, stderr_backup)
 
 
 if __name__ == "__main__":
