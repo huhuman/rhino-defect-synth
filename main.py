@@ -34,11 +34,11 @@ def reset():
     )
     if objs:
         rs.DeleteObjects(objs)
-    _clear_all_layers()
+    _clear_all_layers(base_layer_name="__reset__")
     clear_imported_materials_from_doc()
 
 
-def _clear_all_layers(base_layer_name="Default"):
+def _clear_all_layers(base_layer_name="__reset__"):
     """Delete all layers except a single base layer."""
     if not rs.IsLayer(base_layer_name):
         created = rs.AddLayer(base_layer_name)
@@ -72,6 +72,14 @@ def _clear_all_layers(base_layer_name="Default"):
                 deleted = False
             if deleted:
                 break
+
+    if base_layer_name != "Default" and rs.IsLayer("Default"):
+        for delete_fn in (rs.DeleteLayer, rs.PurgeLayer):
+            try:
+                if bool(delete_fn("Default")):
+                    break
+            except Exception:
+                continue
 
 
 def _normalize_layer_name_set(layer_names):
@@ -201,11 +209,19 @@ def run(
 
         modeling_cfg = dict(cfg.get("modeling") or {})
         if str(modeling_cfg.get("strategy") or "").lower() == "component":
-            component_cfg = dict(modeling_cfg.get("component") or {})
-            normal_cfg = dict(component_cfg.get("surface_normals") or {})
-            if not bool(normal_cfg.get("enabled", False)):
-                normal_layer = str(normal_cfg.get("layer") or "component::normal_arrows")
-                exclude_layer_prefixes.append(normal_layer)
+            debug_cfg = dict(modeling_cfg.get("debug") or {})
+            surface_normals_cfg = dict(debug_cfg.get("surface_normals") or {})
+            defect_normals_cfg = dict(debug_cfg.get("defect_normals") or {})
+            defect_seeds_cfg = dict(debug_cfg.get("defect_seeds") or {})
+
+            if not (
+                bool(surface_normals_cfg.get("enabled", False))
+                or bool(defect_normals_cfg.get("enabled", False))
+            ):
+                exclude_layer_prefixes.append("debug::normal")
+
+            if not bool(defect_seeds_cfg.get("enabled", True)):
+                exclude_layer_prefixes.append(str(defect_seeds_cfg.get("layer") or "debug::seed"))
 
         if exclude_layer_prefixes:
             preparation_params["exclude_layer_prefixes"] = exclude_layer_prefixes
