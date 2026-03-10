@@ -1110,9 +1110,14 @@ def _normalize_condition_state(value, default="CS1"):
     return str(default).upper()
 
 
-def _mask_layer_for_state(layer_map, defect_key, condition_state):
-    key = "{}_{}".format(defect_key, _normalize_condition_state(condition_state).lower())
-    return (layer_map.get("mask") or {}).get(key) or (layer_map.get("mask") or {}).get(defect_key)
+def _geometry_layer_for_condition(layer_map, defect_key, condition_state):
+    state = _normalize_condition_state(condition_state).lower()
+    key = "{}_{}".format(defect_key, state)
+    geometry_layers = (layer_map or {}).get("geometry") or {}
+    layer_name = geometry_layers.get(key)
+    if not layer_name:
+        raise ValueError("Missing defect geometry layer mapping: layers.geometry.{}".format(key))
+    return str(layer_name)
 
 
 def _resolve_crack_width_metrics(shape, transform):
@@ -1233,7 +1238,7 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debu
                 rs.DeleteObject(obj_id)
         return None
 
-    mask_ids = []
+    crack_layer_initial = _geometry_layer_for_condition(layer_map, "crack", "CS1")
     crack_created = create_crack(
         crack_polys,
         inside_polys,
@@ -1243,7 +1248,7 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debu
         inward_dir=_candidate_inward_normal(candidate),
         d1_range=tuple(cfg["crack"].get("d1_range", (0.5, 2.5))),
         delta_depth_range=tuple(cfg["crack"].get("delta_depth_range", (10.0, 30.0))),
-        layer_crack_extrusion=layer_map["geometry"]["crack"],
+        layer_crack_extrusion=crack_layer_initial,
         layer_parent_surface=candidate.get("surface_layer"),
         cleanup_inputs=True,
         rng=rng,
@@ -1264,7 +1269,6 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debu
             + inside_polys
             + diff_polys
             + [offset_curve, base_curve]
-            + mask_ids
             + parent_fills
         )
         return None
@@ -1272,13 +1276,13 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debu
     crack_cfg = cfg.get("crack") or {}
     crack_width_metrics = _resolve_crack_width_metrics(shape, transform)
     cs_level = _resolve_crack_condition_state(crack_cfg, crack_created, crack_width_metrics=crack_width_metrics)
-    mask_layer = _mask_layer_for_state(layer_map, "crack", cs_level)
-    mask_ids = _add_mask_from_polygon(offset_3d, mask_layer, as_surface=True)
+    crack_layer = _geometry_layer_for_condition(layer_map, "crack", cs_level)
+    _assign_layer(crack_geometry, crack_layer)
 
     record = _record_common("crack", candidate, transform, shape)
     record["condition_state"] = cs_level
     record["geometry_ids"] = _as_strings(crack_geometry)
-    record["mask_ids"] = _as_strings(mask_ids)
+    record["mask_ids"] = []
     record["surface_cut_polygon"] = [list(_vec3(pt)) for pt in _ensure_closed(surface_cut_polygon)]
     record["crack_metrics"] = {
         "d1": crack_created.get("d1"),
@@ -1368,14 +1372,10 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     uses_expand_polygon = bool(has_outer)
     cs_level = _resolve_efflore_condition_state(uses_expand_polygon)
 
-    mask_layer = _mask_layer_for_state(layer_map, "efflore", cs_level)
-    mask_source = outer_polygon if has_outer else inner_polygon
-    mask_ids = _add_mask_from_polygon(mask_source, mask_layer, as_surface=True)
-
     inner_geometry = _extrude_polygon(inner_polygon, thickness)
     _orient_surfaces_to_normal(inner_geometry, outward_normal)
 
-    inner_layer = layer_map["geometry"]["efflore"]
+    inner_layer = _geometry_layer_for_condition(layer_map, "efflore", cs_level)
     _assign_layer(inner_geometry, inner_layer)
 
     outer_geometry = []
@@ -1383,11 +1383,11 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
         outer_thickness = thickness
         outer_geometry = _extrude_polygon(outer_polygon, outer_thickness)
         _orient_surfaces_to_normal(outer_geometry, outward_normal)
-        _assign_layer(outer_geometry, layer_map["geometry"]["efflore_outer"])
+        _assign_layer(outer_geometry, inner_layer)
 
     geometry_ids = _coerce_ids(inner_geometry + outer_geometry)
     if not geometry_ids:
-        _delete_objects(mask_ids + inner_geometry + outer_geometry)
+        _delete_objects(inner_geometry + outer_geometry)
         return None
 
     record = _record_common("efflore", candidate, transform, shape)
@@ -1395,12 +1395,12 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     record["geometry_ids"] = _as_strings(geometry_ids)
     record["efflore_inner_geometry_ids"] = _as_strings(inner_geometry)
     record["efflore_outer_geometry_ids"] = _as_strings(outer_geometry)
-    record["mask_ids"] = _as_strings(mask_ids)
+    record["mask_ids"] = []
     record["efflore_metrics"] = {
         "thickness": float(thickness),
         "outer_thickness": float(thickness) if has_outer else 0.0,
         "has_outer_layer": bool(outer_geometry),
-        "mask_uses_outer": bool(has_outer),
+        "mask_uses_outer": False,
         "uses_expand_polygon": bool(uses_expand_polygon),
     }
     _attach_normal_debug(record, "efflore", candidate, debug_cfg)
@@ -1749,14 +1749,7 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, s
     condition_state = _resolve_spalling_condition_state(spalling_cfg, diameter_cm=diameter_cm, depth_cm=spall_depth)
 
     place_rebar = _should_place_rebar(shape, spalling_cfg, condition_state, rng=rng)
-    mask_ids = []
-    spall_mask_layer = _mask_layer_for_state(layer_map, "spall", condition_state)
-    mask_ids.extend(_add_mask_from_polygon(polygon, spall_mask_layer, as_surface=True))
-    if place_rebar:
-        exposed_mask_layer = _mask_layer_for_state(layer_map, "exposed_rebar", condition_state)
-        mask_ids.extend(_add_mask_from_polygon(polygon, exposed_mask_layer, as_surface=False))
-
-    spall_layer_name = layer_map["geometry"]["spall"]
+    spall_layer_name = _geometry_layer_for_condition(layer_map, "spall", condition_state)
     spall_ids, spall_metrics = _model_spall_from_polygon(
         polygon,
         candidate,
@@ -1766,7 +1759,6 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, s
         irregularity=_to_float(spalling_cfg.get("depth_irregularity"), 0.2),
     )
     if not spall_ids:
-        _delete_objects(mask_ids)
         return None
 
     rebar_ids = []
@@ -1778,18 +1770,14 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, s
             polygon,
             spall_depth=spall_depth,
             rebar_cfg=rebar_cfg,
-            layer_name=(
-                layer_map["geometry"].get("exposed_rebar")
-                or layer_map["geometry"].get("rebar")
-                or layer_map["geometry"]["spall"]
-            ),
+            layer_name=_geometry_layer_for_condition(layer_map, "exposed_rebar", condition_state),
             rng=rng,
         )
 
     defect_type = "exposed_rebar" if rebar_ids else "spalling"
     geometry_ids = _coerce_ids(spall_ids + rebar_ids)
     if not geometry_ids:
-        _delete_objects(mask_ids + spall_ids + rebar_ids)
+        _delete_objects(spall_ids + rebar_ids)
         return None
 
     record = _record_common(defect_type, candidate, transform, shape)
@@ -1797,7 +1785,7 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, s
     record["geometry_ids"] = _as_strings(geometry_ids)
     record["spall_geometry_ids"] = _as_strings(spall_ids)
     record["rebar_geometry_ids"] = _as_strings(rebar_ids)
-    record["mask_ids"] = _as_strings(mask_ids)
+    record["mask_ids"] = []
     record["surface_cut_polygon"] = [list(_vec3(pt)) for pt in _ensure_closed(surface_cut_polygon)]
     record["spall_metrics"] = dict(spall_metrics or {})
     record["spall_metrics"]["depth"] = float(spall_depth)
@@ -1831,57 +1819,12 @@ def _resolve_layer_map(cfg, debug_cfg=None):
     layer_map = {
         "seeds": seed_layers,
         "geometry": dict((layers_cfg.get("geometry") or {})),
-        "mask": dict((layers_cfg.get("mask") or {})),
     }
-
-    configured_types = {name for name in ("crack", "efflore", "spalling") if name in cfg}
-    if "exposed_rebar" in cfg:
-        configured_types.add("spalling")
-
-    if "crack" in configured_types:
-        for key, value in {
-            "crack": "defects::geometry::crack",
-        }.items():
-            layer_map["geometry"].setdefault(key, value)
-        for key, value in {
-            "crack_cs1": "defects::mask::crack::cs1",
-            "crack_cs2": "defects::mask::crack::cs2",
-            "crack_cs3": "defects::mask::crack::cs3",
-        }.items():
-            layer_map["mask"].setdefault(key, value)
-
-    if "efflore" in configured_types:
-        for key, value in {
-            "efflore": "defects::geometry::efflore",
-            "efflore_outer": "defects::geometry::efflore_outer",
-        }.items():
-            layer_map["geometry"].setdefault(key, value)
-        for key, value in {
-            "efflore_cs2": "defects::mask::efflore::cs2",
-            "efflore_cs3": "defects::mask::efflore::cs3",
-        }.items():
-            layer_map["mask"].setdefault(key, value)
-
-    if "spalling" in configured_types:
-        for key, value in {
-            "spall": "defects::geometry::spall",
-            "exposed_rebar": "defects::geometry::exposed_rebar",
-        }.items():
-            layer_map["geometry"].setdefault(key, value)
-        for key, value in {
-            "spall_cs2": "defects::mask::spall::cs2",
-            "spall_cs3": "defects::mask::spall::cs3",
-            "exposed_rebar_cs2": "defects::mask::exposed_rebar::cs2",
-            "exposed_rebar_cs3": "defects::mask::exposed_rebar::cs3",
-        }.items():
-            layer_map["mask"].setdefault(key, value)
 
     if bool(seed_debug_cfg.get("enabled", True)):
         for layer_name in layer_map["seeds"].values():
             ensure_layer(layer_name)
     for layer_name in layer_map["geometry"].values():
-        ensure_layer(layer_name)
-    for layer_name in layer_map["mask"].values():
         ensure_layer(layer_name)
     return layer_map
 

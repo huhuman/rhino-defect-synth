@@ -1,6 +1,5 @@
 view_setup:
   hide_layers:
-    - "defects::mask"
     - "debug"
 
 modeling:
@@ -15,13 +14,12 @@ rendering:
   outputs:
     scene:
       hide_layers:
-        - "defects::mask"
         - "debug"
     mask:
       # If `only_layers` is set, only these layers are visible for mask output.
       # only_layers:
-      #   - "defects::mask::crack"
-      #   - "defects::mask::efflore"
+      #   - "defect::crack"
+      #   - "defect::efflore"
       hide_layers:
         - "crack_extrusion"
   camera:

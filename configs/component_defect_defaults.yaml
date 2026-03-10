@@ -43,30 +43,24 @@ modeling:
       file_format: auto
     layers:
       geometry:
-        crack: "defects::geometry::crack"
-        efflore: "defects::geometry::efflore"
-        efflore_outer: "defects::geometry::efflore_outer"
-        spall: "defects::geometry::spall"
-        exposed_rebar: "defects::geometry::exposed_rebar"
-      mask:
-        crack_cs1: "defects::mask::crack::cs1"
-        crack_cs2: "defects::mask::crack::cs2"
-        crack_cs3: "defects::mask::crack::cs3"
-        efflore_cs2: "defects::mask::efflore::cs2"
-        efflore_cs3: "defects::mask::efflore::cs3"
-        spall_cs2: "defects::mask::spall::cs2"
-        spall_cs3: "defects::mask::spall::cs3"
-        exposed_rebar_cs2: "defects::mask::exposed_rebar::cs2"
-        exposed_rebar_cs3: "defects::mask::exposed_rebar::cs3"
+        crack_cs1: "defect::crack::CS1"
+        crack_cs2: "defect::crack::CS2"
+        crack_cs3: "defect::crack::CS3"
+        efflore_cs2: "defect::efflore::CS2"
+        efflore_cs3: "defect::efflore::CS3"
+        spall_cs2: "defect::spalling::CS2"
+        spall_cs3: "defect::spalling::CS3"
+        exposed_rebar_cs2: "defect::exposed_rebar::CS2"
+        exposed_rebar_cs3: "defect::exposed_rebar::CS3"
     crack:
       enabled: true
       count: 0
       overview_csv_path: null
       target_width_cm: 0.1
-      t1: 0.1
-      t2: 0.2
-      d1_range: [0.5, 2.5]
-      delta_depth_range: [10.0, 30.0]
+      t1: 0.03048
+      t2: 0.127
+      d1_range: [0.05, 0.25]
+      delta_depth_range: [1.0, 3.0]
     efflore:
       enabled: true
       count: 0
