@@ -1270,10 +1270,15 @@ def _normalize_condition_state(value, default="CS1"):
     return str(default).upper()
 
 
-def _geometry_layer_for_condition(layer_map, defect_key, condition_state):
+def _geometry_layer_for_condition(layer_map, defect_key, condition_state, part=None):
     state = _normalize_condition_state(condition_state).lower()
     key = "{}_{}".format(defect_key, state)
     geometry_layers = (layer_map or {}).get("geometry") or {}
+    part_key = str(part or "").strip().lower()
+    if part_key:
+        part_layer = geometry_layers.get("{}_{}".format(key, part_key))
+        if part_layer:
+            return str(part_layer)
     layer_name = geometry_layers.get(key)
     if not layer_name:
         raise ValueError("Missing defect geometry layer mapping: layers.geometry.{}".format(key))
@@ -1350,6 +1355,65 @@ def _resolve_efflore_condition_state(has_expand_polygon):
     # - with expanded polygon: CS3
     # - without expanded polygon: CS2
     return "CS3" if bool(has_expand_polygon) else "CS2"
+
+
+def _explode_to_surface_faces(object_ids):
+    faces = []
+    for obj_id in _coerce_ids(object_ids):
+        if not obj_id or not rs.IsObject(obj_id):
+            continue
+        if rs.IsSurface(obj_id):
+            faces.append(obj_id)
+            continue
+        exploded = []
+        try:
+            exploded = _coerce_ids(rs.ExplodePolysurfaces(obj_id, delete_input=True) or [])
+        except Exception:
+            exploded = []
+        if exploded:
+            faces.extend([sid for sid in exploded if sid and rs.IsObject(sid)])
+            continue
+        if rs.IsObject(obj_id):
+            faces.append(obj_id)
+    return _coerce_ids(faces)
+
+
+def _split_surfaces_by_normal(surface_ids, normal, min_parallel_dot=0.93):
+    target = _unit(normal, fallback=(0.0, 0.0, 1.0))
+    cap_candidates = []
+    side_ids = []
+
+    for surface_id in _coerce_ids(surface_ids):
+        if not surface_id or not rs.IsObject(surface_id):
+            continue
+        if not rs.IsSurface(surface_id):
+            side_ids.append(surface_id)
+            continue
+        sample_point = _surface_sample_point(surface_id)
+        if sample_point is None:
+            side_ids.append(surface_id)
+            continue
+        face_normal = _surface_normal_at_point(surface_id, sample_point, fallback=target)
+        dot_value = _dot(_unit(face_normal, fallback=target), target)
+        if abs(dot_value) >= float(min_parallel_dot):
+            cap_candidates.append((surface_id, _dot(_vec3(sample_point), target)))
+        else:
+            side_ids.append(surface_id)
+
+    top_ids = []
+    bottom_ids = []
+    if cap_candidates:
+        cap_candidates.sort(key=lambda item: item[1], reverse=True)
+        top_ids.append(cap_candidates[0][0])
+        bottom_ids.extend([item[0] for item in cap_candidates[1:]])
+
+    all_ids = _coerce_ids(top_ids + side_ids + bottom_ids)
+    return {
+        "all": all_ids,
+        "top": _coerce_ids(top_ids),
+        "side": _coerce_ids(side_ids),
+        "bottom": _coerce_ids(bottom_ids),
+    }
 
 
 def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debug_cfg=None):
@@ -1476,19 +1540,19 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     def _extrude_polygon_through_surface(polygon_points, thickness):
         curve_id = _add_polyline(polygon_points)
         if not curve_id:
-            return []
+            return {"all": [], "top": [], "side": [], "bottom": []}
         try:
             depth = max(1e-4, float(thickness))
             start = rs.CurveStartPoint(curve_id)
             if not start:
-                return []
+                return {"all": [], "top": [], "side": [], "bottom": []}
             start_pt = _vec3(start)
             # Extrude along -normal so the volume intersects host surface and avoids visible seams.
             end_pt = _add(start_pt, _scale(outward_normal, -3.0 * depth))
             extrusion = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
             extrusion_ids = _coerce_ids([extrusion])
             if not extrusion_ids:
-                return []
+                return {"all": [], "top": [], "side": [], "bottom": []}
 
             # Prefer capping in-place so the returned geometry keeps the original polygon face.
             capped = False
@@ -1497,25 +1561,25 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
                     capped = bool(rs.CapPlanarHoles(obj_id)) or capped
                 except Exception:
                     continue
-            if capped:
-                return extrusion_ids
 
             geometry_ids = list(extrusion_ids)
 
             # Fallback: create top and bottom planar caps when capping API cannot close the extrusion.
-            top_cap_ids = _coerce_ids(rs.AddPlanarSrf(curve_id) or [])
-            geometry_ids.extend(top_cap_ids)
+            if not capped:
+                top_cap_ids = _coerce_ids(rs.AddPlanarSrf(curve_id) or [])
+                geometry_ids.extend(top_cap_ids)
 
-            end_curve_id = rs.CopyObject(curve_id, _sub(end_pt, start_pt))
-            try:
-                if end_curve_id and rs.IsObject(end_curve_id):
-                    bottom_cap_ids = _coerce_ids(rs.AddPlanarSrf(end_curve_id) or [])
-                    geometry_ids.extend(bottom_cap_ids)
-            finally:
-                if end_curve_id and rs.IsObject(end_curve_id):
-                    rs.DeleteObject(end_curve_id)
+                end_curve_id = rs.CopyObject(curve_id, _sub(end_pt, start_pt))
+                try:
+                    if end_curve_id and rs.IsObject(end_curve_id):
+                        bottom_cap_ids = _coerce_ids(rs.AddPlanarSrf(end_curve_id) or [])
+                        geometry_ids.extend(bottom_cap_ids)
+                finally:
+                    if end_curve_id and rs.IsObject(end_curve_id):
+                        rs.DeleteObject(end_curve_id)
 
-            return _coerce_ids(geometry_ids)
+            face_ids = _explode_to_surface_faces(geometry_ids)
+            return _split_surfaces_by_normal(face_ids, outward_normal)
         finally:
             if rs.IsObject(curve_id):
                 rs.DeleteObject(curve_id)
@@ -1552,18 +1616,29 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     cs_level = sampled_cs
 
     inner_lifted_polygon = _offset_polygon_along_normal(inner_polygon, thickness)
-    inner_geometry = _extrude_polygon_through_surface(inner_lifted_polygon, thickness)
+    inner_split = _extrude_polygon_through_surface(inner_lifted_polygon, thickness)
+    inner_geometry = _coerce_ids(inner_split.get("all") or [])
+    inner_top_geometry = _coerce_ids(inner_split.get("top") or [])
+    inner_side_geometry = _coerce_ids((inner_split.get("side") or []) + (inner_split.get("bottom") or []))
     _orient_surfaces_to_normal(inner_geometry, outward_normal)
 
-    inner_layer = _geometry_layer_for_condition(layer_map, "efflore", cs_level)
-    _assign_layer(inner_geometry, inner_layer)
+    inner_top_layer = _geometry_layer_for_condition(layer_map, "efflore", cs_level, part="top")
+    inner_side_layer = _geometry_layer_for_condition(layer_map, "efflore", cs_level, part="side")
+    _assign_layer(inner_top_geometry, inner_top_layer)
+    _assign_layer(inner_side_geometry, inner_side_layer)
 
     outer_geometry = []
+    outer_top_geometry = []
+    outer_side_geometry = []
     if has_outer:
         outer_lifted_polygon = _offset_polygon_along_normal(outer_polygon, thickness)
-        outer_geometry = _extrude_polygon_through_surface(outer_lifted_polygon, thickness)
+        outer_split = _extrude_polygon_through_surface(outer_lifted_polygon, thickness)
+        outer_geometry = _coerce_ids(outer_split.get("all") or [])
+        outer_top_geometry = _coerce_ids(outer_split.get("top") or [])
+        outer_side_geometry = _coerce_ids((outer_split.get("side") or []) + (outer_split.get("bottom") or []))
         _orient_surfaces_to_normal(outer_geometry, outward_normal)
-        _assign_layer(outer_geometry, inner_layer)
+        _assign_layer(outer_top_geometry, inner_top_layer)
+        _assign_layer(outer_side_geometry, inner_side_layer)
 
     geometry_ids = _coerce_ids(inner_geometry + outer_geometry)
     if not geometry_ids:
@@ -1575,6 +1650,12 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     record["geometry_ids"] = _as_strings(geometry_ids)
     record["efflore_inner_geometry_ids"] = _as_strings(inner_geometry)
     record["efflore_outer_geometry_ids"] = _as_strings(outer_geometry)
+    record["efflore_top_geometry_ids"] = _as_strings(inner_top_geometry + outer_top_geometry)
+    record["efflore_side_geometry_ids"] = _as_strings(inner_side_geometry + outer_side_geometry)
+    record["efflore_inner_top_geometry_ids"] = _as_strings(inner_top_geometry)
+    record["efflore_inner_side_geometry_ids"] = _as_strings(inner_side_geometry)
+    record["efflore_outer_top_geometry_ids"] = _as_strings(outer_top_geometry)
+    record["efflore_outer_side_geometry_ids"] = _as_strings(outer_side_geometry)
     record["mask_ids"] = []
     record["efflore_metrics"] = {
         "thickness": float(thickness),
@@ -1582,6 +1663,8 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
         "lift_offset": float(thickness),
         "extrude_depth": float(3.0 * thickness),
         "has_outer_layer": bool(outer_geometry),
+        "top_face_count": int(len(inner_top_geometry) + len(outer_top_geometry)),
+        "side_face_count": int(len(inner_side_geometry) + len(outer_side_geometry)),
         "mask_uses_outer": False,
         "uses_expand_polygon": bool(uses_expand_polygon),
     }

@@ -58,7 +58,7 @@ modeling:
       overview_csv_path: null
       cs_weights: [1, 1]
       span_range_cm: [30.0, 100.0]
-      fixed_thickness: 0.5
+      fixed_thickness: 0.25
     spalling:
       enabled: true
       count: 0
