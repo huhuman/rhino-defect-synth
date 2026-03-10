@@ -2162,16 +2162,6 @@ def _extract_camera_defects(records):
     return defects
 
 
-def save_defect_records(path, payload):
-    if not path:
-        return None
-    abs_path = os.path.abspath(path)
-    os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-    with open(abs_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
-    return abs_path
-
-
 def load_defect_records(path):
     """Load saved defect placement records for rendering/camera seeding."""
     if not path:
@@ -2225,7 +2215,6 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
             "enabled": False,
             "records": [],
             "camera_defects": [],
-            "record_output_path": None,
             "summary": {"total": 0},
             "layer_map": _resolve_layer_map(cfg, debug_cfg=debug_cfg),
         }
@@ -2237,7 +2226,6 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
             "enabled": True,
             "records": [],
             "camera_defects": [],
-            "record_output_path": None,
             "summary": {"total": 0},
             "layer_map": layer_map,
         }
@@ -2255,7 +2243,6 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
             "enabled": True,
             "records": [],
             "camera_defects": [],
-            "record_output_path": None,
             "summary": {"total": 0},
             "layer_map": layer_map,
         }
@@ -2307,13 +2294,11 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
         "layer_map": layer_map,
         "surface_subtraction": subtraction,
     }
-    output_path = save_defect_records(cfg.get("record_output_path"), payload)
 
     return {
         "enabled": True,
         "records": json_ready,
         "camera_defects": camera_defects,
-        "record_output_path": output_path,
         "summary": summary,
         "layer_map": layer_map,
         "surface_subtraction": subtraction,

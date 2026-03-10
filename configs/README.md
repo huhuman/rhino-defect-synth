@@ -113,20 +113,25 @@ Batch runtime flow in `main_cube_batch.py`:
 |---|---|---|---|---|
 | `enabled` | `bool` | Optional global gate for component defect placement. | `component_defect_defaults.yaml` | If false, component defect stage is skipped. |
 | `seed` | `int | null` | Local RNG seed for defect placement. | `component_defect_defaults.yaml` | Isolated RNG state. |
-| `record_output_path` | `string | null` | Optional JSON output path for records. | `component_defect_defaults.yaml` | Creates parent dir automatically. |
 | `target_layers` | `list[str] | null` | Limits candidate surfaces by layer. | `component_defect_defaults.yaml` | `null` means no layer filtering. |
 | `max_attempts_per_instance` | `int` | Retry budget per defect instance. | `component_defect_defaults.yaml` | Prevents infinite placement loops. |
 | `reference.*` | mixed | Candidate point extraction controls. | `component_defect_defaults.yaml` | Includes boundary distance threshold. |
-| `random.*` | mixed | Shared transform randomization bounds. | `component_defect_defaults.yaml` | Scale/orientation/margin/offset. |
-| `shape_library.*` | mixed | Global fallback shape-template loading controls. | `component_defect_defaults.yaml` | Used when defect-specific overview CSV is not set. |
+| `random.*` | mixed | Shared placement randomization bounds. | `component_defect_defaults.yaml` | Orientation/margin/offset. |
 | `layers.seeds` | `string` | Seed marker layer. | `component_defect_defaults.yaml` | Auto-created if missing. |
 | `layers.geometry.*` | `dict[str,string]` | Geometry output layers by defect type. | `component_defect_defaults.yaml` | Auto-created if missing. |
-| `layers.mask.*` | `dict[str,string]` | Mask output layers by defect type. | `component_defect_defaults.yaml` | Auto-created if missing. |
 | `crack.overview_csv_path` | `string | null` | Reads crack overview rows and resolves per-instance polygon JSON from `instance_mask_path`. | `component_defect_defaults.yaml` | Supports `units -> polygon` path rewrite. |
-| `crack.target_width_cm` | `float` | Pixel-to-world baseline using `width_px`. | `component_defect_defaults.yaml` | Final scale also multiplies `random.scale_*`. |
-| `crack.*` | mixed | Crack-specific geometry/severity controls. | `component_defect_defaults.yaml` | Severity uses `width_cm = width_px * px_to_cm` with thresholds `t1/t2` (`<t1 => CS1`, `<t2 => CS2`, otherwise CS3). |
-| `efflore.*` | mixed | Component-only efflore controls. | `component_defect_defaults.yaml` | Uses CS2/CS3 only (no CS1). |
-| `spalling.*` | mixed | Component-only spalling/rebar controls. | `component_defect_defaults.yaml` | Uses CS2/CS3 only (no CS1). |
+| `crack.cs_weights` | `list[float]` | Weighted CS sampling for crack severity. | `component_defect_defaults.yaml` | Order is `[CS1, CS2, CS3]`; default `[1,1,1]`. |
+| `crack.t1`, `crack.t2` | `float` | Crack-width thresholds (cm) used by CS-based sampling and severity metadata. | `component_defect_defaults.yaml` | Sampling ranges: CS1=`0.5*t1..t1`, CS2=`t1..t2`, CS3=`t2..5*t2`. |
+| `crack.d1_range`, `crack.delta_depth_range` | `list[float,float]` | Crack-geometry depth controls passed to crack modeling. | `component_defect_defaults.yaml` | Independent from CS-width sampling. |
+| `efflore.overview_csv_path` | `string | null` | Reads efflore overview rows and resolves polygon JSON per instance. | `component_defect_defaults.yaml` | If no usable shapes, efflore placement is skipped. |
+| `efflore.cs_weights` | `list[float]` | Weighted CS sampling for efflore. | `component_defect_defaults.yaml` | Order is `[CS2, CS3]`; default `[1,1]`. |
+| `efflore.span_range_cm` | `list[float,float]` | Efflore span sampling range (cm) for px-to-world normalization. | `component_defect_defaults.yaml` | Alternatives: `span_min_cm/span_max_cm` or fixed `span_cm`. |
+| `efflore.fixed_thickness` | `float` | Base thickness used for efflore extrusion. | `component_defect_defaults.yaml` | Geometry is offset by +normal then extruded along -normal. |
+| `spalling.overview_csv_path` | `string | null` | Reads spalling overview rows and resolves polygon JSON per instance. | `component_defect_defaults.yaml` | If no usable shapes, spalling placement is skipped. |
+| `spalling.cs_weights` | `list[float]` | Weighted CS sampling for spalling severity. | `component_defect_defaults.yaml` | Order is `[CS2, CS3]`; default `[1,1]`. |
+| `spalling.depth_threshold`, `spalling.diameter_threshold` | `float` | CS2/CS3 sampling thresholds for depth and diameter. | `component_defect_defaults.yaml` | CS2 uses `0.5*threshold..threshold`; CS3 uses `threshold..2*threshold`. |
+| `spalling.depth_irregularity`, `spalling.min_bottom_area_ratio` | `float` | Spall cavity profile controls. | `component_defect_defaults.yaml` | Bottom area ratio is enforced at the deepest ring. |
+| `spalling.rebar_enabled`, `spalling.rebar_probability`, `spalling.force_rebar`, `spalling.rebar.*` | mixed | Rebar placement and geometry controls. | `component_defect_defaults.yaml` | When rebar is present, spall+rebar are grouped as `defect::exposed_rebar::*`. |
 | Cube defect scope | literal | Cube modeling currently generates cracks directly from six face maps and does not invoke `modeling.defect`. | `cube_defaults.yaml` | `cube_defect_defaults.yaml` is retained for compatibility/config composition. |
 
 ## Rendering Parameters

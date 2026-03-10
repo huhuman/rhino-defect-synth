@@ -17,7 +17,6 @@ modeling:
   defect:
     enabled: true
     seed: null
-    record_output_path: null
     target_layers: ["component::slab", "component::parapet", "component::beam", "component::pier"]
     max_attempts_per_instance: 40
     reference:

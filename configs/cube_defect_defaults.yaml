@@ -1,7 +1,6 @@
 modeling:
   defect:
     seed: null
-    record_output_path: null
     target_layers: null
     max_attempts_per_instance: 40
     reference:

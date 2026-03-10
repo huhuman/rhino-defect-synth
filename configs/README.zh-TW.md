@@ -112,20 +112,25 @@
 |---|---|---|---|---|
 | `enabled` | `bool` | component defect placement 的全域開關（可選）。 | `component_defect_defaults.yaml` | 設為 false 時 component defect stage 會跳過。 |
 | `seed` | `int | null` | defect placement 本地 RNG 種子。 | `component_defect_defaults.yaml` | 不污染全域 random。 |
-| `record_output_path` | `string | null` | 可選 JSON 輸出路徑。 | `component_defect_defaults.yaml` | 會自動建目錄。 |
 | `target_layers` | `list[str] | null` | 候選 surface 圖層過濾。 | `component_defect_defaults.yaml` | `null` 代表不過濾。 |
 | `max_attempts_per_instance` | `int` | 單一缺陷實例最大嘗試次數。 | `component_defect_defaults.yaml` | 防止無限重試。 |
 | `reference.*` | mixed | 候選點抽樣控制。 | `component_defect_defaults.yaml` | 含邊界距離限制。 |
-| `random.*` | mixed | 共用隨機轉換參數。 | `component_defect_defaults.yaml` | scale/orientation/margin/offset。 |
-| `shape_library.*` | mixed | 全域備援 shape 模板載入控制。 | `component_defect_defaults.yaml` | 當 defect 沒設定 overview CSV 時才使用。 |
+| `random.*` | mixed | 共用 placement 隨機參數。 | `component_defect_defaults.yaml` | orientation/margin/offset。 |
 | `layers.seeds` | `string` | seed marker 圖層。 | `component_defect_defaults.yaml` | 不存在會自動建立。 |
 | `layers.geometry.*` | `dict[str,string]` | 各 defect 幾何輸出圖層。 | `component_defect_defaults.yaml` | 不存在會自動建立。 |
-| `layers.mask.*` | `dict[str,string]` | 各 defect mask 輸出圖層。 | `component_defect_defaults.yaml` | 不存在會自動建立。 |
 | `crack.overview_csv_path` | `string | null` | 讀 crack overview rows，並由 `instance_mask_path` 反推 polygon JSON。 | `component_defect_defaults.yaml` | 支援 `units -> polygon` 路徑轉換。 |
-| `crack.target_width_cm` | `float` | 以 `width_px` 做 pixel->world 基準換算。 | `component_defect_defaults.yaml` | 最終仍會再乘 `random.scale_*`。 |
-| `crack.*` | mixed | crack 專用幾何/嚴重度參數。 | `component_defect_defaults.yaml` | 嚴重度以 `width_cm = width_px * px_to_cm` 搭配 `t1/t2`（`<t1 => CS1`、`<t2 => CS2`、否則 CS3）。 |
-| `efflore.*` | mixed | component 專用 efflore 參數。 | `component_defect_defaults.yaml` | 只有 CS2/CS3（沒有 CS1）。 |
-| `spalling.*` | mixed | component 專用 spalling/rebar 參數。 | `component_defect_defaults.yaml` | 只有 CS2/CS3（沒有 CS1）。 |
+| `crack.cs_weights` | `list[float]` | crack 嚴重度 CS 的加權隨機。 | `component_defect_defaults.yaml` | 順序為 `[CS1, CS2, CS3]`，預設 `[1,1,1]`。 |
+| `crack.t1`, `crack.t2` | `float` | crack 寬度門檻（cm），供 CS 抽樣與嚴重度 metadata 使用。 | `component_defect_defaults.yaml` | 抽樣區間：CS1=`0.5*t1..t1`、CS2=`t1..t2`、CS3=`t2..5*t2`。 |
+| `crack.d1_range`, `crack.delta_depth_range` | `list[float,float]` | 傳給 crack 建模的深度參數。 | `component_defect_defaults.yaml` | 與 CS 寬度抽樣分開。 |
+| `efflore.overview_csv_path` | `string | null` | 讀 efflore overview rows 並解析每個實例的 polygon JSON。 | `component_defect_defaults.yaml` | 若找不到可用 shape 會跳過 efflore。 |
+| `efflore.cs_weights` | `list[float]` | efflore CS 加權隨機。 | `component_defect_defaults.yaml` | 順序為 `[CS2, CS3]`，預設 `[1,1]`。 |
+| `efflore.span_range_cm` | `list[float,float]` | efflore 尺度抽樣範圍（cm），用於 px->world 正規化。 | `component_defect_defaults.yaml` | 也可用 `span_min_cm/span_max_cm` 或固定 `span_cm`。 |
+| `efflore.fixed_thickness` | `float` | efflore 擠出厚度基準。 | `component_defect_defaults.yaml` | 幾何流程為先沿 +normal 偏移再沿 -normal 擠出。 |
+| `spalling.overview_csv_path` | `string | null` | 讀 spalling overview rows 並解析每個實例的 polygon JSON。 | `component_defect_defaults.yaml` | 若找不到可用 shape 會跳過 spalling。 |
+| `spalling.cs_weights` | `list[float]` | spalling CS 加權隨機。 | `component_defect_defaults.yaml` | 順序為 `[CS2, CS3]`，預設 `[1,1]`。 |
+| `spalling.depth_threshold`, `spalling.diameter_threshold` | `float` | depth/diameter 的 CS2/CS3 抽樣門檻。 | `component_defect_defaults.yaml` | CS2 用 `0.5*threshold..threshold`；CS3 用 `threshold..2*threshold`。 |
+| `spalling.depth_irregularity`, `spalling.min_bottom_area_ratio` | `float` | spall 腔體剖面控制。 | `component_defect_defaults.yaml` | 最深 ring 會保證底面比例下限。 |
+| `spalling.rebar_enabled`, `spalling.rebar_probability`, `spalling.force_rebar`, `spalling.rebar.*` | mixed | rebar 放置與幾何控制。 | `component_defect_defaults.yaml` | 有 rebar 時 spall+rebar 會一起歸類到 `defect::exposed_rebar::*`。 |
 | Cube defect scope | literal | cube 目前直接由六個面 map 生成 crack，並不執行 `modeling.defect`。 | `cube_defaults.yaml` | `cube_defect_defaults.yaml` 仍保留給相容與設定組合用途。 |
 
 ## Rendering 參數
