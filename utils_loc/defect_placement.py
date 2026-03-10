@@ -1423,7 +1423,36 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
             # Extrude along -normal so the volume intersects host surface and avoids visible seams.
             end_pt = _add(start_pt, _scale(outward_normal, -3.0 * depth))
             extrusion = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
-            return _coerce_ids([extrusion])
+            extrusion_ids = _coerce_ids([extrusion])
+            if not extrusion_ids:
+                return []
+
+            # Prefer capping in-place so the returned geometry keeps the original polygon face.
+            capped = False
+            for obj_id in extrusion_ids:
+                try:
+                    capped = bool(rs.CapPlanarHoles(obj_id)) or capped
+                except Exception:
+                    continue
+            if capped:
+                return extrusion_ids
+
+            geometry_ids = list(extrusion_ids)
+
+            # Fallback: create top and bottom planar caps when capping API cannot close the extrusion.
+            top_cap_ids = _coerce_ids(rs.AddPlanarSrf(curve_id) or [])
+            geometry_ids.extend(top_cap_ids)
+
+            end_curve_id = rs.CopyObject(curve_id, _sub(end_pt, start_pt))
+            try:
+                if end_curve_id and rs.IsObject(end_curve_id):
+                    bottom_cap_ids = _coerce_ids(rs.AddPlanarSrf(end_curve_id) or [])
+                    geometry_ids.extend(bottom_cap_ids)
+            finally:
+                if end_curve_id and rs.IsObject(end_curve_id):
+                    rs.DeleteObject(end_curve_id)
+
+            return _coerce_ids(geometry_ids)
         finally:
             if rs.IsObject(curve_id):
                 rs.DeleteObject(curve_id)
@@ -1565,12 +1594,36 @@ def _model_spall_from_polygon(
         helper_curves.append(curve_id)
 
     geometry_ids = []
+    bottom_cap_method = "none"
+    bottom_cap_count = 0
     try:
         for idx in range(len(helper_curves) - 1):
             loft = rs.AddLoftSrf([helper_curves[idx], helper_curves[idx + 1]]) or []
             geometry_ids.extend(_coerce_ids(loft))
-        bottom_cap = rs.AddPlanarSrf(helper_curves[-1]) or []
-        geometry_ids.extend(_coerce_ids(bottom_cap))
+        bottom_cap = _coerce_ids(rs.AddPlanarSrf(helper_curves[-1]) or [])
+        if bottom_cap:
+            geometry_ids.extend(bottom_cap)
+            bottom_cap_method = "planar"
+            bottom_cap_count = len(bottom_cap)
+        else:
+            # Non-planar bottom rings cannot be capped with AddPlanarSrf; close with a triangle fan.
+            bottom_vertices = _unique_points(ring_points[-1])
+            if len(bottom_vertices) >= 3:
+                center = (
+                    sum(point[0] for point in bottom_vertices) / float(len(bottom_vertices)),
+                    sum(point[1] for point in bottom_vertices) / float(len(bottom_vertices)),
+                    sum(point[2] for point in bottom_vertices) / float(len(bottom_vertices)),
+                )
+                fan_caps = []
+                for idx in range(len(bottom_vertices)):
+                    p0 = bottom_vertices[idx]
+                    p1 = bottom_vertices[(idx + 1) % len(bottom_vertices)]
+                    tri = rs.AddSrfPt([p0, p1, center])
+                    fan_caps.extend(_coerce_ids([tri]))
+                if fan_caps:
+                    geometry_ids.extend(fan_caps)
+                    bottom_cap_method = "fan"
+                    bottom_cap_count = len(fan_caps)
     finally:
         _delete_objects(helper_curves)
 
@@ -1581,6 +1634,8 @@ def _model_spall_from_polygon(
         "ring_count": len(ring_points),
         "irregularity": irregularity,
         "bottom_area_ratio_min": float(min_bottom_area_ratio),
+        "bottom_cap_method": bottom_cap_method,
+        "bottom_cap_count": int(bottom_cap_count),
     }
 
 
