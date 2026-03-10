@@ -31,18 +31,24 @@
 | 參數路徑 | 型別 | 運作機制 | 預設來源 | 備註 |
 |---|---|---|---|---|
 | `extends` | `string | list[string]` | 載入父設定（可多個）並先行合併。 | 無 | 路徑在 `configs/` 下解析。 |
+| `view_setup` | `dict` | `main.setup_render_view` 的圖層可見性控制區塊。 | 無 | 內含 `only_layers` 與 `hide_layers`。 |
 | `view_setup.only_layers` | `string | list[string]` | `main.setup_render_view` 只顯示匹配層。 | 無 | 支援 `a::b` 階層匹配。 |
 | `view_setup.hide_layers` | `string | list[string]` | 額外隱藏指定層。 | 無 | 在可見性流程後套用。 |
+| `preparation` | `dict` | preparation stage 使用的材質/圖層/plugin 設定。 | base config | 通常由 `*_base.yaml` 提供。 |
 | `preparation.materials` | `dict[str,str \| list[str]]` | 每個圖層可設定多個材質選項；preparation 會先過濾不存在者、隨機挑一個，並只匯入被選中的材質。 | base config | 交給 `create_layers`。 |
 | `preparation.seed` | `int \| null` | preparation 材質選項隨機挑選的 seed。 | 無 | `null` 代表非固定。 |
 | `preparation.colors` | `dict[str,str]` | `pipeline.prepare` 的圖層顏色映射。 | base config | 建立圖層時使用。 |
+| `preparation.texture_materials` | `dict` | 紋理材質匯入設定。 | base config | 內含資料夾路徑與遞迴開關。 |
 | `preparation.texture_materials.texture_root_dir` | `string | null` | 若設定，從資料夾建立材質。 | 無 | 可選。 |
 | `preparation.texture_materials.recursive` | `bool` | 紋理遞迴掃描開關。 | `true` | 僅在設定 texture root 時生效。 |
 | `preparation.material_search_paths` | `string \| list[string] \| null` | 額外材質資料夾（用材質名稱找檔案）。 | 無 | 可掛自訂 material library。 |
+| `preparation.builtin_material_library` | `dict` | 內建材質庫查找設定。 | base config | 內含 category/subcategory 清單。 |
 | `preparation.builtin_material_library.{category,subcategory1,subcategory2}` | `list[string]` | 內建材質資料夾查找路徑設定。 | `["Architectural"] / ["Wall"] / ["Concrete"]` | 三個 list 以同 index 配對；只使用 `min(len(category), len(subcategory1), len(subcategory2))` 組。 |
+| `preparation.plugin_autoload.enabled` | `bool` | 是否啟用 Rhino 命令檢查與 plugin 自動載入。 | `true` | 設為 `false` 時跳過檢查。 |
 | `preparation.plugin_autoload.path` | `string \| null` | preparation 自動載入 plugin 的檔案路徑（`.rhp` 或 `.dll`）。 | 無 | 僅在必要命令缺失時使用。 |
 | `preparation.plugin_autoload.required_commands` | `string \| list[string]` | 進入後續流程前必須可用的 Rhino command 名稱。 | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | 任一缺失即觸發 plugin 自動載入。 |
 | `preparation.plugin_autoload.strict` | `bool` | 命令缺失或載入失敗時是否直接中止流程。 | `true` | 設 `false` 則警告後繼續。 |
+| `preparation.plugin_autoload.verbose` | `bool` | 必要命令已存在時是否輸出資訊訊息。 | `true` | 不影響 strict 的錯誤行為。 |
 | `modeling` | `dict` | 傳入 `pipeline.create_model`。 | config | 需包含 `strategy`。 |
 | `rendering` | `dict` | 傳入 `pipeline.run_render`。 | config | render stage 必要。 |
 | `nested_loop` | `dict` | 由 `main_cube_batch.run` 使用，用於 cube 批次資料產生。 | 無 | 可選；`main.py` 不會使用。 |
@@ -105,6 +111,14 @@
 | `pier.m_column.*` | mixed | m_column 專用形狀參數。 | `component_defaults.yaml` | 僅 type=m_column 使用。 |
 | `layers.{slab,parapet,beam,bearing,pier}` | `string` | 各構件輸出圖層名稱映射。 | `component_defaults.yaml` | 可用階層路徑。 |
 
+## Modeling：Debug (`modeling.debug`)
+
+| 參數路徑 | 型別 | 運作機制 | 預設來源 | 備註 |
+|---|---|---|---|---|
+| `surface_normals.*` | mixed | 繪製 component surface 法向箭頭（除錯用）。 | `component_defaults.yaml` | 僅 component 分支使用。 |
+| `defect_normals.*` | mixed | 在 defect placement 過程繪製 defect 法向箭頭。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::normal`。 |
+| `defect_seeds.*` | mixed | 在放置成功點繪製 defect seed marker。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::seed`，可依 type 分層。 |
+
 ## Modeling：Defect (`modeling.defect`)
 
 | 參數路徑 | 型別 | 運作機制 | 預設來源 | 備註 |
@@ -115,21 +129,29 @@
 | `max_attempts_per_instance` | `int` | 單一缺陷實例最大嘗試次數。 | `component_defect_defaults.yaml` | 防止無限重試。 |
 | `reference.*` | mixed | 候選點抽樣控制。 | `component_defect_defaults.yaml` | 含邊界距離限制。 |
 | `random.*` | mixed | 共用 placement 隨機參數。 | `component_defect_defaults.yaml` | orientation/margin/offset。 |
+| `surface_subtraction.normal_extrude_distance` | `float` | post-placement 表面切割 cutter 的法向擠出距離。 | `component_defect_defaults.yaml` | 套用於 crack/spalling/exposed_rebar 的 surface split。 |
 | `layers.seeds` | `string` | seed marker 圖層。 | `component_defect_defaults.yaml` | 不存在會自動建立。 |
 | `layers.geometry.*` | `dict[str,string]` | 各 defect 幾何輸出圖層。 | `component_defect_defaults.yaml` | 不存在會自動建立。 |
+| `crack.enabled`, `crack.count` | `bool`, `int` | crack 放置開關與要求實例數。 | `component_defect_defaults.yaml` | 停用時 count 會被忽略。 |
 | `crack.overview_csv_path` | `string | null` | 讀 crack overview rows，並由 `instance_mask_path` 反推 polygon JSON。 | `component_defect_defaults.yaml` | 支援 `units -> polygon` 路徑轉換。 |
 | `crack.cs_weights` | `list[float]` | crack 嚴重度 CS 的加權隨機。 | `component_defect_defaults.yaml` | 順序為 `[CS1, CS2, CS3]`，預設 `[1,1,1]`。 |
 | `crack.t1`, `crack.t2` | `float` | crack 寬度門檻（cm），供 CS 抽樣與嚴重度 metadata 使用。 | `component_defect_defaults.yaml` | 抽樣區間：CS1=`0.5*t1..t1`、CS2=`t1..t2`、CS3=`t2..5*t2`。 |
 | `crack.d1_range`, `crack.delta_depth_range` | `list[float,float]` | 傳給 crack 建模的深度參數。 | `component_defect_defaults.yaml` | 與 CS 寬度抽樣分開。 |
+| `crack.cs2_d1_threshold`, `crack.cs3_d1_threshold` | `float` | 無法取得寬度指標時的舊版 D1 嚴重度 fallback 門檻。 | `cube_defect_defaults.yaml` | 相容用途，非主要 crack CS 判斷。 |
+| `crack.target_width_cm` | `float` | 保留於 cube defect defaults 的舊相容鍵。 | `cube_defect_defaults.yaml` | 目前 component defect placement 不使用。 |
+| `efflore.enabled`, `efflore.count` | `bool`, `int` | efflore 放置開關與要求實例數。 | `component_defect_defaults.yaml` | 停用時 count 會被忽略。 |
 | `efflore.overview_csv_path` | `string | null` | 讀 efflore overview rows 並解析每個實例的 polygon JSON。 | `component_defect_defaults.yaml` | 若找不到可用 shape 會跳過 efflore。 |
 | `efflore.cs_weights` | `list[float]` | efflore CS 加權隨機。 | `component_defect_defaults.yaml` | 順序為 `[CS2, CS3]`，預設 `[1,1]`。 |
 | `efflore.span_range_cm` | `list[float,float]` | efflore 尺度抽樣範圍（cm），用於 px->world 正規化。 | `component_defect_defaults.yaml` | 也可用 `span_min_cm/span_max_cm` 或固定 `span_cm`。 |
 | `efflore.fixed_thickness` | `float` | efflore 擠出厚度基準。 | `component_defect_defaults.yaml` | 幾何流程為先沿 +normal 偏移再沿 -normal 擠出。 |
+| `spalling.enabled`, `spalling.count` | `bool`, `int` | spalling 放置開關與要求實例數。 | `component_defect_defaults.yaml` | 停用時 count 會被忽略。 |
 | `spalling.overview_csv_path` | `string | null` | 讀 spalling overview rows 並解析每個實例的 polygon JSON。 | `component_defect_defaults.yaml` | 若找不到可用 shape 會跳過 spalling。 |
 | `spalling.cs_weights` | `list[float]` | spalling CS 加權隨機。 | `component_defect_defaults.yaml` | 順序為 `[CS2, CS3]`，預設 `[1,1]`。 |
 | `spalling.depth_threshold`, `spalling.diameter_threshold` | `float` | depth/diameter 的 CS2/CS3 抽樣門檻。 | `component_defect_defaults.yaml` | CS2 用 `0.5*threshold..threshold`；CS3 用 `threshold..2*threshold`。 |
 | `spalling.depth_irregularity`, `spalling.min_bottom_area_ratio` | `float` | spall 腔體剖面控制。 | `component_defect_defaults.yaml` | 最深 ring 會保證底面比例下限。 |
 | `spalling.rebar_enabled`, `spalling.rebar_probability`, `spalling.force_rebar`, `spalling.rebar.*` | mixed | rebar 放置與幾何控制。 | `component_defect_defaults.yaml` | 有 rebar 時 spall+rebar 會一起歸類到 `defect::exposed_rebar::*`。 |
+| `shape_library.*` | mixed | 保留於 cube defect defaults 的舊 shape-library 相容區塊。 | `cube_defect_defaults.yaml` | 目前 component defect placement 不使用。 |
+| `random.scale_min`, `random.scale_max` | `float` | 保留於 cube defect defaults 的舊隨機縮放參數。 | `cube_defect_defaults.yaml` | 目前 component defect placement 不使用。 |
 | Cube defect scope | literal | cube 目前直接由六個面 map 生成 crack，並不執行 `modeling.defect`。 | `cube_defaults.yaml` | `cube_defect_defaults.yaml` 仍保留給相容與設定組合用途。 |
 
 ## Rendering 參數

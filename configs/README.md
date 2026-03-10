@@ -31,18 +31,24 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
 |---|---|---|---|---|
 | `extends` | `string | list[string]` | Parent config(s) to merge before current config. | none | Paths are resolved under `configs/`. |
+| `view_setup` | `dict` | Optional view-layer visibility controls used by `main.setup_render_view`. | none | Includes `only_layers` and `hide_layers`. |
 | `view_setup.only_layers` | `string | list[string]` | If set, only matched layers are visible in `main.setup_render_view`. | none | Supports hierarchical matching like `a::b`. |
 | `view_setup.hide_layers` | `string | list[string]` | Hides layers after visibility pass. | none | Applied in addition to `only_layers`. |
+| `preparation` | `dict` | Preparation-stage material/layer/plugin options passed to `pipeline.prepare`. | base config | Optional, but typically provided by `*_base.yaml`. |
 | `preparation.materials` | `dict[str,str \| list[str]]` | Per-layer material options; preparation filters unavailable options, randomly picks one, then imports only selected materials. | base config | Used by `create_layers`. |
 | `preparation.seed` | `int \| null` | Optional random seed for material-option selection in preparation. | none | `null` keeps non-deterministic selection. |
 | `preparation.colors` | `dict[str,str]` | Layer color mapping in `pipeline.prepare`. | base config | Required by layer creation. |
+| `preparation.texture_materials` | `dict` | Texture-material import options in preparation. | base config | Includes root folder and recursion toggle. |
 | `preparation.texture_materials.texture_root_dir` | `string | null` | If set, imports texture materials from this folder. | none | Optional convenience. |
 | `preparation.texture_materials.recursive` | `bool` | Recursive texture scan toggle. | `true` | Used only when texture root is set. |
 | `preparation.material_search_paths` | `string \| list[string] \| null` | Extra folders to resolve named material files. | none | Helpful for custom material libraries outside built-in path. |
+| `preparation.builtin_material_library` | `dict` | Built-in material library selectors used by name-based import lookup. | base config | Includes category/subcategory lists. |
 | `preparation.builtin_material_library.{category,subcategory1,subcategory2}` | `list[string]` | Built-in material folder selectors for name-based lookup/import. | `["Architectural"] / ["Wall"] / ["Concrete"]` | Lists are matched by index; only `min(len(category), len(subcategory1), len(subcategory2))` triplets are used. |
+| `preparation.plugin_autoload.enabled` | `bool` | Enables/disables pre-run Rhino command checking and plugin auto-load. | `true` | If false, plugin check is skipped. |
 | `preparation.plugin_autoload.path` | `string \| null` | Plugin file path (`.rhp` or `.dll`) used by preparation auto-load. | none | Used only when required commands are missing. |
 | `preparation.plugin_autoload.required_commands` | `string \| list[string]` | Command names that must be available before continuing. | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | If any command is missing, preparation attempts plugin auto-load. |
 | `preparation.plugin_autoload.strict` | `bool` | Whether missing commands / load failures should stop pipeline. | `true` | Set `false` to warn and continue. |
+| `preparation.plugin_autoload.verbose` | `bool` | Controls informational logging when required commands are already available. | `true` | Does not affect strict-error behavior. |
 | `modeling` | `dict` | Passed to `pipeline.create_model`. | config | Must include `strategy`. |
 | `rendering` | `dict` | Passed to `pipeline.run_render`. | config | Required for render stage. |
 | `nested_loop` | `dict` | Used by `main_cube_batch.run` for batched cube dataset generation. | none | Optional; ignored by `main.py`. |
@@ -106,6 +112,14 @@ Batch runtime flow in `main_cube_batch.py`:
 | `pier.m_column.*` | mixed | M-column-specific shape controls. | `component_defaults.yaml` | Used only when type is `m_column`. |
 | `layers.{slab,parapet,beam,bearing,pier}` | `string` | Layer name mapping for generated objects. | `component_defaults.yaml` | Can use hierarchical paths. |
 
+## Modeling: Debug (`modeling.debug`)
+
+| Parameter path | Type | Runtime mechanism | Default source | Notes |
+|---|---|---|---|---|
+| `surface_normals.*` | mixed | Draws component surface-normal arrows for debug visualization. | `component_defaults.yaml` | Used in component branch only. |
+| `defect_normals.*` | mixed | Draws defect-normal arrows during defect placement. | `component_defect_defaults.yaml` | Layer defaults to `debug::normal`. |
+| `defect_seeds.*` | mixed | Draws defect seed markers at successful placement points. | `component_defect_defaults.yaml` | Layer defaults to `debug::seed`; supports by-type split. |
+
 ## Modeling: Defect (`modeling.defect`)
 
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
@@ -116,21 +130,29 @@ Batch runtime flow in `main_cube_batch.py`:
 | `max_attempts_per_instance` | `int` | Retry budget per defect instance. | `component_defect_defaults.yaml` | Prevents infinite placement loops. |
 | `reference.*` | mixed | Candidate point extraction controls. | `component_defect_defaults.yaml` | Includes boundary distance threshold. |
 | `random.*` | mixed | Shared placement randomization bounds. | `component_defect_defaults.yaml` | Orientation/margin/offset. |
+| `surface_subtraction.normal_extrude_distance` | `float` | Extrude distance used when building cutters for post-placement surface subtraction. | `component_defect_defaults.yaml` | Applies to crack/spalling/exposed-rebar surface split stage. |
 | `layers.seeds` | `string` | Seed marker layer. | `component_defect_defaults.yaml` | Auto-created if missing. |
 | `layers.geometry.*` | `dict[str,string]` | Geometry output layers by defect type. | `component_defect_defaults.yaml` | Auto-created if missing. |
+| `crack.enabled`, `crack.count` | `bool`, `int` | Enables crack placement and sets requested instance count. | `component_defect_defaults.yaml` | Count is ignored when disabled. |
 | `crack.overview_csv_path` | `string | null` | Reads crack overview rows and resolves per-instance polygon JSON from `instance_mask_path`. | `component_defect_defaults.yaml` | Supports `units -> polygon` path rewrite. |
 | `crack.cs_weights` | `list[float]` | Weighted CS sampling for crack severity. | `component_defect_defaults.yaml` | Order is `[CS1, CS2, CS3]`; default `[1,1,1]`. |
 | `crack.t1`, `crack.t2` | `float` | Crack-width thresholds (cm) used by CS-based sampling and severity metadata. | `component_defect_defaults.yaml` | Sampling ranges: CS1=`0.5*t1..t1`, CS2=`t1..t2`, CS3=`t2..5*t2`. |
 | `crack.d1_range`, `crack.delta_depth_range` | `list[float,float]` | Crack-geometry depth controls passed to crack modeling. | `component_defect_defaults.yaml` | Independent from CS-width sampling. |
+| `crack.cs2_d1_threshold`, `crack.cs3_d1_threshold` | `float` | Legacy D1-based severity fallback thresholds when width metrics are unavailable. | `cube_defect_defaults.yaml` | Compatibility path; not the primary crack CS logic. |
+| `crack.target_width_cm` | `float` | Legacy compatibility key retained in cube defect defaults. | `cube_defect_defaults.yaml` | Currently unused by component defect placement pipeline. |
+| `efflore.enabled`, `efflore.count` | `bool`, `int` | Enables efflore placement and sets requested instance count. | `component_defect_defaults.yaml` | Count is ignored when disabled. |
 | `efflore.overview_csv_path` | `string | null` | Reads efflore overview rows and resolves polygon JSON per instance. | `component_defect_defaults.yaml` | If no usable shapes, efflore placement is skipped. |
 | `efflore.cs_weights` | `list[float]` | Weighted CS sampling for efflore. | `component_defect_defaults.yaml` | Order is `[CS2, CS3]`; default `[1,1]`. |
 | `efflore.span_range_cm` | `list[float,float]` | Efflore span sampling range (cm) for px-to-world normalization. | `component_defect_defaults.yaml` | Alternatives: `span_min_cm/span_max_cm` or fixed `span_cm`. |
 | `efflore.fixed_thickness` | `float` | Base thickness used for efflore extrusion. | `component_defect_defaults.yaml` | Geometry is offset by +normal then extruded along -normal. |
+| `spalling.enabled`, `spalling.count` | `bool`, `int` | Enables spalling placement and sets requested instance count. | `component_defect_defaults.yaml` | Count is ignored when disabled. |
 | `spalling.overview_csv_path` | `string | null` | Reads spalling overview rows and resolves polygon JSON per instance. | `component_defect_defaults.yaml` | If no usable shapes, spalling placement is skipped. |
 | `spalling.cs_weights` | `list[float]` | Weighted CS sampling for spalling severity. | `component_defect_defaults.yaml` | Order is `[CS2, CS3]`; default `[1,1]`. |
 | `spalling.depth_threshold`, `spalling.diameter_threshold` | `float` | CS2/CS3 sampling thresholds for depth and diameter. | `component_defect_defaults.yaml` | CS2 uses `0.5*threshold..threshold`; CS3 uses `threshold..2*threshold`. |
 | `spalling.depth_irregularity`, `spalling.min_bottom_area_ratio` | `float` | Spall cavity profile controls. | `component_defect_defaults.yaml` | Bottom area ratio is enforced at the deepest ring. |
 | `spalling.rebar_enabled`, `spalling.rebar_probability`, `spalling.force_rebar`, `spalling.rebar.*` | mixed | Rebar placement and geometry controls. | `component_defect_defaults.yaml` | When rebar is present, spall+rebar are grouped as `defect::exposed_rebar::*`. |
+| `shape_library.*` | mixed | Legacy shape-library compatibility block retained for cube defect defaults. | `cube_defect_defaults.yaml` | Currently unused by component defect placement pipeline. |
+| `random.scale_min`, `random.scale_max` | `float` | Legacy random scale bounds retained for cube defect defaults. | `cube_defect_defaults.yaml` | Currently unused by component defect placement pipeline. |
 | Cube defect scope | literal | Cube modeling currently generates cracks directly from six face maps and does not invoke `modeling.defect`. | `cube_defaults.yaml` | `cube_defect_defaults.yaml` is retained for compatibility/config composition. |
 
 ## Rendering Parameters
