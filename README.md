@@ -201,6 +201,7 @@ Pipeline behavior:
 ### 4) `nested_loop` (for `main_cube_batch.py`)
 Optional section to control batch iterations and per-model render variants:
 - `renders_per_model`
+- `camera_arrangements` (`grid` / `spherical`, supports list; runs full prep+render per arrangement)
 - `max_iter` (caps model iterations; actual iterations = `min(max_iter, available_iters)`)
 - `output_index_start` (starting index for `view_XXX` naming)
 - `seed`
@@ -208,7 +209,8 @@ Optional section to control batch iterations and per-model render variants:
 
 Batch flow in `main_cube_batch.py`:
 - Per model iteration: `reset -> preparation -> view_setup -> modeling`
-- Per render iteration: `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+- Per render iteration: one or more `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+  passes (count controlled by `camera_arrangements`)
 - Render view indices are continuous across iterations via `output_index_offset`, preventing filename overwrite.
 
 ## Output Structure

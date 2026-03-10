@@ -52,6 +52,7 @@
 | 參數路徑 | 型別 | 運作機制 | 預設來源 | 備註 |
 |---|---|---|---|---|
 | `renders_per_model` | `int` | 每個模型 iteration 要跑幾次 render iteration。 | `1` | 會至少夾到 `1`。 |
+| `camera_arrangements` | `string \| list[string] \| null` | 每個 render iteration 額外要跑的相機 arrangement 序列覆蓋。 | 無 | 只支援 `grid`、`spherical`。若同時設兩者，單一 `render_iter` 會跑兩次完整 `preparation -> rendering`。 |
 | `max_iter` | `int \| null` | 模型 iteration 上限。 | 無 | 實際次數 = `min(max_iter, available_iters)`；`null` 代表不限制。 |
 | `seed` | `int \| null` | nested-loop 隨機化種子。 | 無 | 用於 rendering sampler 與 batch 隨機抽樣。 |
 | `rendering_sampler` | `dict \| list \| scalar` | 每次 render iteration 對 `rendering` 的隨機覆蓋規格。 | 無 | 抽樣後必須可解析為 dict。 |
@@ -59,7 +60,8 @@
 
 `main_cube_batch.py` 目前執行流程：
 - 每個模型 iteration：`reset -> preparation -> view_setup -> modeling`
-- 每個渲染 iteration：`clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+- 每個渲染 iteration：會執行一或多次 `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+  （次數由 `camera_arrangements` 決定）。
 - view index 會跨 iteration 連續，避免覆蓋前次輸出。
 
 ## Modeling：共用

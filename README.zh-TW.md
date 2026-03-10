@@ -201,6 +201,7 @@ main_cube_batch.run(
 ### 4) `nested_loop`（`main_cube_batch.py`）
 可選區塊，用於控制 batch iteration 與每個模型的多組渲染：
 - `renders_per_model`
+- `camera_arrangements`（`grid` / `spherical`，可設 list；每個 arrangement 都會完整重跑 prep+render）
 - `max_iter`（限制模型 iteration 上限；實際次數 = `min(max_iter, available_iters)`）
 - `output_index_start`（`view_XXX` 命名起始編號）
 - `seed`
@@ -208,7 +209,8 @@ main_cube_batch.run(
 
 `main_cube_batch.py` 目前流程：
 - 每個模型 iteration：`reset -> preparation -> view_setup -> modeling`
-- 每個渲染 iteration：`clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+- 每個渲染 iteration：會執行一或多次 `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+  （次數由 `camera_arrangements` 控制）
 - 透過 `output_index_offset` 讓 render view id 跨 iteration 連續，避免覆蓋檔案。
 
 ## 輸出結構

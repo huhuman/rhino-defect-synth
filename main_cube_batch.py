@@ -215,6 +215,42 @@ def _sample_rendering_params(base_rendering, rendering_sampler, rng):
     return _deep_update(params, sampled_overrides)
 
 
+def _resolve_camera_arrangements(nested_cfg):
+    raw = nested_cfg.get("camera_arrangements")
+    if raw is None:
+        return (None,)
+
+    if isinstance(raw, (str, bytes)):
+        candidates = [raw]
+    elif isinstance(raw, (list, tuple)):
+        candidates = list(raw)
+    else:
+        raise ValueError(
+            "nested_loop.camera_arrangements must be a string or a list of strings."
+        )
+
+    allowed = {"grid", "spherical"}
+    resolved = []
+    seen = set()
+    for item in candidates:
+        arrangement = str(item).strip().lower()
+        if not arrangement:
+            continue
+        if arrangement not in allowed:
+            raise ValueError(
+                f"Unsupported nested_loop.camera_arrangements entry '{arrangement}'. "
+                "Expected one of: grid, spherical."
+            )
+        if arrangement in seen:
+            continue
+        seen.add(arrangement)
+        resolved.append(arrangement)
+
+    if not resolved:
+        return (None,)
+    return tuple(resolved)
+
+
 def _count_render_frames(poses, smooth_path, transition_frames):
     pose_count = len(poses or [])
     if pose_count <= 0:
@@ -313,6 +349,8 @@ def run(
             max_iter = max(0, int(max_iter))
 
         rendering_sampler = nested_cfg.get("rendering_sampler", {})
+        camera_arrangements = _resolve_camera_arrangements(nested_cfg)
+        arrangement_passes = len(camera_arrangements)
         preparation_params = dict(cfg.get("preparation") or {})
 
         json_files = _list_json_files(cube_params.get("cube_map_dir"))
@@ -333,8 +371,11 @@ def run(
 
         print(
             f"Nested run: models={len(model_starts)}, renders_per_model={renders_per_model}, "
-            f"total_renders={len(model_starts) * renders_per_model}"
+            f"arrangement_passes={arrangement_passes}, "
+            f"total_render_passes={len(model_starts) * renders_per_model * arrangement_passes}"
         )
+        if arrangement_passes > 1:
+            print(f"Camera arrangements per render_iter: {list(camera_arrangements)}")
         if max_iter is not None:
             print(
                 f"Iteration cap: max_iter={max_iter}, available_iters={total_model_iters}, "
@@ -361,40 +402,60 @@ def run(
             )
 
             for render_iter in range(renders_per_model):
-                time_render_stage_start = perf_counter()
-                clear_imported_materials_from_doc()
-                prepare(dict(preparation_params))
-                _setup_render_view(cfg=cfg)
+                for arrangement in camera_arrangements:
+                    time_render_stage_start = perf_counter()
+                    clear_imported_materials_from_doc()
+                    prepare(dict(preparation_params))
+                    _setup_render_view(cfg=cfg)
 
-                render_params = _sample_rendering_params(
-                    base_rendering=base_rendering,
-                    rendering_sampler=rendering_sampler,
-                    rng=rng,
-                )
-                render_params["model_iter"] = model_iter
-                render_params["render_iter"] = render_iter
-                render_params["output_index_offset"] = next_output_index
-
-                captured_count, preview_used = _run_render_with_frame_count(
-                    params=render_params,
-                    show_cameras=show_cameras,
-                )
-                next_output_index += int(captured_count)
-                if captured_count > 0:
-                    print(
-                        f"render_iter={render_iter}: captured_views={captured_count}, "
-                        f"next_view_id={next_output_index}"
+                    render_params = _sample_rendering_params(
+                        base_rendering=base_rendering,
+                        rendering_sampler=rendering_sampler,
+                        rng=rng,
                     )
-                stage_times.append(
-                    (
-                        f"preparation->rendering[{model_iter},{render_iter}]",
-                        perf_counter() - time_render_stage_start,
-                    )
-                )
+                    render_params["model_iter"] = model_iter
+                    render_params["render_iter"] = render_iter
+                    render_params["output_index_offset"] = next_output_index
 
-                if preview_used:
-                    # Camera preview mode intentionally exits after first render pass.
-                    stop_after_preview = True
+                    arrangement_label = arrangement if arrangement is not None else "config"
+                    camera_cfg = render_params.get("camera")
+                    if arrangement is not None:
+                        if not isinstance(camera_cfg, dict):
+                            raise ValueError(
+                                "rendering.camera must be a dict when nested_loop.camera_arrangements is used."
+                            )
+                        if str(camera_cfg.get("strategy", "")).lower() != "cube":
+                            raise ValueError(
+                                "nested_loop.camera_arrangements requires rendering.camera.strategy='cube'."
+                            )
+                        cube_cfg = dict(camera_cfg.get("cube") or {})
+                        cube_cfg["arrangement"] = arrangement
+                        camera_cfg = dict(camera_cfg)
+                        camera_cfg["cube"] = cube_cfg
+                        render_params["camera"] = camera_cfg
+
+                    captured_count, preview_used = _run_render_with_frame_count(
+                        params=render_params,
+                        show_cameras=show_cameras,
+                    )
+                    next_output_index += int(captured_count)
+                    if captured_count > 0:
+                        print(
+                            f"render_iter={render_iter}, arrangement={arrangement_label}: "
+                            f"captured_views={captured_count}, next_view_id={next_output_index}"
+                        )
+                    stage_times.append(
+                        (
+                            f"preparation->rendering[{model_iter},{render_iter},{arrangement_label}]",
+                            perf_counter() - time_render_stage_start,
+                        )
+                    )
+
+                    if preview_used:
+                        # Camera preview mode intentionally exits after first render pass.
+                        stop_after_preview = True
+                        break
+                if stop_after_preview:
                     break
             if stop_after_preview:
                 break

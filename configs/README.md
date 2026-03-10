@@ -52,6 +52,7 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
 |---|---|---|---|---|
 | `renders_per_model` | `int` | Number of render iterations per modeled cube. | `1` | Clamped to at least `1`. |
+| `camera_arrangements` | `string \| list[string] \| null` | Optional arrangement override sequence per render iteration. | none | Supported values: `grid`, `spherical`. If set to both, each `render_iter` runs two full `preparation -> rendering` passes. |
 | `max_iter` | `int \| null` | Cap for model iterations. | none | Actual iterations = `min(max_iter, available_iters)`; `null` means no cap. |
 | `seed` | `int \| null` | Seed for nested-loop randomization. | none | Used by rendering sampler and any batch random choices. |
 | `rendering_sampler` | `dict \| list \| scalar` | Randomized override spec merged into `rendering` per render iteration. | none | Must resolve to a dict after sampling. |
@@ -59,7 +60,8 @@ This document is table-first: each parameter is mapped to runtime behavior.
 
 Batch runtime flow in `main_cube_batch.py`:
 - Per model iteration: `reset -> preparation -> view_setup -> modeling`
-- Per render iteration: `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+- Per render iteration: run one or more `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering` passes
+  (`camera_arrangements` controls the number of passes).
 - View indices are kept continuous across all iterations to prevent overwrite.
 
 ## Modeling: Common
