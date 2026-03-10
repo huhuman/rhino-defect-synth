@@ -137,14 +137,15 @@ def create_model(params):
     elif strategy == "component":
         print("-------- Start Component Modeling -------")
         component_cfg = dict(params.get("component", {}))
+        debug_cfg = dict(params.get("debug") or {})
         if not component_cfg:
             raise ValueError("modeling.component is required when modeling.strategy='component'.")
 
-        result = create_bridge_component(component_cfg)
+        result = create_bridge_component(component_cfg, debug_cfg=debug_cfg)
         defect_cfg = params.get("defect") or {}
         if get_active_defect_requests(defect_cfg):
             print("-------- Start Defect Placement -------")
-            defect_result = apply_defect_pipeline(defect_cfg, model_result=result)
+            defect_result = apply_defect_pipeline(defect_cfg, model_result=result, debug_cfg=debug_cfg)
             result["defect"] = defect_result
             summary = defect_result.get("summary", {})
             print(

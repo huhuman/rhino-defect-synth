@@ -1,4 +1,19 @@
 modeling:
+  debug:
+    defect_normals:
+      enabled: false
+      layer: "debug::normal"
+      by_type: true
+      length: 40.0
+      head_length_ratio: 0.25
+      head_width_ratio: 0.35
+    defect_seeds:
+      enabled: true
+      layer: "debug::seed"
+      by_type: true
+      radius_coef: 0.04375
+      min_radius: 0.625
+      axis_scale: 1.6
   defect:
     enabled: true
     seed: null
@@ -13,10 +28,6 @@ modeling:
       min_boundary_distance: 20.0
     surface_subtraction:
       normal_extrude_distance: 8.0
-    seed_marker:
-      radius_coef: 0.04375
-      min_radius: 0.625
-      axis_scale: 1.6
     random:
       scale_min: 0.6
       scale_max: 1.4
@@ -31,10 +42,6 @@ modeling:
       pattern: "*.json"
       file_format: auto
     layers:
-      seeds:
-        crack: "defects::seeds::crack"
-        efflore: "defects::seeds::efflore"
-        spalling: "defects::seeds::spalling"
       geometry:
         crack: "defects::geometry::crack"
         efflore: "defects::geometry::efflore"
@@ -56,8 +63,8 @@ modeling:
       count: 0
       overview_csv_path: null
       target_width_cm: 0.1
-      cs2_d1_threshold: 1.0
-      cs3_d1_threshold: 2.0
+      t1: 0.1
+      t2: 0.2
       d1_range: [0.5, 2.5]
       delta_depth_range: [10.0, 30.0]
     efflore:
@@ -65,10 +72,7 @@ modeling:
       count: 0
       overview_csv_path: null
       target_span_cm: 12.0
-      outer_thickness_ratio: 0.35
-      cs2_thickness_threshold: 0.4
-      cs3_thickness_threshold: null
-      thickness_range: [0.2, 1.5]
+      fixed_thickness: 0.1
     spalling:
       enabled: true
       count: 0
@@ -82,7 +86,7 @@ modeling:
       cs3_diameter_threshold: null
       cs3_requires_both: false
       rebar_enabled: true
-      rebar_probability: 0.0
+      rebar_probability: 0.5
       rebar_only_cs3: false
       force_rebar: false
       rebar:

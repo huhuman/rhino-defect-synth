@@ -157,7 +157,6 @@ preparation:
     "defects::geometry::efflore": [
       "imperfection_0006_color_2k",
       "decals_0001_color_2k",
-      "decals_0008_color_2k",
       "SurfaceImperfections011_2K-PNG",
       "GrungeWall01_2K",
       "GrungeWall02_2K",
@@ -283,13 +282,14 @@ preparation:
     "component::parapet": Green
     "component::bearing": AliceBlue
     "component::pier": Brown
-    "component::normal_arrows": Cyan
-    "component::normal_arrows::slab": Cyan
-    "component::normal_arrows::parapet": DeepSkyBlue
-    "component::normal_arrows::beam": SpringGreen
-    "component::normal_arrows::bearing": YellowGreen
-    "component::normal_arrows::pier": Orange
-    "component::normal_arrows::unknown": White
+    "debug::normal": Cyan
+    "debug::normal::component": Cyan
+    "debug::normal::component::slab": Cyan
+    "debug::normal::component::parapet": DeepSkyBlue
+    "debug::normal::component::beam": SpringGreen
+    "debug::normal::component::bearing": YellowGreen
+    "debug::normal::component::pier": Orange
+    "debug::normal::component::unknown": White
     "defects::geometry::crack": OrangeRed
     "defects::geometry::efflore": LightYellow
     "defects::geometry::efflore_outer": Peru
@@ -304,7 +304,7 @@ preparation:
     "defects::mask::spall::cs3": DarkOrange
     "defects::mask::exposed_rebar::cs2": Silver
     "defects::mask::exposed_rebar::cs3": Gray
-    "defects::seeds": Magenta
-    "defects::seeds::crack": Magenta
-    "defects::seeds::efflore": DeepPink
-    "defects::seeds::spalling": Violet
+    "debug::seed": Magenta
+    "debug::seed::crack": Magenta
+    "debug::seed::efflore": DeepPink
+    "debug::seed::spalling": Violet

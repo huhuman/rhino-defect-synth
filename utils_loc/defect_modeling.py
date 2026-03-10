@@ -346,18 +346,38 @@ def subtract_surface(curves, target_surfaces=None, delete_inputs=False):
         if not rs.IsObject(target):
             continue
 
-        diff = rs.BooleanDifference(target, cutter_ids, delete_input=False)
+        try:
+            diff = rs.BooleanDifference(target, cutter_ids, delete_input=False)
+        except Exception:
+            diff = None
         if diff:
             output_ids.extend(_as_list(diff))
             if delete_inputs and rs.IsObject(target):
                 rs.DeleteObject(target)
             continue
 
-        split = rs.SplitBrep(target, cutter_ids, delete_input=False)
-        if split:
-            output_ids.extend(_as_list(split))
-            if delete_inputs and rs.IsObject(target):
-                rs.DeleteObject(target)
+        # RhinoScript SplitBrep expects a single cutter id (not a list), so
+        # split sequentially with each cutter and keep the current piece set.
+        pieces = [target]
+        for cutter_id in cutter_ids:
+            next_pieces = []
+            for piece_id in pieces:
+                if not piece_id or not rs.IsObject(piece_id):
+                    continue
+                try:
+                    split = rs.SplitBrep(piece_id, cutter_id, delete_input=bool(delete_inputs))
+                except Exception:
+                    split = None
+                if split:
+                    next_pieces.extend(_as_list(split))
+                else:
+                    next_pieces.append(piece_id)
+            pieces = _dedupe_ids(next_pieces)
+            if not pieces:
+                break
+
+        if pieces:
+            output_ids.extend(pieces)
         else:
             output_ids.append(target)
 

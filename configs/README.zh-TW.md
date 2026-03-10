@@ -123,7 +123,7 @@
 | `layers.mask.*` | `dict[str,string]` | 各 defect mask 輸出圖層。 | `component_defect_defaults.yaml` | 不存在會自動建立。 |
 | `crack.overview_csv_path` | `string | null` | 讀 crack overview rows，並由 `instance_mask_path` 反推 polygon JSON。 | `component_defect_defaults.yaml` | 支援 `units -> polygon` 路徑轉換。 |
 | `crack.target_width_cm` | `float` | 以 `width_px` 做 pixel->world 基準換算。 | `component_defect_defaults.yaml` | 最終仍會再乘 `random.scale_*`。 |
-| `crack.*` | mixed | crack 專用幾何/嚴重度參數。 | `component_defect_defaults.yaml` | 含 `d1_range`, `delta_depth_range`，並支援 CS1/CS2/CS3。 |
+| `crack.*` | mixed | crack 專用幾何/嚴重度參數。 | `component_defect_defaults.yaml` | 嚴重度以 `width_cm = width_px * px_to_cm` 搭配 `t1/t2`（`<t1 => CS1`、`<t2 => CS2`、否則 CS3）。 |
 | `efflore.*` | mixed | component 專用 efflore 參數。 | `component_defect_defaults.yaml` | 只有 CS2/CS3（沒有 CS1）。 |
 | `spalling.*` | mixed | component 專用 spalling/rebar 參數。 | `component_defect_defaults.yaml` | 只有 CS2/CS3（沒有 CS1）。 |
 | Cube defect scope | literal | cube 目前直接由六個面 map 生成 crack，並不執行 `modeling.defect`。 | `cube_defaults.yaml` | `cube_defect_defaults.yaml` 仍保留給相容與設定組合用途。 |

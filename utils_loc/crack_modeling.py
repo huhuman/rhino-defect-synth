@@ -5,26 +5,6 @@ import random
 import rhinoscriptsyntax as rs
 
 
-def _poly_inward_direction(curve_id):
-    """Approximate inward direction using curve normal oriented toward origin."""
-    normal = rs.CurveNormal(curve_id)
-    if not normal:
-        return None
-
-    center_data = rs.CurveAreaCentroid(curve_id)
-    if not center_data:
-        return None
-    centroid = center_data[0]
-
-    to_origin = rs.VectorCreate((0, 0, 0), centroid)
-    dot = rs.VectorDotProduct(normal, to_origin)
-    if dot < 0:
-        normal = rs.VectorReverse(normal)
-
-    normal = rs.VectorUnitize(normal)
-    return normal
-
-
 def _coerce_ids(items):
     obj_ids = []
     for item in items or []:
@@ -78,7 +58,7 @@ def create_crack(
         base_poly: Base crack footprint curve id.
         offset_poly: Outer crack area curve id.
         diff_polys: Difference polygons used to patch parent surface.
-        inward_dir: Optional explicit inward vector.
+        inward_dir: Required inward vector from sampled surface normal.
         d1_range: (min, max) shallow inward depth.
         delta_depth_range: (min, max) extra depth after d1.
         layer_crack_extrusion: Layer for crack solids/surfaces.
@@ -101,9 +81,9 @@ def create_crack(
         print("create_crack: crack_polys, base_poly, and offset_poly must be valid polylines.")
         return None
 
-    direction = inward_dir or _poly_inward_direction(base_poly)
+    direction = rs.VectorUnitize(inward_dir) if inward_dir is not None else None
     if not direction:
-        print("create_crack: failed to determine inward direction.")
+        print("create_crack: inward_dir is required and must be a valid vector.")
         return None
 
     d1_min, d1_max = float(d1_range[0]), float(d1_range[1])

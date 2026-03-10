@@ -1,7 +1,7 @@
 view_setup:
   hide_layers:
     - "defects::mask"
-    - "defects::seeds"
+    - "debug"
 
 modeling:
   defect:
@@ -16,7 +16,7 @@ rendering:
     scene:
       hide_layers:
         - "defects::mask"
-        - "defects::seeds"
+        - "debug"
     mask:
       # If `only_layers` is set, only these layers are visible for mask output.
       # only_layers:

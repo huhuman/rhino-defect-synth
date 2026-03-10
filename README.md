@@ -102,6 +102,7 @@ Supported strategies:
 - `strategy: component`
   - uses `component` block handled by `utils_loc/component_modeling.py`
   - optional: `defect` block (unified defect placement)
+  - optional: `debug` block (debug drawing controls)
 
 #### Component modeling highlights
 `utils_loc/component_modeling.py::create_bridge_component()` supports:
@@ -122,6 +123,11 @@ Returned model result includes:
 - `objects_by_component`
 - sampled `reference_points`, `reference_sizes`, `reference_normals`
 
+`modeling.debug` controls debug drawing:
+- `surface_normals`: component surface normal arrows (`debug::normal::component::*`)
+- `defect_normals`: defect modeling normal arrows (`debug::normal::*`)
+- `defect_seeds`: defect seed markers (`debug::seed::*`)
+
 #### Unified defect modeling (`modeling.defect`, component branch)
 `utils_loc/defect_placement.py::apply_defect_pipeline()` supports:
 - defect types:
@@ -141,6 +147,7 @@ Returned model result includes:
   - `records`/`summary` count only successfully generated defects (non-empty geometry)
 - camera seed extraction (`camera_defects`) for component camera strategy
   - each item includes `point`, `normal`, `defect_type`, `instance_index`
+- debug drawing is controlled by `modeling.debug` (not `modeling.defect`)
 - local RNG seeding (`seed`) without mutating Python global random state
 - shape-library parsing:
   - `file_format=auto` now detects cube vs simple JSON before parsing
@@ -235,7 +242,7 @@ By default, `basename` is `view_XXX`. In batch mode, indices continue across ite
 - Defect pipeline separates:
   - geometry layers (`defects::geometry::*`)
   - mask layers (`defects::mask::*`)
-  - seed markers (`defects::seeds`)
+  - debug layers (`debug::normal::*`, `debug::seed::*`)
 - This makes hide/show-based mask annotation capture easier during rendering.
 
 ## Example Configs

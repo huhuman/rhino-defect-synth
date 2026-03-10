@@ -102,6 +102,7 @@ main_cube_batch.run(
 - `strategy: component`
   - 使用 `component` 區塊（`utils_loc/component_modeling.py`）
   - 可選：`defect`（統一 defect 放置）
+  - 可選：`debug`（debug 繪製控制）
 
 #### Component 建模重點
 `utils_loc/component_modeling.py::create_bridge_component()` 支援：
@@ -122,6 +123,11 @@ main_cube_batch.run(
 - `objects_by_component`
 - `reference_points`、`reference_sizes`、`reference_normals`
 
+`modeling.debug` 負責 debug 繪製控制：
+- `surface_normals`：component 表面法向箭頭（`debug::normal::component::*`）
+- `defect_normals`：defect 建模法向箭頭（`debug::normal::*`）
+- `defect_seeds`：defect seed marker（`debug::seed::*`）
+
 #### 統一 defect 建模（`modeling.defect`，component 分支）
 `utils_loc/defect_placement.py::apply_defect_pipeline()` 支援：
 - defect 型別：
@@ -141,6 +147,7 @@ main_cube_batch.run(
   - `records`/`summary` 只統計「成功生成幾何」的損害實例
 - 萃取 `camera_defects` 作為 component 相機 seed
   - 每筆包含 `point`、`normal`、`defect_type`、`instance_index`
+- debug 繪製由 `modeling.debug` 控制（不在 `modeling.defect`）
 - 使用區域 RNG（`seed`）抽樣，不會污染 Python 全域 random 狀態
 - shape library 解析行為：
   - `file_format=auto` 會先判斷 cube/simple JSON 再解析
@@ -231,7 +238,7 @@ main_cube_batch.run(
 - defect 流程分離：
   - 幾何圖層（`defects::geometry::*`）
   - mask 圖層（`defects::mask::*`）
-  - seed 點圖層（`defects::seeds`）
+  - debug 圖層（`debug::normal::*`、`debug::seed::*`）
 - 方便透過 hide/show layer 進行 mask annotation capture。
 
 ## 設定檔範例

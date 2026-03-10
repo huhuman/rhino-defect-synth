@@ -124,7 +124,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | `layers.mask.*` | `dict[str,string]` | Mask output layers by defect type. | `component_defect_defaults.yaml` | Auto-created if missing. |
 | `crack.overview_csv_path` | `string | null` | Reads crack overview rows and resolves per-instance polygon JSON from `instance_mask_path`. | `component_defect_defaults.yaml` | Supports `units -> polygon` path rewrite. |
 | `crack.target_width_cm` | `float` | Pixel-to-world baseline using `width_px`. | `component_defect_defaults.yaml` | Final scale also multiplies `random.scale_*`. |
-| `crack.*` | mixed | Crack-specific geometry/severity controls. | `component_defect_defaults.yaml` | Includes `d1_range`, `delta_depth_range`, and CS1/CS2/CS3 mapping. |
+| `crack.*` | mixed | Crack-specific geometry/severity controls. | `component_defect_defaults.yaml` | Severity uses `width_cm = width_px * px_to_cm` with thresholds `t1/t2` (`<t1 => CS1`, `<t2 => CS2`, otherwise CS3). |
 | `efflore.*` | mixed | Component-only efflore controls. | `component_defect_defaults.yaml` | Uses CS2/CS3 only (no CS1). |
 | `spalling.*` | mixed | Component-only spalling/rebar controls. | `component_defect_defaults.yaml` | Uses CS2/CS3 only (no CS1). |
 | Cube defect scope | literal | Cube modeling currently generates cracks directly from six face maps and does not invoke `modeling.defect`. | `cube_defaults.yaml` | `cube_defect_defaults.yaml` is retained for compatibility/config composition. |

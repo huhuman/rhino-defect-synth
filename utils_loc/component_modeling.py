@@ -379,7 +379,7 @@ def _build_slab_and_parapet(result, base_pts, norm_dirs, cfg):
         for i, (prev, cur) in enumerate(zip(prev_sections, cur_sections)):
             for edge_idx in range(len(cur) - 1):
                 quad = [prev[edge_idx], prev[edge_idx + 1], cur[edge_idx + 1], cur[edge_idx]]
-                if edge_idx == 1 and i == 1:
+                if i == 1:
                     quad = quad[::-1]
                 _add_polygon(result, "slab", slab_layer, quad, cfg)
 
@@ -888,12 +888,12 @@ def _surface_frame_axes(surface_id, uv, normal):
     return x_axis, y_axis
 
 
-def _add_surface_normal_arrows(result, cfg):
-    normal_cfg = cfg.get("surface_normals") or {}
+def _add_surface_normal_arrows(result, debug_cfg):
+    normal_cfg = (debug_cfg or {}).get("surface_normals") or {}
     if not bool(normal_cfg.get("enabled", False)):
         return
 
-    layer_name = str(normal_cfg.get("layer") or "component::normal_arrows")
+    layer_name = str(normal_cfg.get("layer") or "debug::normal::component")
     by_component = bool(normal_cfg.get("by_component", True))
     unknown_component = str(normal_cfg.get("unknown_component") or "unknown")
     length = max(1e-3, _to_float(normal_cfg.get("length"), 80.0))
@@ -1038,7 +1038,7 @@ def _collect_reference_points(result, cfg):
                 rs.DeleteObject(sid)
 
 
-def create_bridge_component(params=None):
+def create_bridge_component(params=None, debug_cfg=None):
     """Create bridge components using a configurable version of tmp.py logic.
 
     Args:
@@ -1048,6 +1048,7 @@ def create_bridge_component(params=None):
         dict: Created geometry ids and sampled reference points.
     """
     cfg = params or {}
+    debug_cfg = debug_cfg or {}
     seed = cfg.get("seed")
     rng = random.Random() if seed is None else random.Random(_to_int(seed, 0))
 
@@ -1102,6 +1103,6 @@ def create_bridge_component(params=None):
         rs.DeleteObject(centerline_id)
         result["centerline_id"] = None
 
-    _add_surface_normal_arrows(result, cfg)
+    _add_surface_normal_arrows(result, debug_cfg)
     _collect_reference_points(result, cfg)
     return result
