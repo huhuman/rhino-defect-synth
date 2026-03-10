@@ -46,6 +46,27 @@ def _resolve_capture_size(rhino_view, width=None, height=None, max_length=None):
     return out_width, out_height
 
 
+def _match_capture_aspect_to_viewport(
+    capture_width,
+    capture_height,
+    view_width,
+    view_height,
+    preserve_axis="width",
+):
+    """Adjust capture size to match viewport aspect ratio."""
+    view_ratio = float(view_width) / float(max(1, view_height))
+    out_ratio = float(capture_width) / float(max(1, capture_height))
+    if abs(view_ratio - out_ratio) <= 1e-6:
+        return int(capture_width), int(capture_height), False
+
+    if preserve_axis == "height":
+        adjusted_w = max(1, int(round(float(capture_height) * view_ratio)))
+        return adjusted_w, int(capture_height), True
+
+    adjusted_h = max(1, int(round(float(capture_width) / view_ratio)))
+    return int(capture_width), adjusted_h, True
+
+
 def _capture_bitmap(rhino_view, width=None, height=None, max_length=None, transparent=False):
     """Capture the given view to a bitmap with optional size override."""
     resolved_width, resolved_height = _resolve_capture_size(
@@ -496,6 +517,7 @@ def render_all_outputs(
     width=None,
     height=None,
     max_length=None,
+    match_viewport_aspect=True,
     scene_only_layers=None,
     scene_hide_layers=None,
     mask_only_layers=None,
@@ -539,10 +561,27 @@ def render_all_outputs(
     view_ratio = float(view_size.Width) / float(max(1, view_size.Height))
     out_ratio = float(capture_width) / float(max(1, capture_height))
     if abs(view_ratio - out_ratio) > 1e-6:
-        print(
-            "Warning: viewport/output aspect mismatch may cause buffer FOV mismatch "
-            f"(view={view_size.Width}x{view_size.Height}, out={capture_width}x{capture_height})."
-        )
+        if bool(match_viewport_aspect):
+            preserve_axis = "width" if width is not None else "height"
+            adjusted_w, adjusted_h, changed = _match_capture_aspect_to_viewport(
+                capture_width=capture_width,
+                capture_height=capture_height,
+                view_width=view_size.Width,
+                view_height=view_size.Height,
+                preserve_axis=preserve_axis,
+            )
+            if changed:
+                print(
+                    "Info: auto-adjusted output size to match viewport aspect "
+                    f"(view={view_size.Width}x{view_size.Height}, requested={capture_width}x{capture_height}, "
+                    f"adjusted={adjusted_w}x{adjusted_h})."
+                )
+                capture_width, capture_height = adjusted_w, adjusted_h
+        else:
+            print(
+                "Warning: viewport/output aspect mismatch may cause buffer FOV mismatch "
+                f"(view={view_size.Width}x{view_size.Height}, out={capture_width}x{capture_height})."
+            )
 
     render_image(rhino_view=render_view, out_path=outputs["color"], width=capture_width, height=capture_height)
     # Capture linear channels in the same camera/display/layer state as color.

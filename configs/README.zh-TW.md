@@ -135,6 +135,7 @@
 | `output_dir` | `string` | 所有輸出通道根目錄。 | 無 | render stage 必填。 |
 | `width`, `height` | `int | null` | 顯式輸出解析度。 | viewport size | 未設定則用 viewport。 |
 | `max_length` | `int | null` | 最長邊約束（保持比例）。 | 無 | width/height 未設定時使用。 |
+| `match_viewport_aspect` | `bool` | 若輸出比例與 viewport 不一致，是否自動修正輸出尺寸到同長寬比。 | `true` | 建議保留 `true`，可避免 depth/normal buffer 視角比例不一致。 |
 | `background_wallpaper_dir` | `string | null` | 渲染前隨機背景貼圖。 | 無 | 可選。 |
 | `output_basename_pattern` | `string | null` | frame 命名 pattern。 | 無 | 支援 `{output_idx}`, `{model_iter}`, `{render_iter}`。 |
 | `output_basename_prefix` | `string | null` | 命名前綴 fallback。 | 無 | pattern 未設時使用。 |

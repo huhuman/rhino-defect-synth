@@ -7,6 +7,7 @@ view_setup:
 rendering:
   width: 1920
   height: 1080
+  match_viewport_aspect: true
   output_dir: "C:/path/to/your/rendered"
   background_wallpaper_dir: "C:/path/to/your/background_wallpapers"
   outputs:
