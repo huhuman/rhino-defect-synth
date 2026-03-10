@@ -10,6 +10,7 @@ from utils_loc.texture_naming import (
     MAP_SUFFIXES as _MAP_SUFFIXES,
     expand_token_variants as _expand_token_variants,
     guess_map_kind_from_stem as _guess_map_kind_from_stem,
+    stem_ends_with_suffix_token as _stem_ends_with_suffix_token,
     stem_contains_color_token as _stem_contains_color_token,
     strip_known_suffix as _strip_known_suffix,
 )
@@ -25,14 +26,19 @@ _PBR_CHANNEL_KEYS = [
     "specular",
 ]
 _PBR_ENUM_CANDIDATES = {
-    "albedo": ("PBR_BaseColor", "Diffuse", "Bitmap"),
-    "normal": ("PBR_Normal", "Bump"),
-    "roughness": ("PBR_Roughness",),
-    "occlusion": ("PBR_AmbientOcclusion",),
-    "metallic": ("PBR_Metallic",),
-    "height": ("PBR_Displacement", "Displacement"),
-    "opacity": ("PBR_Opacity", "Transparency"),
-    "specular": ("PBR_Specular",),
+    "albedo": ("PBR_BaseColor", "BaseColor", "Diffuse", "Bitmap"),
+    "normal": ("PBR_Normal", "Normal", "Bump"),
+    "roughness": ("PBR_Roughness", "Roughness", "Glossiness"),
+    "occlusion": ("PBR_AmbientOcclusion", "AmbientOcclusion"),
+    "metallic": ("PBR_Metallic", "Metallic"),
+    "height": ("PBR_Displacement", "Displacement", "PBR_Height", "Height", "Bump"),
+    "opacity": ("PBR_Opacity", "Opacity", "Transparency"),
+    "specular": ("PBR_Specular", "Specular"),
+}
+_BASIC_CHANNEL_SETTERS = {
+    "albedo": "SetBitmapTexture",
+    "normal": "SetBumpTexture",
+    "opacity": "SetTransparencyTexture",
 }
 
 _DEFAULT_BUILTIN_CATEGORY = "Architectural"
@@ -59,8 +65,8 @@ _TRACK_ENTRY_IMPORTED_MATERIALS = "imported_render_material_names"
 # }
 
 
-def _get_render_material_names():
-    return [mat.DisplayName for mat in sc.doc.RenderMaterials]
+# def _get_render_material_names():
+#     return [mat.DisplayName for mat in sc.doc.RenderMaterials]
 
 
 # def import_Vray_materials():
@@ -573,12 +579,16 @@ def select_layer_materials(
                 )
             )
 
-        selected[str(layer_name)] = rng.choice(available)
+        retry_options = list(available)
+        rng.shuffle(retry_options)
+        chosen = dict(retry_options[0])
+        chosen["retry_options"] = retry_options
+        selected[str(layer_name)] = chosen
 
     return selected
 
 
-def _ensure_single_material(selection):
+def _load_material_from_selection(selection):
     desired_name = _normalize_material_name(selection.get("material_name"))
     desired_key = desired_name.lower()
 
@@ -617,6 +627,39 @@ def _ensure_single_material(selection):
             desired_name or requested_option,
             source,
         )
+    )
+
+
+def _ensure_single_material(selection):
+    attempts = []
+    retry_options = selection.get("retry_options")
+    if isinstance(retry_options, list):
+        attempts.extend([dict(item) for item in retry_options if isinstance(item, dict)])
+
+    # Ensure originally selected option is always attempted first.
+    primary = dict(selection or {})
+    attempts = [primary] + [
+        item
+        for item in attempts
+        if _normalize_material_name(item.get("material_name")).lower()
+        != _normalize_material_name(primary.get("material_name")).lower()
+    ]
+
+    errors = []
+    for attempt in attempts:
+        try:
+            return _load_material_from_selection(attempt)
+        except Exception as exc:
+            errors.append(
+                "{}({}): {}".format(
+                    _normalize_material_name(attempt.get("material_name")) or "<unnamed>",
+                    _normalize_material_name(attempt.get("source")) or "<unknown>",
+                    exc,
+                )
+            )
+
+    raise ValueError(
+        "All candidate materials failed to load. attempts={}".format(errors)
     )
 
 
@@ -676,10 +719,13 @@ def _build_image_index(texture_dir):
 
 def _find_map_from_index(image_index, root_stem, suffixes):
     root_key = root_stem.lower()
-    for suffix in suffixes:
-        key = "{}_{}".format(root_key, suffix)
-        if key in image_index:
-            return image_index[key]
+    for stem_key, path in image_index.items():
+        if _strip_known_suffix(stem_key).lower() != root_key:
+            continue
+        for suffix in suffixes:
+            matched, _ = _stem_ends_with_suffix_token(stem_key, suffix)
+            if matched:
+                return path
     return None
 
 
@@ -765,8 +811,42 @@ def _get_texture_type(texture_type_name):
         return None
 
 
+def _enable_physically_based_material(material):
+    enabled = False
+    for method_name in ("ToPhysicallyBased",):
+        method = getattr(material, method_name, None)
+        if method is None:
+            continue
+        try:
+            method()
+            enabled = True
+            break
+        except Exception:
+            continue
+
+    for attr_name in ("UsePhysicallyBased", "IsPhysicallyBased"):
+        if not hasattr(material, attr_name):
+            continue
+        try:
+            setattr(material, attr_name, True)
+            enabled = True
+        except Exception:
+            continue
+
+    try:
+        if getattr(material, "PhysicallyBased", None) is not None:
+            enabled = True
+    except Exception:
+        pass
+    return enabled
+
+
 def _set_texture_by_type(material, texture_path, type_names):
     if not texture_path:
+        return False
+
+    set_texture = getattr(material, "SetTexture", None)
+    if set_texture is None:
         return False
 
     texture = Rhino.DocObjects.Texture()
@@ -778,74 +858,49 @@ def _set_texture_by_type(material, texture_path, type_names):
         if texture_type is None:
             continue
         try:
-            if material.SetTexture(texture, texture_type):
+            if set_texture(texture, texture_type):
                 return True
         except Exception:
             continue
     return False
 
 
+def _apply_basic_channel_textures(material, texture_bitmaps, channel_status):
+    for key, setter_name in _BASIC_CHANNEL_SETTERS.items():
+        texture_path = texture_bitmaps.get(key)
+        if not texture_path:
+            continue
+        basic_ok = False
+        setter = getattr(material, setter_name, None)
+        if setter is not None:
+            try:
+                setter(texture_path)
+                basic_ok = True
+            except Exception:
+                pass
+        status = channel_status.setdefault(key, {})
+        status["basic_ok"] = basic_ok
+
+
+def _apply_pbr_channel_textures(material, texture_bitmaps, channel_status, status_key):
+    for key, type_names in _PBR_ENUM_CANDIDATES.items():
+        texture_path = texture_bitmaps.get(key)
+        if not texture_path:
+            continue
+        pbr_ok = _set_texture_by_type(material, texture_path, type_names)
+        status = channel_status.setdefault(key, {})
+        status[status_key] = pbr_ok
+
+
 def build_material_from_texture_bitmaps(texture_bitmaps, material_name):
     """Create a Rhino material from discovered texture bitmaps."""
     material = Rhino.DocObjects.Material()
     material.Name = material_name
-
-    albedo = texture_bitmaps.get("albedo")
-    normal = texture_bitmaps.get("normal")
-    opacity = texture_bitmaps.get("opacity")
+    _enable_physically_based_material(material)
     channel_status = {}
-
-    if albedo:
-        basic_ok = False
-        try:
-            material.SetBitmapTexture(albedo)
-            basic_ok = True
-        except Exception:
-            pass
-        channel_status["albedo"] = {"basic_ok": basic_ok}
-    if normal:
-        basic_ok = False
-        try:
-            material.SetBumpTexture(normal)
-            basic_ok = True
-        except Exception:
-            pass
-        channel_status["normal"] = {"basic_ok": basic_ok}
-    if opacity:
-        basic_ok = False
-        try:
-            material.SetTransparencyTexture(opacity)
-            basic_ok = True
-        except Exception:
-            pass
-        channel_status["opacity"] = {"basic_ok": basic_ok}
-
-    for key, type_names in _PBR_ENUM_CANDIDATES.items():
-        texture_path = texture_bitmaps.get(key)
-        if texture_path:
-            pbr_ok = _set_texture_by_type(material, texture_path, type_names)
-            if key not in channel_status:
-                channel_status[key] = {"basic_ok": None}
-            channel_status[key]["pbr_ok"] = pbr_ok
-
-    for key in _PBR_CHANNEL_KEYS:
-        texture_path = texture_bitmaps.get(key)
-        if not texture_path:
-            continue
-        status = channel_status.get(key, {})
-        basic_ok = status.get("basic_ok", None)
-        pbr_ok = status.get("pbr_ok", None)
-        print(
-            "[PBR] material='{}' channel='{}' file='{}' basic_ok={} pbr_ok={}".format(
-                material_name,
-                key,
-                os.path.basename(texture_path),
-                basic_ok,
-                pbr_ok,
-            )
-        )
-
-    return material
+    _apply_basic_channel_textures(material, texture_bitmaps, channel_status)
+    _apply_pbr_channel_textures(material, texture_bitmaps, channel_status, status_key="pbr_ok")
+    return material, channel_status
 
 
 def _make_unique_material_name(base_name):
@@ -860,24 +915,207 @@ def _make_unique_material_name(base_name):
         idx += 1
 
 
-def add_material_to_render_table(material, material_name=None, make_unique=True):
+def _is_render_material_instance(value):
+    render_cls = getattr(Rhino.Render, "RenderMaterial", None)
+    if render_cls is None or value is None:
+        return False
+    try:
+        return isinstance(value, render_cls)
+    except Exception:
+        return False
+
+
+def _render_material_type_label(render_material):
+    if render_material is None:
+        return ""
+    for attr in ("TypeName", "TypeDescription", "Name"):
+        try:
+            value = getattr(render_material, attr, None)
+        except Exception:
+            value = None
+        text = _normalize_material_name(value)
+        if text:
+            return text
+    return render_material.__class__.__name__
+
+
+def _render_material_exists_in_doc(render_material):
+    if render_material is None:
+        return False
+
+    target_id = None
+    for id_attr in ("Id", "InstanceId"):
+        try:
+            value = getattr(render_material, id_attr, None)
+        except Exception:
+            value = None
+        if value:
+            target_id = value
+            break
+
+    for mat in sc.doc.RenderMaterials:
+        if mat is render_material:
+            return True
+        if target_id is None:
+            continue
+        for id_attr in ("Id", "InstanceId"):
+            try:
+                mat_id = getattr(mat, id_attr, None)
+            except Exception:
+                mat_id = None
+            if mat_id and mat_id == target_id:
+                return True
+    return False
+
+
+def _is_render_material_physically_based(render_material, type_label):
+    texture_generation = None
+    try:
+        texture_generation = getattr(Rhino.Render.RenderTexture, "TextureGeneration", None)
+    except Exception:
+        texture_generation = None
+    if texture_generation is not None:
+        for mode_name in ("Skip", "Allow"):
+            mode = getattr(texture_generation, mode_name, None)
+            if mode is None:
+                continue
+            try:
+                sim = render_material.SimulatedMaterial(mode)
+            except Exception:
+                continue
+            try:
+                is_pbr = getattr(sim, "IsPhysicallyBased", None)
+            except Exception:
+                is_pbr = None
+            if isinstance(is_pbr, bool):
+                return is_pbr
+
+    for attr in ("IsPhysicallyBased", "PhysicallyBased"):
+        try:
+            value = getattr(render_material, attr, None)
+        except Exception:
+            value = None
+        if isinstance(value, bool):
+            return value
+    return "physically" in str(type_label or "").lower()
+
+
+def _create_render_material_from_basic(material):
+    render_cls = Rhino.Render.RenderMaterial
+    _enable_physically_based_material(material)
+
+    from_material = getattr(render_cls, "FromMaterial", None)
+    if from_material is not None:
+        for args in ((material, sc.doc),):
+            try:
+                render_material = from_material(*args)
+            except Exception:
+                continue
+            if _is_render_material_instance(render_material):
+                return render_material, "FromMaterial", True, args
+
+    create_basic = getattr(render_cls, "CreateBasicMaterial", None)
+    if create_basic is not None:
+        for args in (
+            (material,),
+            (material, sc.doc),
+            (sc.doc, material),
+            (),
+        ):
+            try:
+                render_material = create_basic(*args)
+            except Exception:
+                continue
+            if _is_render_material_instance(render_material):
+                return render_material, "CreateBasicMaterial", False, args
+    raise RuntimeError("Unable to create Rhino render material from basic material.")
+
+
+def add_material_to_render_table(
+    material,
+    material_name=None,
+    make_unique=True,
+    texture_bitmaps=None,
+    channel_status=None,
+):
     """Add a Rhino material into the current document render material table."""
     material_name = material_name or material.Name or "material_from_texture"
     if make_unique:
         material_name = _make_unique_material_name(material_name)
 
     try:
-        render_material = Rhino.Render.RenderMaterial.CreateBasicMaterial(material, sc.doc)
-        render_material.Name = material_name
-        sc.doc.RenderMaterials.Add(render_material)
-        _record_imported_material_name(material_name)
-        return render_material
+        render_material, factory_name, converted_ok, selected_args = _create_render_material_from_basic(
+            material
+        )
     except Exception:
-        # Fallback for Rhino versions where RenderMaterial creation differs.
-        material.Name = material_name
-        sc.doc.Materials.Add(material)
+        raise RuntimeError(
+            "Failed to create Rhino RenderMaterial for '{}' from basic material.".format(
+                material_name
+            )
+        )
+
+    render_material.Name = material_name
+    render_type = _render_material_type_label(render_material)
+
+    if texture_bitmaps and channel_status is not None:
+        _apply_pbr_channel_textures(
+            render_material,
+            texture_bitmaps,
+            channel_status,
+            status_key="render_pbr_ok",
+        )
+
+    commit = getattr(render_material, "CommitChanges", None)
+    if commit is not None:
+        try:
+            commit()
+        except Exception:
+            pass
+
+    exists_in_doc = _render_material_exists_in_doc(render_material)
+    if not exists_in_doc:
+        try:
+            sc.doc.RenderMaterials.Add(render_material)
+        except Exception:
+            # Some overloads return a document-owned material; add can throw in that case.
+            if not _render_material_exists_in_doc(render_material):
+                raise
+    exists_in_doc = _render_material_exists_in_doc(render_material)
+    if exists_in_doc:
         _record_imported_material_name(material_name)
-        return material
+
+    return render_material, {
+        "factory_name": factory_name,
+        "converted_ok": converted_ok,
+        "selected_args": selected_args,
+        "render_type": render_type,
+        "is_physically_based_type": _is_render_material_physically_based(render_material, render_type),
+    }
+
+
+def _summarize_channel_status(texture_bitmaps, channel_status):
+    detected = [key for key in _PBR_CHANNEL_KEYS if texture_bitmaps.get(key)]
+    missing = [key for key in _PBR_CHANNEL_KEYS if not texture_bitmaps.get(key)]
+
+    success = []
+    failed = []
+    for key in detected:
+        status = channel_status.get(key, {})
+        imported = any(
+            status.get(flag_name) is True
+            for flag_name in ("render_pbr_ok", "pbr_ok", "basic_ok")
+        )
+        if imported:
+            success.append(key)
+        else:
+            failed.append(key)
+
+    return {
+        "detected": detected,
+        "missing": missing,
+        "success": success,
+        "failed": failed,
+    }
 
 
 def create_material_from_texture_jpg(texture_jpg_path, material_name=None, add_to_doc=True):
@@ -888,10 +1126,34 @@ def create_material_from_texture_jpg(texture_jpg_path, material_name=None, add_t
     """
     texture_bitmaps = find_texture_bitmaps(texture_jpg_path)
     inferred_name = material_name or texture_bitmaps["root_stem"]
-    material = build_material_from_texture_bitmaps(texture_bitmaps, inferred_name)
+    material, channel_status = build_material_from_texture_bitmaps(texture_bitmaps, inferred_name)
     if not add_to_doc:
         return material
-    return add_material_to_render_table(material, material_name=inferred_name, make_unique=True)
+
+    imported_material, render_info = add_material_to_render_table(
+        material,
+        material_name=inferred_name,
+        make_unique=True,
+        texture_bitmaps=texture_bitmaps,
+        channel_status=channel_status,
+    )
+    summary = _summarize_channel_status(texture_bitmaps, channel_status)
+    print(
+        "[PBR-SUMMARY] material='{}' seed='{}' render_type='{}' physically_based={} "
+        "factory='{}' converted={} detected={} imported={} failed={} missing={}".format(
+            inferred_name,
+            os.path.basename(texture_jpg_path),
+            render_info.get("render_type"),
+            render_info.get("is_physically_based_type"),
+            render_info.get("factory_name"),
+            render_info.get("converted_ok"),
+            summary["detected"],
+            summary["success"],
+            summary["failed"],
+            summary["missing"],
+        )
+    )
+    return imported_material
 
 
 def _create_materials_from_single_texture_dir(texture_dir):
