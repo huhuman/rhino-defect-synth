@@ -957,87 +957,6 @@ def _add_surface_normal_arrows(result, debug_cfg):
     result["normal_arrows"].extend(created)
 
 
-def _collect_reference_points(result, cfg):
-    reference_cfg = cfg.get("reference_points") or {}
-    if not bool(reference_cfg.get("enabled", True)):
-        return
-
-    try:
-        from utils_loc.defect_modeling import get_reference_points, get_surfaces
-    except Exception as exc:
-        print("Component modeling: skipped reference-point extraction ({})".format(exc))
-        return
-
-    candidate_ids = list(result["surfaces"]) or list(result["polylines"])
-    if not candidate_ids:
-        return
-
-    convert_polylines = bool(reference_cfg.get("convert_polylines", True))
-    explode_polysurfaces = bool(reference_cfg.get("explode_polysurfaces", True))
-    max_num_surfaces = max(
-        0,
-        _to_int(reference_cfg.get("max_num_surfaces"), 0),
-    )
-
-    existing_surface_ids = set(result["surfaces"])
-    temporary_surface_ids = set()
-
-    surfaces = []
-    if max_num_surfaces > 0:
-        seen = set()
-        for obj_id in candidate_ids:
-            if len(surfaces) >= max_num_surfaces:
-                break
-            found = get_surfaces(
-                object_ids=[obj_id],
-                layer_names=reference_cfg.get("layers"),
-                convert_polylines=convert_polylines,
-                explode_polysurfaces=explode_polysurfaces,
-                keep_input=True,
-            )
-            for sid in found:
-                if sid not in existing_surface_ids:
-                    temporary_surface_ids.add(sid)
-                if sid in seen:
-                    continue
-                seen.add(sid)
-                surfaces.append(sid)
-                if len(surfaces) >= max_num_surfaces:
-                    break
-    else:
-        surfaces = get_surfaces(
-            object_ids=candidate_ids,
-            layer_names=reference_cfg.get("layers"),
-            convert_polylines=convert_polylines,
-            explode_polysurfaces=explode_polysurfaces,
-            keep_input=True,
-        )
-        for sid in surfaces:
-            if sid not in existing_surface_ids:
-                temporary_surface_ids.add(sid)
-
-    su = max(1, _to_int(reference_cfg.get("sample_count_u"), 1))
-    sv = max(1, _to_int(reference_cfg.get("sample_count_v"), 1))
-    trim_margin = _to_float(reference_cfg.get("trim_margin"), 0.1)
-
-    try:
-        for surface_id in surfaces:
-            pts, sizes, normals = get_reference_points(
-                surface_id,
-                sample_count_u=su,
-                sample_count_v=sv,
-                trim_margin=trim_margin,
-                return_normals=True,
-            )
-            result["reference_points"].extend(pts)
-            result["reference_sizes"].extend(sizes)
-            result["reference_normals"].extend(normals)
-    finally:
-        for sid in temporary_surface_ids:
-            if sid and rs.IsObject(sid):
-                rs.DeleteObject(sid)
-
-
 def create_bridge_component(params=None, debug_cfg=None):
     """Create bridge components using a configurable version of tmp.py logic.
 
@@ -1045,7 +964,7 @@ def create_bridge_component(params=None, debug_cfg=None):
         params (dict): Optional component-modeling parameters.
 
     Returns:
-        dict: Created geometry ids and sampled reference points.
+        dict: Created component geometry ids and metadata.
     """
     cfg = params or {}
     debug_cfg = debug_cfg or {}
@@ -1065,9 +984,6 @@ def create_bridge_component(params=None, debug_cfg=None):
         "solids": [],
         "normal_arrows": [],
         "normal_arrows_by_component": {},
-        "reference_points": [],
-        "reference_sizes": [],
-        "reference_normals": [],
         "pier_anchor_indices": [],
     }
 
@@ -1104,5 +1020,4 @@ def create_bridge_component(params=None, debug_cfg=None):
         result["centerline_id"] = None
 
     _add_surface_normal_arrows(result, debug_cfg)
-    _collect_reference_points(result, cfg)
     return result

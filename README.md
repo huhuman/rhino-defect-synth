@@ -111,17 +111,13 @@ Supported strategies:
 - beam section library + beam counts
 - bearing and pier generation (`hammerhead` or `m_column`)
 - conversion of generated polygons to surfaces
-- reference-point extraction for defect placement
-- optional cap: `reference_points.max_num_surfaces` (`0` = unlimited)
 
 Useful component keys:
 - `pier.anchor_indices`: explicit station indices for pier placement (supports negative indices)
-- `reference_points.max_num_surfaces`: limit sampled surfaces during reference-point extraction
 
 Returned model result includes:
 - `surfaces`, `polylines`, `solids`
 - `objects_by_component`
-- sampled `reference_points`, `reference_sizes`, `reference_normals`
 
 `modeling.debug` controls debug drawing:
 - `surface_normals`: component surface normal arrows (`debug::normal::component::*`)

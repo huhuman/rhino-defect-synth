@@ -104,7 +104,6 @@
 | `pier.hammerhead.*` | mixed | hammerhead 專用形狀參數。 | `component_defaults.yaml` | 僅 type=hammerhead 使用。 |
 | `pier.m_column.*` | mixed | m_column 專用形狀參數。 | `component_defaults.yaml` | 僅 type=m_column 使用。 |
 | `layers.{slab,parapet,beam,bearing,pier}` | `string` | 各構件輸出圖層名稱映射。 | `component_defaults.yaml` | 可用階層路徑。 |
-| `reference_points.*` | mixed | 缺陷參考點抽樣控制。 | `component_defaults.yaml` | 控制抽樣密度與轉換策略。 |
 
 ## Modeling：Defect (`modeling.defect`)
 

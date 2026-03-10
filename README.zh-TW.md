@@ -111,17 +111,13 @@ main_cube_batch.run(
 - beam section library 與梁數
 - bearing 與 pier（`hammerhead` 或 `m_column`）
 - 將生成 polygon 轉為 surface
-- 抽樣 reference points 供損害放置
-- 可選上限：`reference_points.max_num_surfaces`（`0` 代表不限制）
 
 常用 component 鍵：
 - `pier.anchor_indices`：手動指定要放置 pier 的 station index（支援負索引）
-- `reference_points.max_num_surfaces`：限制 reference-point 抽樣時要處理的 surface 數量
 
 回傳結果包含：
 - `surfaces`、`polylines`、`solids`
 - `objects_by_component`
-- `reference_points`、`reference_sizes`、`reference_normals`
 
 `modeling.debug` 負責 debug 繪製控制：
 - `surface_normals`：component 表面法向箭頭（`debug::normal::component::*`）

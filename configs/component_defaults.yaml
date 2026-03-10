@@ -63,15 +63,6 @@ modeling:
       beam: "component::beam"
       bearing: "component::bearing"
       pier: "component::pier"
-    reference_points:
-      enabled: true
-      layers: ["component::slab", "component::parapet", "component::beam", "component::pier"]
-      sample_count_u: 1
-      sample_count_v: 1
-      trim_margin: 0.1
-      max_num_surfaces: 0
-      convert_polylines: true
-      explode_polysurfaces: true
   debug:
     surface_normals:
       enabled: true

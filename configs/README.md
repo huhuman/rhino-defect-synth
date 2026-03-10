@@ -105,7 +105,6 @@ Batch runtime flow in `main_cube_batch.py`:
 | `pier.hammerhead.*` | mixed | Hammerhead-specific shape controls. | `component_defaults.yaml` | Used only when type is `hammerhead`. |
 | `pier.m_column.*` | mixed | M-column-specific shape controls. | `component_defaults.yaml` | Used only when type is `m_column`. |
 | `layers.{slab,parapet,beam,bearing,pier}` | `string` | Layer name mapping for generated objects. | `component_defaults.yaml` | Can use hierarchical paths. |
-| `reference_points.*` | mixed | Surface sampling for defect placement seeds. | `component_defaults.yaml` | Controls extraction density and conversion behavior. |
 
 ## Modeling: Defect (`modeling.defect`)
 

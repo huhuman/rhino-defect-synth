@@ -160,11 +160,10 @@ def create_model(params):
             )
         print(
             "-------- Component Modeling Complete ------- "
-            "(surfaces: {}, polylines: {}, solids: {}, reference_points: {})".format(
+            "(surfaces: {}, polylines: {}, solids: {})".format(
                 len(result["surfaces"]),
                 len(result["polylines"]),
                 len(result["solids"]),
-                len(result["reference_points"]),
             )
         )
         _LAST_MODEL_RESULT = result
