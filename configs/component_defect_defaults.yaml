@@ -29,18 +29,10 @@ modeling:
     surface_subtraction:
       normal_extrude_distance: 8.0
     random:
-      scale_min: 0.6
-      scale_max: 1.4
       orientation_min_deg: 0.0
       orientation_max_deg: 360.0
       boundary_margin: 0.9
       normal_offset: 0.0
-    shape_library:
-      paths: []
-      shape_dir: null
-      recursive: true
-      pattern: "*.json"
-      file_format: auto
     layers:
       geometry:
         crack_cs1: "defect::crack::CS1"
@@ -56,7 +48,7 @@ modeling:
       enabled: true
       count: 0
       overview_csv_path: null
-      target_width_cm: 0.1
+      cs_weights: [1, 1, 1]
       t1: 0.03048
       t2: 0.127
       d1_range: [0.05, 0.25]
@@ -65,23 +57,20 @@ modeling:
       enabled: true
       count: 0
       overview_csv_path: null
-      target_span_cm: 12.0
+      cs_weights: [1, 1]
+      span_range_cm: [30.0, 100.0]
       fixed_thickness: 0.1
     spalling:
       enabled: true
       count: 0
       overview_csv_path: null
-      target_diameter_cm: 15.0
-      depth_range: [5.0, 20.0]
+      depth_threshold: 2.54
+      diameter_threshold: 15.24
+      cs_weights: [1, 1]
       depth_irregularity: 0.2
-      cs2_depth_threshold: null
-      cs2_diameter_threshold: null
-      cs3_depth_threshold: null
-      cs3_diameter_threshold: null
-      cs3_requires_both: false
+      min_bottom_area_ratio: 0.25
       rebar_enabled: true
       rebar_probability: 0.5
-      rebar_only_cs3: false
       force_rebar: false
       rebar:
         rebar_count_range: [1, 3]

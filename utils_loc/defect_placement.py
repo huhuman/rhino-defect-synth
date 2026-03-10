@@ -10,7 +10,6 @@ import random
 import rhinoscriptsyntax as rs
 
 from utils_loc.crack_modeling import create_crack
-from utils_loc.defect_shapes import load_shape_templates
 from utils_loc.defect_modeling import get_reference_points, get_surfaces, subtract_surface
 
 
@@ -353,25 +352,144 @@ def _resolve_reference_metric_px(defect_type, row, polygon_payload):
     return max(width_px, height_px, 1.0)
 
 
-def _resolve_target_metric_cm(defect_type, defect_cfg):
-    defect_cfg = defect_cfg or {}
-    if defect_type == "crack":
-        default = 0.1
-        keys = ("target_width_cm", "target_metric_cm", "target_size_cm")
-    elif defect_type == "spalling":
-        default = 15.0
-        keys = ("target_diameter_cm", "target_metric_cm", "target_size_cm")
+def _uniform_sample(rng, lo, hi):
+    lo = float(lo)
+    hi = float(hi)
+    if lo > hi:
+        lo, hi = hi, lo
+    if abs(hi - lo) <= 1e-12:
+        return lo
+    return rng.uniform(lo, hi)
+
+
+def _resolve_cs_weights(defect_cfg, expected_len, default_weights):
+    raw = (defect_cfg or {}).get("cs_weights")
+    if not isinstance(raw, (list, tuple)) or len(raw) < expected_len:
+        raw = list(default_weights or [])
+    weights = []
+    for idx in range(expected_len):
+        base = raw[idx] if idx < len(raw) else (default_weights[idx] if idx < len(default_weights or []) else 1.0)
+        weight = _to_float(base, 1.0)
+        weights.append(max(0.0, float(weight)))
+    if sum(weights) <= 1e-12:
+        return [1.0] * expected_len
+    return weights
+
+
+def _weighted_pick(options, weights, rng):
+    options = list(options or [])
+    if not options:
+        return None
+    if len(options) == 1:
+        return options[0]
+    w = list(weights or [])
+    if len(w) < len(options):
+        w.extend([1.0] * (len(options) - len(w)))
+    total = sum(max(0.0, float(value)) for value in w[: len(options)])
+    if total <= 1e-12:
+        return rng.choice(options)
+    target = rng.random() * total
+    acc = 0.0
+    for option, value in zip(options, w):
+        acc += max(0.0, float(value))
+        if target <= acc:
+            return option
+    return options[-1]
+
+
+def _sample_crack_profile(defect_cfg, rng):
+    t1, t2 = _resolve_crack_width_thresholds(defect_cfg)
+    cs_weights = _resolve_cs_weights(defect_cfg, expected_len=3, default_weights=[1.0, 1.0, 1.0])
+    cs_level = _weighted_pick(["CS1", "CS2", "CS3"], cs_weights, rng=rng)
+    if cs_level == "CS1":
+        width_cm = _uniform_sample(rng, 0.5 * t1, t1)
+    elif cs_level == "CS2":
+        width_cm = _uniform_sample(rng, t1, t2)
     else:
-        default = 12.0
-        keys = ("target_span_cm", "target_metric_cm", "target_size_cm")
-    for key in keys:
-        value = _to_optional_float(defect_cfg.get(key))
-        if value is not None and value > 0.0:
-            return value
-    return default
+        width_cm = _uniform_sample(rng, t2, 5.0 * t2)
+    return {
+        "condition_state": cs_level,
+        "target_metric_cm": max(1e-6, float(width_cm)),
+        "severity_t1_cm": float(t1),
+        "severity_t2_cm": float(t2),
+    }
 
 
-def _build_shape_from_overview_row(defect_type, row, defect_cfg):
+def _resolve_spalling_thresholds(spalling_cfg):
+    spalling_cfg = spalling_cfg or {}
+    depth_threshold = _to_optional_float(spalling_cfg.get("depth_threshold"))
+    diameter_threshold = _to_optional_float(spalling_cfg.get("diameter_threshold"))
+    if depth_threshold is None or depth_threshold <= 0.0:
+        depth_threshold = 10.0
+    if diameter_threshold is None or diameter_threshold <= 0.0:
+        diameter_threshold = 15.0
+    return float(depth_threshold), float(diameter_threshold)
+
+
+def _sample_spalling_profile(defect_cfg, rng):
+    depth_threshold, diameter_threshold = _resolve_spalling_thresholds(defect_cfg)
+    cs_weights = _resolve_cs_weights(defect_cfg, expected_len=2, default_weights=[1.0, 1.0])
+    cs_level = _weighted_pick(["CS2", "CS3"], cs_weights, rng=rng)
+    if cs_level == "CS2":
+        depth_cm = _uniform_sample(rng, 0.5 * depth_threshold, depth_threshold)
+        diameter_cm = _uniform_sample(rng, 0.5 * diameter_threshold, diameter_threshold)
+    else:
+        depth_cm = _uniform_sample(rng, depth_threshold, 2.0 * depth_threshold)
+        diameter_cm = _uniform_sample(rng, diameter_threshold, 2.0 * diameter_threshold)
+
+    return {
+        "condition_state": cs_level,
+        "target_metric_cm": max(1e-6, float(diameter_cm)),
+        "target_spall_depth_cm": max(1e-4, float(depth_cm)),
+        "depth_threshold": float(depth_threshold),
+        "diameter_threshold": float(diameter_threshold),
+    }
+
+
+def _resolve_target_profile(defect_type, defect_cfg, rng):
+    defect_cfg = defect_cfg or {}
+    rng = rng or random.Random()
+
+    if defect_type == "crack":
+        return _sample_crack_profile(defect_cfg, rng)
+    if defect_type == "spalling":
+        return _sample_spalling_profile(defect_cfg, rng)
+
+    # Efflore size/state are sampled in shape stage.
+    span_min = None
+    span_max = None
+    span_range = defect_cfg.get("span_range_cm")
+    if isinstance(span_range, (list, tuple)) and len(span_range) >= 2:
+        span_min = _to_optional_float(span_range[0])
+        span_max = _to_optional_float(span_range[1])
+    if span_min is None:
+        span_min = _to_optional_float(defect_cfg.get("span_min_cm"))
+    if span_max is None:
+        span_max = _to_optional_float(defect_cfg.get("span_max_cm"))
+    if span_min is None and span_max is None:
+        span_fixed = _to_optional_float(defect_cfg.get("span_cm"))
+        if span_fixed is None or span_fixed <= 0.0:
+            span_fixed = 12.0
+        span_min = span_fixed
+        span_max = span_fixed
+    elif span_min is None:
+        span_min = span_max
+    elif span_max is None:
+        span_max = span_min
+    span_cm = _uniform_sample(rng, max(1e-6, float(span_min)), max(1e-6, float(span_max)))
+    cs_weights = _resolve_cs_weights(defect_cfg, expected_len=2, default_weights=[1.0, 1.0])
+    cs_level = _weighted_pick(["CS2", "CS3"], cs_weights, rng=rng)
+    return {
+        "condition_state": cs_level,
+        "target_metric_cm": float(span_cm),
+    }
+
+
+def _resolve_target_metric_cm(defect_type, defect_cfg, rng=None):
+    return float(_resolve_target_profile(defect_type, defect_cfg, rng).get("target_metric_cm", 1.0))
+
+
+def _build_shape_from_overview_row(defect_type, row, defect_cfg, rng):
     polygon_path = _resolve_polygon_path_from_row(row)
     payload = _load_polygon_payload(polygon_path)
     if payload is None:
@@ -385,7 +503,8 @@ def _build_shape_from_overview_row(defect_type, row, defect_cfg):
     metric_px = _resolve_reference_metric_px(defect_type, row, payload)
     if metric_px <= 0.0:
         metric_px = 1.0
-    target_metric_cm = _resolve_target_metric_cm(defect_type, defect_cfg)
+    target_profile = _resolve_target_profile(defect_type, defect_cfg, rng=rng)
+    target_metric_cm = max(1e-6, _to_float(target_profile.get("target_metric_cm"), 1.0))
     metric_scale = target_metric_cm / metric_px
 
     centered_polygons = []
@@ -416,7 +535,17 @@ def _build_shape_from_overview_row(defect_type, row, defect_cfg):
         "primary_poly": primary,
         "secondary_poly": secondary,
         "row": dict(row),
+        "condition_state": target_profile.get("condition_state"),
     }
+    for key in (
+        "target_spall_depth_cm",
+        "depth_threshold",
+        "diameter_threshold",
+        "severity_t1_cm",
+        "severity_t2_cm",
+    ):
+        if key in target_profile:
+            shape[key] = target_profile.get(key)
 
     if defect_type == "crack":
         shape.update(
@@ -471,7 +600,7 @@ def _load_shapes_from_overview_csv(defect_type, cfg, defect_cfg, count, rng):
     sampled_rows = _sample_rows(rows, requested, rng=rng)
     shapes = []
     for row in sampled_rows:
-        shape = _build_shape_from_overview_row(defect_type, row, defect_cfg)
+        shape = _build_shape_from_overview_row(defect_type, row, defect_cfg, rng=rng)
         if shape is None:
             continue
         shapes.append(shape)
@@ -726,7 +855,7 @@ def _candidate_inward_normal(candidate):
     return _scale(_candidate_outward_normal(candidate), -1.0)
 
 
-def _project_points_to_surface(points_2d, candidate, scale, angle_deg, normal_offset=0.0):
+def _project_points_to_surface(points_2d, candidate, angle_deg, normal_offset=0.0):
     normal = _candidate_outward_normal(candidate)
     origin = _add(candidate["point"], _scale(normal, normal_offset))
     u_axis, v_axis, _ = _candidate_axes(candidate)
@@ -735,8 +864,8 @@ def _project_points_to_surface(points_2d, candidate, scale, angle_deg, normal_of
     sin_v = math.sin(angle)
     out = []
     for x, y in points_2d or []:
-        rx = (x * cos_v - y * sin_v) * float(scale)
-        ry = (x * sin_v + y * cos_v) * float(scale)
+        rx = (x * cos_v - y * sin_v)
+        ry = (x * sin_v + y * cos_v)
         p = _add(_add(origin, _scale(u_axis, rx)), _scale(v_axis, ry))
         out.append(p)
     return _ensure_closed(out)
@@ -890,11 +1019,6 @@ def _resolve_random_value(defect_cfg, random_cfg, key, default):
 
 
 def _sample_transform(defect_cfg, random_cfg, candidate, shape, rng):
-    scale_min = _to_float(_resolve_random_value(defect_cfg, random_cfg, "scale_min", 0.6), 0.6)
-    scale_max = _to_float(_resolve_random_value(defect_cfg, random_cfg, "scale_max", 1.4), 1.4)
-    if scale_min > scale_max:
-        scale_min, scale_max = scale_max, scale_min
-
     angle_min = _to_float(_resolve_random_value(defect_cfg, random_cfg, "orientation_min_deg", 0.0), 0.0)
     angle_max = _to_float(_resolve_random_value(defect_cfg, random_cfg, "orientation_max_deg", 360.0), 360.0)
     if angle_min > angle_max:
@@ -904,35 +1028,16 @@ def _sample_transform(defect_cfg, random_cfg, candidate, shape, rng):
     boundary_margin = max(0.0, min(1.0, boundary_margin))
     shape_radius = _to_float(shape.get("shape_radius"), 0.0)
 
-    if shape_radius > 1e-9:
-        boundary_upper = float(candidate["boundary_dist"]) * boundary_margin / shape_radius
-        scale_upper = min(scale_max, boundary_upper)
-    else:
-        scale_upper = scale_max
-
-    if scale_upper < scale_min:
+    if shape_radius > 1e-9 and shape_radius > (float(candidate["boundary_dist"]) * boundary_margin):
         return None
 
-    scale = rng.uniform(scale_min, scale_upper)
     angle_deg = rng.uniform(angle_min, angle_max)
     normal_offset = _to_float(_resolve_random_value(defect_cfg, random_cfg, "normal_offset", 0.0), 0.0)
 
     return {
-        "scale": scale,
         "angle_deg": angle_deg,
         "normal_offset": normal_offset,
     }
-
-
-def _resolve_shape_library(global_cfg, defect_cfg):
-    shape_cfg = _deep_merge(global_cfg.get("shape_library") or {}, defect_cfg.get("shape_library") or {})
-    return load_shape_templates(
-        paths=shape_cfg.get("paths") or [],
-        shape_dir=shape_cfg.get("shape_dir"),
-        recursive=bool(shape_cfg.get("recursive", True)),
-        pattern=shape_cfg.get("pattern", "*.json"),
-        file_format=shape_cfg.get("file_format", "auto"),
-    )
 
 
 def _resolve_shapes_for_type(defect_type, cfg, defect_cfg, count, rng):
@@ -951,14 +1056,7 @@ def _resolve_shapes_for_type(defect_type, cfg, defect_cfg, count, rng):
             expanded.append(rng.choice(overview_shapes))
         return expanded
 
-    shapes = _resolve_shape_library(cfg, defect_cfg)
-    if not shapes:
-        return []
-    if count <= len(shapes):
-        return rng.sample(shapes, count)
-    sampled = list(shapes)
-    sampled.extend(rng.choice(shapes) for _ in range(count - len(shapes)))
-    return sampled
+    return []
 
 
 def _pick_shape_points(shape):
@@ -1084,7 +1182,6 @@ def _record_common(defect_type, candidate, transform, shape):
         "surface_layer": candidate.get("surface_layer"),
         "reference_size": float(candidate["reference_size"]),
         "boundary_dist": float(candidate["boundary_dist"]),
-        "scale": float(transform["scale"]),
         "angle_deg": float(transform["angle_deg"]),
         "normal_offset": float(transform["normal_offset"]),
         "shape_source_file": shape.get("source_file"),
@@ -1120,9 +1217,8 @@ def _geometry_layer_for_condition(layer_map, defect_key, condition_state):
     return str(layer_name)
 
 
-def _resolve_crack_width_metrics(shape, transform):
+def _resolve_crack_width_metrics(shape):
     shape = shape or {}
-    transform = transform or {}
 
     width_px = _to_optional_float(shape.get("metric_px"))
     if width_px is None or width_px <= 0.0:
@@ -1134,11 +1230,7 @@ def _resolve_crack_width_metrics(shape, transform):
     if base_px_to_cm is None or base_px_to_cm <= 0.0:
         return None
 
-    placement_scale = _to_optional_float(transform.get("scale"), default=1.0)
-    if placement_scale is None or placement_scale <= 0.0:
-        placement_scale = 1.0
-
-    px_to_cm = float(base_px_to_cm) * float(placement_scale)
+    px_to_cm = float(base_px_to_cm)
     width_cm = float(width_px) * float(px_to_cm)
     return {
         "width_px": float(width_px),
@@ -1199,33 +1291,32 @@ def _resolve_efflore_condition_state(has_expand_polygon):
 
 def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debug_cfg=None):
     offset_2d, base_2d, crack_2d, inside_2d, diff_2d = _pick_shape_points(shape)
-    offset_3d = _project_points_to_surface(offset_2d, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
-    base_3d = _project_points_to_surface(base_2d, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
+    offset_3d = _project_points_to_surface(offset_2d, candidate, transform["angle_deg"], transform["normal_offset"])
+    base_3d = _project_points_to_surface(base_2d, candidate, transform["angle_deg"], transform["normal_offset"])
     surface_cut_polygon = _project_points_to_surface(
         offset_2d,
         candidate,
-        transform["scale"],
         transform["angle_deg"],
         normal_offset=0.0,
     )
 
     crack_polys = []
     for points in crack_2d:
-        poly = _project_points_to_surface(points, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
+        poly = _project_points_to_surface(points, candidate, transform["angle_deg"], transform["normal_offset"])
         curve_id = _add_polyline(poly)
         if curve_id:
             crack_polys.append(curve_id)
 
     inside_polys = []
     for points in inside_2d:
-        poly = _project_points_to_surface(points, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
+        poly = _project_points_to_surface(points, candidate, transform["angle_deg"], transform["normal_offset"])
         curve_id = _add_polyline(poly)
         if curve_id:
             inside_polys.append(curve_id)
 
     diff_polys = []
     for points in diff_2d:
-        poly = _project_points_to_surface(points, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
+        poly = _project_points_to_surface(points, candidate, transform["angle_deg"], transform["normal_offset"])
         curve_id = _add_polyline(poly)
         if curve_id:
             diff_polys.append(curve_id)
@@ -1274,8 +1365,12 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debu
         return None
 
     crack_cfg = cfg.get("crack") or {}
-    crack_width_metrics = _resolve_crack_width_metrics(shape, transform)
-    cs_level = _resolve_crack_condition_state(crack_cfg, crack_created, crack_width_metrics=crack_width_metrics)
+    crack_width_metrics = _resolve_crack_width_metrics(shape)
+    shape_cs_level = str(shape.get("condition_state") or "").strip().upper()
+    if shape_cs_level in ("CS1", "CS2", "CS3"):
+        cs_level = shape_cs_level
+    else:
+        cs_level = _resolve_crack_condition_state(crack_cfg, crack_created, crack_width_metrics=crack_width_metrics)
     crack_layer = _geometry_layer_for_condition(layer_map, "crack", cs_level)
     _assign_layer(crack_geometry, crack_layer)
 
@@ -1291,8 +1386,8 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debu
     if crack_width_metrics:
         t1, t2 = _resolve_crack_width_thresholds(crack_cfg)
         record["crack_metrics"].update(crack_width_metrics)
-        record["crack_metrics"]["severity_t1_cm"] = float(t1)
-        record["crack_metrics"]["severity_t2_cm"] = float(t2)
+        record["crack_metrics"]["severity_t1_cm"] = float(shape.get("severity_t1_cm", t1))
+        record["crack_metrics"]["severity_t2_cm"] = float(shape.get("severity_t2_cm", t2))
     _attach_normal_debug(record, "crack", candidate, debug_cfg)
     return record
 
@@ -1311,7 +1406,11 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     if not inner_2d:
         return None
 
-    def _extrude_polygon(polygon_points, thickness):
+    def _offset_polygon_along_normal(polygon_points, distance):
+        offset = float(distance)
+        return [_add(_vec3(pt), _scale(outward_normal, offset)) for pt in (polygon_points or [])]
+
+    def _extrude_polygon_through_surface(polygon_points, thickness):
         curve_id = _add_polyline(polygon_points)
         if not curve_id:
             return []
@@ -1321,27 +1420,10 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
             if not start:
                 return []
             start_pt = _vec3(start)
-            end_pt = _add(start_pt, _scale(outward_normal, depth))
+            # Extrude along -normal so the volume intersects host surface and avoids visible seams.
+            end_pt = _add(start_pt, _scale(outward_normal, -3.0 * depth))
             extrusion = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
-            geometry = _coerce_ids([extrusion])
-            if not geometry:
-                return []
-
-            final_ids = []
-            for gid in geometry:
-                capped = None
-                try:
-                    capped = rs.CapPlanarHoles(gid)
-                except Exception:
-                    capped = None
-                capped_ids = _coerce_ids([capped])
-                if capped_ids:
-                    final_ids.extend(capped_ids)
-                    if gid not in capped_ids and rs.IsObject(gid):
-                        rs.DeleteObject(gid)
-                else:
-                    final_ids.append(gid)
-            return _coerce_ids(final_ids)
+            return _coerce_ids([extrusion])
         finally:
             if rs.IsObject(curve_id):
                 rs.DeleteObject(curve_id)
@@ -1349,7 +1431,6 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     inner_polygon = _project_points_to_surface(
         inner_2d,
         candidate,
-        transform["scale"],
         transform["angle_deg"],
         transform["normal_offset"],
     )
@@ -1362,17 +1443,24 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
         outer_polygon = _project_points_to_surface(
             outer_2d,
             candidate,
-            transform["scale"],
             transform["angle_deg"],
             transform["normal_offset"],
         )
         has_outer = len(outer_polygon) >= 4
 
     thickness = max(1e-4, _to_float(eff_cfg.get("fixed_thickness"), 0.1))
+    sampled_cs = str(shape.get("condition_state") or "").strip().upper()
+    if sampled_cs not in ("CS2", "CS3"):
+        sampled_cs = _resolve_efflore_condition_state(has_outer)
+    if sampled_cs == "CS2":
+        has_outer = False
+    elif sampled_cs == "CS3" and not has_outer:
+        sampled_cs = "CS2"
     uses_expand_polygon = bool(has_outer)
-    cs_level = _resolve_efflore_condition_state(uses_expand_polygon)
+    cs_level = sampled_cs
 
-    inner_geometry = _extrude_polygon(inner_polygon, thickness)
+    inner_lifted_polygon = _offset_polygon_along_normal(inner_polygon, thickness)
+    inner_geometry = _extrude_polygon_through_surface(inner_lifted_polygon, thickness)
     _orient_surfaces_to_normal(inner_geometry, outward_normal)
 
     inner_layer = _geometry_layer_for_condition(layer_map, "efflore", cs_level)
@@ -1380,8 +1468,8 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
 
     outer_geometry = []
     if has_outer:
-        outer_thickness = thickness
-        outer_geometry = _extrude_polygon(outer_polygon, outer_thickness)
+        outer_lifted_polygon = _offset_polygon_along_normal(outer_polygon, thickness)
+        outer_geometry = _extrude_polygon_through_surface(outer_lifted_polygon, thickness)
         _orient_surfaces_to_normal(outer_geometry, outward_normal)
         _assign_layer(outer_geometry, inner_layer)
 
@@ -1399,6 +1487,8 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     record["efflore_metrics"] = {
         "thickness": float(thickness),
         "outer_thickness": float(thickness) if has_outer else 0.0,
+        "lift_offset": float(thickness),
+        "extrude_depth": float(3.0 * thickness),
         "has_outer_layer": bool(outer_geometry),
         "mask_uses_outer": False,
         "uses_expand_polygon": bool(uses_expand_polygon),
@@ -1407,15 +1497,19 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     return record
 
 
-def _build_spall_ring_points(vertices, centroid, inward_normal, t, depth, irregularity, rng):
+def _build_spall_ring_points(vertices, centroid, inward_normal, t, depth, irregularity, rng, min_bottom_area_ratio=0.25):
     radial_scale = max(0.03, 1.0 - 0.92 * float(t))
     depth_base = float(depth) * math.sin(0.5 * math.pi * float(t))
     deepest_idx = rng.randrange(len(vertices)) if t >= 0.999 and vertices else -1
+    min_bottom_radius_ratio = math.sqrt(max(0.0, float(min_bottom_area_ratio)))
     ring = []
     for idx, point in enumerate(vertices):
         vec = _sub(point, centroid)
-        jitter = 1.0 + rng.uniform(-irregularity, irregularity) * (1.0 - 0.5 * t)
-        local_scale = max(0.01, radial_scale * jitter)
+        if t >= 0.999:
+            local_scale = max(min_bottom_radius_ratio, radial_scale)
+        else:
+            jitter = 1.0 + rng.uniform(-irregularity, irregularity) * (1.0 - 0.5 * t)
+            local_scale = max(0.01, radial_scale * jitter)
         local_depth = depth_base
         if t > 0.0:
             local_depth = depth_base * (1.0 - irregularity * rng.uniform(0.0, 0.35))
@@ -1426,7 +1520,15 @@ def _build_spall_ring_points(vertices, centroid, inward_normal, t, depth, irregu
     return _ensure_closed(ring)
 
 
-def _model_spall_from_polygon(polygon, candidate, depth, layer_name, rng, irregularity=0.2):
+def _model_spall_from_polygon(
+    polygon,
+    candidate,
+    depth,
+    layer_name,
+    rng,
+    irregularity=0.2,
+    min_bottom_area_ratio=0.25,
+):
     vertices = _unique_points(polygon)
     if len(vertices) < 3:
         return [], {}
@@ -1450,6 +1552,7 @@ def _model_spall_from_polygon(polygon, candidate, depth, layer_name, rng, irregu
                 depth,
                 irregularity=irregularity,
                 rng=rng,
+                min_bottom_area_ratio=min_bottom_area_ratio,
             )
         )
 
@@ -1477,6 +1580,7 @@ def _model_spall_from_polygon(polygon, candidate, depth, layer_name, rng, irregu
         "depth": float(depth),
         "ring_count": len(ring_points),
         "irregularity": irregularity,
+        "bottom_area_ratio_min": float(min_bottom_area_ratio),
     }
 
 
@@ -1512,6 +1616,10 @@ def _make_rebar_pipe(start, end, radius):
 
 def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rng):
     u_axis, v_axis, _n_axis = _candidate_axes(candidate)
+    if _dot(u_axis, (1.0, 0.0, 0.0)) < 0.0:
+        u_axis = _scale(u_axis, -1.0)
+    if _dot(v_axis, (0.0, 1.0, 0.0)) < 0.0:
+        v_axis = _scale(v_axis, -1.0)
     inward_normal = _candidate_inward_normal(candidate)
     cover_depth = max(0.0, _to_float(rebar_cfg.get("rebar_cover_depth"), 2.0))
     if float(spall_depth) <= cover_depth:
@@ -1577,8 +1685,8 @@ def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rn
     for x in xs:
         if rng.random() > keep_probability:
             continue
-        start = _add(_add(center_base, _scale(u_axis, x)), _scale(v_axis, top_ext))
-        end = _add(_add(center_base, _scale(u_axis, x)), _scale(v_axis, bottom_ext))
+        start = _add(_add(center_base, _scale(u_axis, x)), _scale(v_axis, bottom_ext))
+        end = _add(_add(center_base, _scale(u_axis, x)), _scale(v_axis, top_ext))
         pipes = _make_rebar_pipe(start, end, radius)
         if pipes:
             count_v += 1
@@ -1623,7 +1731,11 @@ def _resolve_spalling_cfg(cfg):
         if count > 0:
             spalling_cfg.setdefault("rebar_probability", 1.0)
 
-    for key in ("spall_depth_range",):
+    for key in (
+        "depth_threshold",
+        "diameter_threshold",
+        "cs_weights",
+    ):
         if key in legacy_cfg and key not in spalling_cfg:
             spalling_cfg[key] = legacy_cfg[key]
     return spalling_cfg
@@ -1672,51 +1784,31 @@ def _resolve_rebar_cfg(cfg, spalling_cfg):
 
 
 def _resolve_spalling_condition_state(spalling_cfg, diameter_cm, depth_cm):
-    depth_threshold = _to_optional_float((spalling_cfg or {}).get("cs3_depth_threshold"))
-    diameter_threshold = _to_optional_float((spalling_cfg or {}).get("cs3_diameter_threshold"))
-    cs2_depth_threshold = _to_optional_float((spalling_cfg or {}).get("cs2_depth_threshold"))
-    cs2_diameter_threshold = _to_optional_float((spalling_cfg or {}).get("cs2_diameter_threshold"))
-    require_both = _to_bool((spalling_cfg or {}).get("cs3_requires_both"), default=False)
-
-    if (
-        depth_threshold is None
-        and diameter_threshold is None
-        and cs2_depth_threshold is None
-        and cs2_diameter_threshold is None
-    ):
-        return "CS2"
-
-    depth_hit = depth_threshold is not None and float(depth_cm) >= float(depth_threshold)
-    diameter_hit = diameter_threshold is not None and float(diameter_cm) >= float(diameter_threshold)
-    cs3 = (depth_hit and diameter_hit) if require_both else (depth_hit or diameter_hit)
-    if cs3:
+    depth_threshold, diameter_threshold = _resolve_spalling_thresholds(spalling_cfg)
+    if float(depth_cm) >= depth_threshold and float(diameter_cm) >= diameter_threshold:
         return "CS3"
-
-    depth_hit_cs2 = cs2_depth_threshold is not None and float(depth_cm) >= float(cs2_depth_threshold)
-    diameter_hit_cs2 = cs2_diameter_threshold is not None and float(diameter_cm) >= float(cs2_diameter_threshold)
-    cs2 = (depth_hit_cs2 and diameter_hit_cs2) if require_both else (depth_hit_cs2 or diameter_hit_cs2)
-    if cs2:
-        return "CS2"
     return "CS2"
 
 
-def _resolve_spalling_diameter_cm(shape, transform):
+def _resolve_spalling_diameter_cm(shape):
     target = _to_optional_float((shape or {}).get("target_metric_cm"))
     if target is not None and target > 0.0:
-        return float(target) * float(transform.get("scale", 1.0))
+        return float(target)
     radius = max(1e-6, _to_float((shape or {}).get("shape_radius"), 1.0))
-    return 2.0 * radius * float(transform.get("scale", 1.0))
+    return 2.0 * radius
+
+
+def _resolve_spalling_depth_cm(shape, spalling_cfg, rng):
+    target_depth = _to_optional_float((shape or {}).get("target_spall_depth_cm"))
+    if target_depth is not None and target_depth > 0.0:
+        return float(target_depth)
+
+    sampled = _sample_spalling_profile(spalling_cfg, rng)
+    return float(sampled.get("target_spall_depth_cm", 1.0))
 
 
 def _should_place_rebar(shape, spalling_cfg, condition_state, rng):
-    row = (shape or {}).get("row") or {}
-    for key in ("has_rebar", "exposed_rebar", "with_rebar"):
-        if key in row:
-            return _to_bool(row.get(key), default=False)
-
     if not _to_bool((spalling_cfg or {}).get("rebar_enabled"), default=True):
-        return False
-    if _to_bool((spalling_cfg or {}).get("rebar_only_cs3"), default=False) and condition_state != "CS3":
         return False
     if _to_bool((spalling_cfg or {}).get("force_rebar"), default=False):
         return True
@@ -1728,25 +1820,23 @@ def _should_place_rebar(shape, spalling_cfg, condition_state, rng):
 def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, spalling_cfg=None, debug_cfg=None):
     spalling_cfg = dict(spalling_cfg or _resolve_spalling_cfg(cfg))
     offset_2d = shape.get("spall_poly") or shape.get("offset_poly") or shape.get("base_poly") or []
-    polygon = _project_points_to_surface(offset_2d, candidate, transform["scale"], transform["angle_deg"], transform["normal_offset"])
+    polygon = _project_points_to_surface(offset_2d, candidate, transform["angle_deg"], transform["normal_offset"])
     surface_cut_polygon = _project_points_to_surface(
         offset_2d,
         candidate,
-        transform["scale"],
         transform["angle_deg"],
         normal_offset=0.0,
     )
     if len(polygon) < 4:
         return None
 
-    depth_range = spalling_cfg.get("depth_range") or spalling_cfg.get("spall_depth_range") or [5.0, 20.0]
-    depth_min = max(0.1, _to_float(depth_range[0] if len(depth_range) > 0 else None, 5.0))
-    depth_max = max(0.1, _to_float(depth_range[1] if len(depth_range) > 1 else None, 20.0))
-    if depth_min > depth_max:
-        depth_min, depth_max = depth_max, depth_min
-    spall_depth = rng.uniform(depth_min, depth_max)
-    diameter_cm = _resolve_spalling_diameter_cm(shape, transform)
-    condition_state = _resolve_spalling_condition_state(spalling_cfg, diameter_cm=diameter_cm, depth_cm=spall_depth)
+    spall_depth = max(0.1, _resolve_spalling_depth_cm(shape, spalling_cfg, rng=rng))
+    diameter_cm = _resolve_spalling_diameter_cm(shape)
+    shape_state = str(shape.get("condition_state") or "").strip().upper()
+    if shape_state in ("CS2", "CS3"):
+        condition_state = shape_state
+    else:
+        condition_state = _resolve_spalling_condition_state(spalling_cfg, diameter_cm=diameter_cm, depth_cm=spall_depth)
 
     place_rebar = _should_place_rebar(shape, spalling_cfg, condition_state, rng=rng)
     spall_layer_name = _geometry_layer_for_condition(layer_map, "spall", condition_state)
@@ -1757,6 +1847,7 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, s
         spall_layer_name,
         rng=rng,
         irregularity=_to_float(spalling_cfg.get("depth_irregularity"), 0.2),
+        min_bottom_area_ratio=max(0.0, _to_float(spalling_cfg.get("min_bottom_area_ratio"), 0.25)),
     )
     if not spall_ids:
         return None
@@ -1775,6 +1866,9 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, s
         )
 
     defect_type = "exposed_rebar" if rebar_ids else "spalling"
+    if rebar_ids:
+        exposed_layer_name = _geometry_layer_for_condition(layer_map, "exposed_rebar", condition_state)
+        _assign_layer(spall_ids + rebar_ids, exposed_layer_name)
     geometry_ids = _coerce_ids(spall_ids + rebar_ids)
     if not geometry_ids:
         _delete_objects(spall_ids + rebar_ids)
@@ -1791,6 +1885,9 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, s
     record["spall_metrics"]["depth"] = float(spall_depth)
     record["spall_metrics"]["diameter_cm"] = float(diameter_cm)
     record["spall_metrics"]["has_rebar"] = bool(rebar_ids)
+    depth_threshold, diameter_threshold = _resolve_spalling_thresholds(spalling_cfg)
+    record["spall_metrics"]["depth_threshold"] = float(shape.get("depth_threshold", depth_threshold))
+    record["spall_metrics"]["diameter_threshold"] = float(shape.get("diameter_threshold", diameter_threshold))
     if rebar_metrics:
         record["rebar_metrics"] = rebar_metrics
     _attach_normal_debug(record, defect_type, candidate, debug_cfg)
