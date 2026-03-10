@@ -6,6 +6,7 @@ import json
 import math
 import os
 import random
+import re
 
 import rhinoscriptsyntax as rs
 
@@ -195,6 +196,32 @@ def _sample_rows(rows, count, rng):
     if count <= len(rows):
         return rng.sample(rows, count)
     return [rng.choice(rows) for _ in range(count)]
+
+
+def _crack_row_tokens(row):
+    row = row or {}
+    tokens = set()
+    for key in ("instance_id", "instance_mask_path", "polygon_json_path", "polygon_path"):
+        raw = row.get(key)
+        if raw is None:
+            continue
+        text = _normalize_path(raw).lower()
+        if text:
+            tokens.update(re.findall(r"[a-z0-9]+", text))
+        base = os.path.basename(text)
+        stem, _ext = os.path.splitext(base)
+        if stem:
+            tokens.update(re.findall(r"[a-z0-9]+", stem))
+    return tokens
+
+
+def _classify_crack_row_condition_state(row):
+    tokens = _crack_row_tokens(row)
+    if "skeleton" in tokens:
+        return "CS1"
+    if "erodex1" in tokens:
+        return "CS2"
+    return "CS3"
 
 
 def _to_polygon_json_path(instance_mask_path):
@@ -489,7 +516,7 @@ def _resolve_target_metric_cm(defect_type, defect_cfg, rng=None):
     return float(_resolve_target_profile(defect_type, defect_cfg, rng).get("target_metric_cm", 1.0))
 
 
-def _build_shape_from_overview_row(defect_type, row, defect_cfg, rng):
+def _build_shape_from_overview_row(defect_type, row, defect_cfg, rng, target_profile=None):
     polygon_path = _resolve_polygon_path_from_row(row)
     payload = _load_polygon_payload(polygon_path)
     if payload is None:
@@ -503,7 +530,8 @@ def _build_shape_from_overview_row(defect_type, row, defect_cfg, rng):
     metric_px = _resolve_reference_metric_px(defect_type, row, payload)
     if metric_px <= 0.0:
         metric_px = 1.0
-    target_profile = _resolve_target_profile(defect_type, defect_cfg, rng=rng)
+    if not isinstance(target_profile, dict):
+        target_profile = _resolve_target_profile(defect_type, defect_cfg, rng=rng)
     target_metric_cm = max(1e-6, _to_float(target_profile.get("target_metric_cm"), 1.0))
     metric_scale = target_metric_cm / metric_px
 
@@ -597,13 +625,48 @@ def _load_shapes_from_overview_csv(defect_type, cfg, defect_cfg, count, rng):
 
     requested = _to_int(overview_cfg.get("sample_count"), count)
     requested = max(0, requested)
-    sampled_rows = _sample_rows(rows, requested, rng=rng)
     shapes = []
-    for row in sampled_rows:
-        shape = _build_shape_from_overview_row(defect_type, row, defect_cfg, rng=rng)
-        if shape is None:
-            continue
-        shapes.append(shape)
+    if defect_type == "crack":
+        crack_buckets = {"CS1": [], "CS2": [], "CS3": []}
+        for row in rows:
+            cs_key = _classify_crack_row_condition_state(row)
+            crack_buckets.setdefault(cs_key, []).append(row)
+
+        missing_cs_counts = {}
+        for _idx in range(requested):
+            target_profile = _resolve_target_profile(defect_type, defect_cfg, rng=rng)
+            cs_level = str(target_profile.get("condition_state") or "").strip().upper()
+            if cs_level not in ("CS1", "CS2", "CS3"):
+                cs_level = "CS1"
+            pool = crack_buckets.get(cs_level) or []
+            if not pool:
+                missing_cs_counts[cs_level] = missing_cs_counts.get(cs_level, 0) + 1
+                continue
+            row = rng.choice(pool)
+            shape = _build_shape_from_overview_row(
+                defect_type,
+                row,
+                defect_cfg,
+                rng=rng,
+                target_profile=target_profile,
+            )
+            if shape is None:
+                continue
+            shapes.append(shape)
+
+        if missing_cs_counts:
+            details = ", ".join(
+                "{}:{}".format(key, int(missing_cs_counts[key]))
+                for key in sorted(missing_cs_counts.keys())
+            )
+            print("Defect crack: missing overview rows for sampled CS levels ({})".format(details))
+    else:
+        sampled_rows = _sample_rows(rows, requested, rng=rng)
+        for row in sampled_rows:
+            shape = _build_shape_from_overview_row(defect_type, row, defect_cfg, rng=rng)
+            if shape is None:
+                continue
+            shapes.append(shape)
 
     if len(shapes) < requested:
         print(
