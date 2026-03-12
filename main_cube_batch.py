@@ -279,6 +279,14 @@ def _to_non_negative_int(value, default=0):
     return max(0, parsed)
 
 
+def _to_non_negative_float(value, default=0.0):
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(default)
+    return max(0.0, parsed)
+
+
 def _resolve_stability_cfg(nested_cfg):
     raw = (nested_cfg or {}).get("stability")
     if raw is None:
@@ -302,6 +310,13 @@ def _resolve_stability_cfg(nested_cfg):
         "clear_undo_every_model_iters": _to_non_negative_int(
             raw.get("clear_undo_every_model_iters", 1)
         ),
+        "max_private_memory_mb": _to_non_negative_float(
+            raw.get("max_private_memory_mb", 0.0)
+        ),
+        "max_render_passes_per_run": _to_non_negative_int(
+            raw.get("max_render_passes_per_run", 0)
+        ),
+        "max_basic_materials": _to_non_negative_int(raw.get("max_basic_materials", 0)),
         "log_memory": bool(raw.get("log_memory", True)),
     }
 
@@ -317,6 +332,9 @@ def _resolve_stability_cfg(nested_cfg):
                 "gc_every_render_passes": 0,
                 "gc_every_model_iters": 0,
                 "clear_undo_every_model_iters": 0,
+                "max_private_memory_mb": 0.0,
+                "max_render_passes_per_run": 0,
+                "max_basic_materials": 0,
                 "log_memory": False,
             }
         )
@@ -342,31 +360,10 @@ def _stability_wait(wait_ms=0, redraw=False):
 def _table_count(table):
     if table is None:
         return None
-    for attr in ("Count",):
-        if not hasattr(table, attr):
-            continue
-        try:
-            return int(getattr(table, attr))
-        except Exception:
-            continue
     try:
-        return int(len(table))
+        return int(getattr(table, "Count"))
     except Exception:
         return None
-
-
-def _object_count():
-    obj_table = getattr(sc.doc, "Objects", None)
-    if obj_table is None:
-        return None
-    for attr in ("Count",):
-        if not hasattr(obj_table, attr):
-            continue
-        try:
-            return int(getattr(obj_table, attr))
-        except Exception:
-            continue
-    return None
 
 
 def _private_memory_mb():
@@ -392,7 +389,7 @@ def _log_runtime_snapshot(label, enabled=False):
         return
 
     parts = []
-    obj_count = _object_count()
+    obj_count = _table_count(getattr(sc.doc, "Objects", None))
     if obj_count is not None:
         parts.append(f"objects={obj_count}")
 
@@ -460,6 +457,108 @@ def _run_render_with_retry(params, show_cameras=False, retry_count=0, wait_on_re
             _run_gc()
 
 
+def _memory_guard_triggered(stability_cfg, label=""):
+    limit_mb = float(stability_cfg.get("max_private_memory_mb") or 0.0)
+    if limit_mb <= 0.0:
+        return False
+
+    current_mb = _private_memory_mb()
+    if current_mb is None:
+        return False
+    if current_mb < limit_mb:
+        return False
+
+    label = str(label or "runtime")
+    print(
+        f"[stability] memory_guard_triggered at {label}: "
+        f"private_mem_mb={current_mb:.1f}, limit_mb={limit_mb:.1f}"
+    )
+    return True
+
+
+def _basic_material_guard_triggered(stability_cfg, label=""):
+    limit = int(stability_cfg.get("max_basic_materials") or 0)
+    if limit <= 0:
+        return False
+
+    current = _table_count(getattr(sc.doc, "Materials", None))
+    if current is None:
+        return False
+    if current <= limit:
+        return False
+
+    label = str(label or "runtime")
+    print(
+        f"[stability] basic_material_guard_triggered at {label}: "
+        f"basic_materials={current}, limit={limit}"
+    )
+    return True
+
+
+def _apply_batch_autosave_policy(preparation_params):
+    prep_cfg = dict(preparation_params or {})
+    autosave_cfg = dict(prep_cfg.get("autosave") or {})
+    disable_during_batch = bool(autosave_cfg.get("disable_during_batch", True))
+    if not disable_during_batch:
+        print("[stability] autosave policy: keep enabled (disable_during_batch=false).")
+        return None
+
+    app_settings = getattr(Rhino, "ApplicationSettings", None)
+    settings_obj = getattr(app_settings, "FileSettings", None) if app_settings is not None else None
+    if settings_obj is None:
+        print("[stability] autosave policy: FileSettings API unavailable; skipping.")
+        return None
+
+    enabled_value = None
+    changed = False
+
+    if hasattr(settings_obj, "AutoSaveEnabled"):
+        try:
+            enabled_value = bool(settings_obj.AutoSaveEnabled)
+            settings_obj.AutoSaveEnabled = False
+            changed = True
+        except Exception:
+            changed = False
+
+    state = {
+        "settings_obj": settings_obj,
+        "enabled_value": enabled_value,
+        "changed": bool(changed),
+    }
+
+    if changed:
+        print("[stability] autosave policy: disabled during batch.")
+    else:
+        print("[stability] autosave policy: no supported autosave property found.")
+    return state
+
+
+def _restore_batch_autosave_policy(state):
+    state = dict(state or {})
+    if not state:
+        return
+    if not bool(state.get("changed")):
+        return
+
+    settings_obj = state.get("settings_obj")
+    if settings_obj is None:
+        return
+
+    restored_enabled = False
+
+    if state.get("enabled_value") is not None and hasattr(settings_obj, "AutoSaveEnabled"):
+        try:
+            settings_obj.AutoSaveEnabled = bool(state.get("enabled_value"))
+            restored_enabled = True
+        except Exception:
+            restored_enabled = False
+
+    if restored_enabled:
+        print("[stability] autosave policy: restored previous settings.")
+    else:
+        print("[stability] autosave policy: restore failed (properties unavailable).")
+
+
 def _run_render_with_frame_count(params, show_cameras=False):
     """Run render stage and return (captured_frame_count, preview_mode_used)."""
     render.setup_render_environment(params)
@@ -505,11 +604,13 @@ def run(
     log_file = None
     stdout_backup = None
     stderr_backup = None
+    autosave_state = None
 
     cfg = load_config(config_name)
     nested_cfg = cfg.get("nested_loop", {})
     preparation_scope = _resolve_preparation_scope(nested_cfg)
     stability_cfg = _resolve_stability_cfg(nested_cfg)
+    preparation_params = dict(cfg.get("preparation") or {})
 
     modeling_params = dict(cfg.get("modeling", {}))
     if not modeling_params:
@@ -553,7 +654,8 @@ def run(
         rendering_sampler = nested_cfg.get("rendering_sampler", {})
         camera_arrangements = _resolve_camera_arrangements(nested_cfg)
         arrangement_passes = len(camera_arrangements)
-        preparation_params = dict(cfg.get("preparation") or {})
+
+        autosave_state = _apply_batch_autosave_policy(preparation_params)
 
         json_files = _list_json_files(cube_params.get("cube_map_dir"))
         model_starts, leftovers = _compute_model_start_indices(
@@ -583,7 +685,10 @@ def run(
             f"render_retry_count={stability_cfg['render_retry_count']}, "
             f"gc_every_render_passes={stability_cfg['gc_every_render_passes']}, "
             f"gc_every_model_iters={stability_cfg['gc_every_model_iters']}, "
-            f"clear_undo_every_model_iters={stability_cfg['clear_undo_every_model_iters']}"
+            f"clear_undo_every_model_iters={stability_cfg['clear_undo_every_model_iters']}, "
+            f"max_private_memory_mb={stability_cfg['max_private_memory_mb']}, "
+            f"max_render_passes_per_run={stability_cfg['max_render_passes_per_run']}, "
+            f"max_basic_materials={stability_cfg['max_basic_materials']}"
         )
         if arrangement_passes > 1:
             print(f"Camera arrangements per render_iter: {list(camera_arrangements)}")
@@ -595,6 +700,7 @@ def run(
 
         next_output_index = int(nested_cfg.get("output_index_start", 0))
         stop_after_preview = False
+        stop_after_guard = False
         render_pass_count = 0
 
         for model_iter, face_idx in enumerate(model_starts):
@@ -603,6 +709,18 @@ def run(
                 label=f"before_model_iter[{model_iter}]",
                 enabled=stability_cfg["log_memory"],
             )
+            if _memory_guard_triggered(
+                stability_cfg=stability_cfg,
+                label=f"before_model_iter[{model_iter}]",
+            ):
+                stop_after_guard = True
+                break
+            if _basic_material_guard_triggered(
+                stability_cfg=stability_cfg,
+                label=f"before_model_iter[{model_iter}]",
+            ):
+                stop_after_guard = True
+                break
 
             time_model_stage_start = perf_counter()
             _reset_scene_objects()
@@ -708,14 +826,40 @@ def run(
                         and render_pass_count % stability_cfg["gc_every_render_passes"] == 0
                     ):
                         _run_gc()
+                    if (
+                        stability_cfg["max_render_passes_per_run"] > 0
+                        and render_pass_count >= stability_cfg["max_render_passes_per_run"]
+                    ):
+                        print(
+                            "[stability] max_render_passes_per_run reached "
+                            f"({render_pass_count}). Stopping run safely."
+                        )
+                        stop_after_guard = True
+                        break
+                    if _memory_guard_triggered(
+                        stability_cfg=stability_cfg,
+                        label=(
+                            f"after_render_pass[{model_iter},{render_iter},{arrangement_label}]"
+                        ),
+                    ):
+                        stop_after_guard = True
+                        break
+                    if _basic_material_guard_triggered(
+                        stability_cfg=stability_cfg,
+                        label=(
+                            f"after_render_pass[{model_iter},{render_iter},{arrangement_label}]"
+                        ),
+                    ):
+                        stop_after_guard = True
+                        break
 
                     if preview_used:
                         # Camera preview mode intentionally exits after first render pass.
                         stop_after_preview = True
                         break
-                if stop_after_preview:
+                if stop_after_preview or stop_after_guard:
                     break
-            if stop_after_preview:
+            if stop_after_preview or stop_after_guard:
                 break
 
             model_iter_1based = model_iter + 1
@@ -737,6 +881,24 @@ def run(
                 label=f"after_model_iter[{model_iter}]",
                 enabled=stability_cfg["log_memory"],
             )
+            if _memory_guard_triggered(
+                stability_cfg=stability_cfg,
+                label=f"after_model_iter[{model_iter}]",
+            ):
+                stop_after_guard = True
+                break
+            if _basic_material_guard_triggered(
+                stability_cfg=stability_cfg,
+                label=f"after_model_iter[{model_iter}]",
+            ):
+                stop_after_guard = True
+                break
+
+        if stop_after_guard:
+            print(
+                "[stability] run stopped early by guard. "
+                f"resume_hint: start_face_index={face_idx}, output_index_start={next_output_index}"
+            )
 
         if print_timings:
             total = perf_counter() - timer_start
@@ -747,6 +909,7 @@ def run(
 
         return stage_times
     finally:
+        _restore_batch_autosave_policy(autosave_state)
         _stop_batch_logging(log_file, stdout_backup, stderr_backup)
 
 
