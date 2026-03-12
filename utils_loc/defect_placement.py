@@ -1043,59 +1043,59 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
             if not rs.IsObject(surface_id):
                 continue
             border_curves = _duplicate_surface_borders(surface_id)
-            points, sizes, normals = get_reference_points(
-                surface_id,
-                sample_count_u=su,
-                sample_count_v=sv,
-                trim_margin=trim_margin,
-                return_normals=True,
-            )
-            surface_layer = rs.ObjectLayer(surface_id)
-            for point, size, normal in zip(points, sizes, normals):
-                point_3d = _vec3(point)
-                if not rs.IsPointOnSurface(surface_id, point_3d):
-                    continue
-                normal_3d = _surface_normal_at_point(surface_id, point_3d, fallback=normal)
-                u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
-                boundary_dist = _distance_to_boundary(point, border_curves)
-                if boundary_dist < min_boundary_distance:
-                    continue
-                candidate_key = (
-                    str(surface_layer or ""),
-                    _point_key(point_3d),
+            try:
+                points, sizes, normals = get_reference_points(
+                    surface_id,
+                    sample_count_u=su,
+                    sample_count_v=sv,
+                    trim_margin=trim_margin,
+                    return_normals=True,
                 )
-                if candidate_key in seen_candidate_keys:
-                    continue
-                seen_candidate_keys.add(candidate_key)
-                normal_line_id = None
-                if draw_normal_debug:
-                    end_pt = _add(point_3d, _scale(normal_3d, normal_debug_length))
-                    normal_line_id = rs.AddLine(point_3d, end_pt)
-                    if normal_line_id:
-                        _assign_layer([normal_line_id], normal_debug_layer)
-                candidates.append(
-                    {
-                        "candidate_key": "{}|{:.4f}|{:.4f}|{:.4f}".format(
-                            str(surface_layer or ""),
-                            point_3d[0],
-                            point_3d[1],
-                            point_3d[2],
-                        ),
-                        "surface_id": surface_id,
-                        "surface_layer": surface_layer,
-                        "point": point_3d,
-                        "normal": normal_3d,
-                        "u_axis": u_axis,
-                        "v_axis": v_axis,
-                        "n_axis": n_axis,
-                        "reference_size": float(size),
-                        "boundary_dist": float(boundary_dist),
-                        "normal_debug_id": str(normal_line_id) if normal_line_id else None,
-                    }
-                )
-            for curve_id in border_curves:
-                if rs.IsObject(curve_id):
-                    rs.DeleteObject(curve_id)
+                surface_layer = rs.ObjectLayer(surface_id)
+                for point, size, normal in zip(points, sizes, normals):
+                    point_3d = _vec3(point)
+                    if not rs.IsPointOnSurface(surface_id, point_3d):
+                        continue
+                    normal_3d = _surface_normal_at_point(surface_id, point_3d, fallback=normal)
+                    u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
+                    boundary_dist = _distance_to_boundary(point, border_curves)
+                    if boundary_dist < min_boundary_distance:
+                        continue
+                    candidate_key = (
+                        str(surface_layer or ""),
+                        _point_key(point_3d),
+                    )
+                    if candidate_key in seen_candidate_keys:
+                        continue
+                    seen_candidate_keys.add(candidate_key)
+                    normal_line_id = None
+                    if draw_normal_debug:
+                        end_pt = _add(point_3d, _scale(normal_3d, normal_debug_length))
+                        normal_line_id = rs.AddLine(point_3d, end_pt)
+                        if normal_line_id:
+                            _assign_layer([normal_line_id], normal_debug_layer)
+                    candidates.append(
+                        {
+                            "candidate_key": "{}|{:.4f}|{:.4f}|{:.4f}".format(
+                                str(surface_layer or ""),
+                                point_3d[0],
+                                point_3d[1],
+                                point_3d[2],
+                            ),
+                            "surface_id": surface_id,
+                            "surface_layer": surface_layer,
+                            "point": point_3d,
+                            "normal": normal_3d,
+                            "u_axis": u_axis,
+                            "v_axis": v_axis,
+                            "n_axis": n_axis,
+                            "reference_size": float(size),
+                            "boundary_dist": float(boundary_dist),
+                            "normal_debug_id": str(normal_line_id) if normal_line_id else None,
+                        }
+                    )
+            finally:
+                _delete_objects(border_curves)
     finally:
         for sid in temporary_surface_ids:
             if sid and rs.IsObject(sid):
@@ -2357,25 +2357,25 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
             continue
 
         cutter_ids = []
-        for record in layer_records:
-            polygon = record.get("surface_cut_polygon") or []
-            curve_id = _add_polyline(polygon)
-            if curve_id:
-                cutter_ids.append(curve_id)
-                if normal_extrude_distance > 0.0:
-                    normal_vec = _unit(record.get("normal") or (0.0, 0.0, 1.0), fallback=(0.0, 0.0, 1.0))
-                    offset_span = abs(_to_float(record.get("normal_offset"), 0.0))
-                    extrude_distance = max(normal_extrude_distance, normal_extrude_distance + offset_span)
-                    anchor = _vec3(polygon[0])
-                    start_pt = _add(anchor, _scale(normal_vec, -extrude_distance))
-                    end_pt = _add(anchor, _scale(normal_vec, extrude_distance))
-                    extruded = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
-                    if extruded and rs.IsObject(extruded):
-                        cutter_ids.append(extruded)
-        if not cutter_ids:
-            continue
-
         try:
+            for record in layer_records:
+                polygon = record.get("surface_cut_polygon") or []
+                curve_id = _add_polyline(polygon)
+                if curve_id:
+                    cutter_ids.append(curve_id)
+                    if normal_extrude_distance > 0.0:
+                        normal_vec = _unit(record.get("normal") or (0.0, 0.0, 1.0), fallback=(0.0, 0.0, 1.0))
+                        offset_span = abs(_to_float(record.get("normal_offset"), 0.0))
+                        extrude_distance = max(normal_extrude_distance, normal_extrude_distance + offset_span)
+                        anchor = _vec3(polygon[0])
+                        start_pt = _add(anchor, _scale(normal_vec, -extrude_distance))
+                        end_pt = _add(anchor, _scale(normal_vec, extrude_distance))
+                        extruded = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
+                        if extruded and rs.IsObject(extruded):
+                            cutter_ids.append(extruded)
+            if not cutter_ids:
+                continue
+
             split_ids = subtract_surface(cutter_ids, target_surfaces=target_ids, delete_inputs=True) or []
             _assign_layer(split_ids, layer_name)
             groups += 1
