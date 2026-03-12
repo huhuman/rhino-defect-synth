@@ -63,11 +63,20 @@
 | `seed` | `int \| null` | nested-loop 隨機化種子。 | 無 | 用於 rendering sampler 與 batch 隨機抽樣。 |
 | `rendering_sampler` | `dict \| list \| scalar` | 每次 render iteration 對 `rendering` 的隨機覆蓋規格。 | 無 | 抽樣後必須可解析為 dict。 |
 | `output_index_start` | `int` | batch 模式 `view_XXX` 命名起始 offset。 | `0` | 會和每次 capture 影格數累加，確保檔名連續。 |
+| `preparation_scope` | `arrangement \| render_iter \| model_iter` | 控制 nested render loop 中材質清理 + preparation 的重跑頻率。 | `arrangement` | `arrangement` 為原本行為；`render_iter` 是穩定/效能折衷；`model_iter` 最保守、最省資源。 |
+| `stability.enabled` | `bool` | batch 模式保守穩定化（等待/GC/重試）總開關。 | `true` | 設為 `false` 會關閉所有穩定化輔助。 |
+| `stability.wait_after_reset_ms`, `stability.wait_after_preparation_ms`, `stability.wait_before_render_ms`, `stability.wait_after_render_ms`, `stability.wait_on_retry_ms` | `int` | 在 Rhino 重操作與重試路徑前後插入等待/idle。 | `20`, `40`, `40`, `60`, `400` | 有助於降低長迴圈中的時序性失敗。 |
+| `stability.render_retry_count` | `int` | render pass 失敗後重試次數。 | `1` | 每次重試前會等待並執行 GC。 |
+| `stability.gc_every_render_passes`, `stability.gc_every_model_iters` | `int` | nested loop 的 Python/.NET GC 週期。 | `1`, `1` | 設 `0` 可關閉該 GC 週期。 |
+| `stability.clear_undo_every_model_iters` | `int` | 定期清 Rhino undo records 以降低記憶體壓力。 | `1` | 設 `0` 可停用。 |
+| `stability.log_memory` | `bool` | 每個 model iteration 記錄 objects/layers/materials 與 private memory。 | `true` | 方便追查長跑記憶體成長。 |
 
 `main_cube_batch.py` 目前執行流程：
 - 每個模型 iteration：`reset -> preparation -> view_setup -> modeling`
-- 每個渲染 iteration：會執行一或多次 `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
-  （次數由 `camera_arrangements` 決定）。
+- 每個渲染 iteration：會執行一或多次 `view_setup -> rendering`。
+  材質清理與 preparation 的重跑頻率由 `nested_loop.preparation_scope` 控制；
+  arrangement pass 次數由 `camera_arrangements` 決定。
+- 穩定化設定可在重操作間插入等待、重試、GC 與 undo 清理。
 - view index 會跨 iteration 連續，避免覆蓋前次輸出。
 
 ## Modeling：共用
@@ -142,6 +151,7 @@
 | `efflore.enabled`, `efflore.count` | `bool`, `int` | efflore 放置開關與要求實例數。 | `component_defect_defaults.yaml` | 停用時 count 會被忽略。 |
 | `efflore.overview_csv_path` | `string | null` | 讀 efflore overview rows 並解析每個實例的 polygon JSON。 | `component_defect_defaults.yaml` | 若找不到可用 shape 會跳過 efflore。 |
 | `efflore.cs_weights` | `list[float]` | efflore CS 加權隨機。 | `component_defect_defaults.yaml` | 順序為 `[CS2, CS3]`，預設 `[1,1]`。 |
+| `efflore.z_threshold` | `float` | efflore 候選面法向相對 XY 平面的最大仰角（度）。 | `component_defect_defaults.yaml` | 會先以 `abs(仰角)<=threshold` 篩 surface pool，再抽 reference points；預設 `5.0`。 |
 | `efflore.span_range_cm` | `list[float,float]` | efflore 尺度抽樣範圍（cm），用於 px->world 正規化。 | `component_defect_defaults.yaml` | 也可用 `span_min_cm/span_max_cm` 或固定 `span_cm`。 |
 | `efflore.fixed_thickness` | `float` | efflore 擠出厚度基準。 | `component_defect_defaults.yaml` | 幾何流程為先沿 +normal 偏移再沿 -normal 擠出。 |
 | `spalling.enabled`, `spalling.count` | `bool`, `int` | spalling 放置開關與要求實例數。 | `component_defect_defaults.yaml` | 停用時 count 會被忽略。 |

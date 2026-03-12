@@ -63,11 +63,20 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `seed` | `int \| null` | Seed for nested-loop randomization. | none | Used by rendering sampler and any batch random choices. |
 | `rendering_sampler` | `dict \| list \| scalar` | Randomized override spec merged into `rendering` per render iteration. | none | Must resolve to a dict after sampling. |
 | `output_index_start` | `int` | Starting offset for `view_XXX` numbering in batch mode. | `0` | Combined with per-render captured-frame count to keep filenames continuous. |
+| `preparation_scope` | `arrangement \| render_iter \| model_iter` | Controls how often material cleanup + preparation reruns in nested render loops. | `arrangement` | `arrangement` keeps original behavior; `render_iter` is a safer/faster compromise; `model_iter` is most conservative for stability/perf. |
+| `stability.enabled` | `bool` | Master switch for conservative waits/GC/retries in batch mode. | `true` | Set `false` to disable all stability helpers. |
+| `stability.wait_after_reset_ms`, `stability.wait_after_preparation_ms`, `stability.wait_before_render_ms`, `stability.wait_after_render_ms`, `stability.wait_on_retry_ms` | `int` | Sleep/idle pacing around heavy Rhino operations and retry path. | `20`, `40`, `40`, `60`, `400` | Helps avoid race-like failures in long runs. |
+| `stability.render_retry_count` | `int` | Retry count for failed render pass before aborting. | `1` | Retries call full render pass again after wait + GC. |
+| `stability.gc_every_render_passes`, `stability.gc_every_model_iters` | `int` | Periodic Python/.NET GC cadence in nested loops. | `1`, `1` | Set `0` to disable a cadence. |
+| `stability.clear_undo_every_model_iters` | `int` | Clears Rhino undo records periodically to reduce memory pressure. | `1` | Set `0` to disable. |
+| `stability.log_memory` | `bool` | Logs object/layer/material counts and private memory snapshots each model iteration. | `true` | Useful for leak diagnosis in long runs. |
 
 Batch runtime flow in `main_cube_batch.py`:
 - Per model iteration: `reset -> preparation -> view_setup -> modeling`
-- Per render iteration: run one or more `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering` passes
-  (`camera_arrangements` controls the number of passes).
+- Per render iteration: run one or more `view_setup -> rendering` passes.
+  Material cleanup/preparation frequency is controlled by `nested_loop.preparation_scope`;
+  `camera_arrangements` controls the number of arrangement passes.
+- Stability helpers can insert waits, retries, GC, and undo cleanup between heavy stages.
 - View indices are kept continuous across all iterations to prevent overwrite.
 
 ## Modeling: Common
@@ -143,6 +152,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | `efflore.enabled`, `efflore.count` | `bool`, `int` | Enables efflore placement and sets requested instance count. | `component_defect_defaults.yaml` | Count is ignored when disabled. |
 | `efflore.overview_csv_path` | `string | null` | Reads efflore overview rows and resolves polygon JSON per instance. | `component_defect_defaults.yaml` | If no usable shapes, efflore placement is skipped. |
 | `efflore.cs_weights` | `list[float]` | Weighted CS sampling for efflore. | `component_defect_defaults.yaml` | Order is `[CS2, CS3]`; default `[1,1]`. |
+| `efflore.z_threshold` | `float` | Max allowed normal elevation (degrees) from the XY plane for efflore candidate surfaces. | `component_defect_defaults.yaml` | Surface pool is filtered by `abs(elevation)<=threshold` before reference-point sampling; default `5.0`. |
 | `efflore.span_range_cm` | `list[float,float]` | Efflore span sampling range (cm) for px-to-world normalization. | `component_defect_defaults.yaml` | Alternatives: `span_min_cm/span_max_cm` or fixed `span_cm`. |
 | `efflore.fixed_thickness` | `float` | Base thickness used for efflore extrusion. | `component_defect_defaults.yaml` | Geometry is offset by +normal then extruded along -normal. |
 | `spalling.enabled`, `spalling.count` | `bool`, `int` | Enables spalling placement and sets requested instance count. | `component_defect_defaults.yaml` | Count is ignored when disabled. |
