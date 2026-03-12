@@ -1,6 +1,7 @@
 """Rendering outputs for color, depth, normal, and masks."""
 import os
 import struct
+from time import perf_counter
 
 import Rhino
 import rhinoscriptsyntax as rs
@@ -12,6 +13,25 @@ import System.Drawing.Imaging as Imaging
 def _ensure_out_dir(path):
     out_dir = os.path.dirname(path) or "."
     os.makedirs(out_dir, exist_ok=True)
+
+
+def _rhino_idle_wait(wait_ms=0):
+    try:
+        Rhino.RhinoApp.Wait()
+    except Exception:
+        pass
+    if int(wait_ms) > 0:
+        rs.Sleep(int(wait_ms))
+
+
+def _wait_for_file_ready(path, timeout_ms=2000, poll_ms=50):
+    target = os.path.abspath(str(path))
+    deadline = perf_counter() + max(0, int(timeout_ms)) / 1000.0
+    while perf_counter() <= deadline:
+        if os.path.isfile(target):
+            return True
+        _rhino_idle_wait(wait_ms=poll_ms)
+    return os.path.isfile(target)
 
 
 def _validate_dimension(value, name):
@@ -268,8 +288,16 @@ def _save_bitmap(bitmap, out_path):
     if not out_path:
         raise ValueError("An output path is required to save a capture.")
     _ensure_out_dir(out_path)
-    bitmap.Save(out_path, Imaging.ImageFormat.Png)
-    return out_path
+    try:
+        bitmap.Save(out_path, Imaging.ImageFormat.Png)
+        return out_path
+    finally:
+        dispose = getattr(bitmap, "Dispose", None)
+        if callable(dispose):
+            try:
+                dispose()
+            except Exception:
+                pass
 
 
 def _write_pfm(out_path, width, height, channel_count, data):
@@ -316,9 +344,25 @@ def _capture_render_channels_to_files(rhino_view, depth_path, normal_path, width
     else:
         cmd_parts.append("_Enter")
 
+    for output_path in (depth_path, normal_path):
+        try:
+            if os.path.isfile(output_path):
+                os.remove(output_path)
+        except Exception:
+            pass
+
     ok = rs.Command(" ".join(cmd_parts), echo=False)
     if not ok:
         raise RuntimeError("CaptureRenderChannels command failed. Is the plugin loaded?")
+    _rhino_idle_wait(wait_ms=50)
+    if not _wait_for_file_ready(depth_path, timeout_ms=3000, poll_ms=50):
+        raise RuntimeError(
+            f"CaptureRenderChannels completed but depth output was not found: {depth_path}"
+        )
+    if not _wait_for_file_ready(normal_path, timeout_ms=3000, poll_ms=50):
+        raise RuntimeError(
+            f"CaptureRenderChannels completed but normal output was not found: {normal_path}"
+        )
 
 
 def _capture_mask_basecolor_to_file(rhino_view, mask_path, width=None, height=None):
@@ -342,10 +386,17 @@ def _capture_mask_basecolor_to_file(rhino_view, mask_path, width=None, height=No
         str(width_value),
         str(height_value),
     ]
+    try:
+        if os.path.isfile(mask_path):
+            os.remove(mask_path)
+    except Exception:
+        pass
+
     ok = rs.Command(" ".join(cmd_parts), echo=False)
     if not ok:
         raise RuntimeError("CaptureBaseColorMask command failed. Is the plugin loaded?")
-    if not os.path.isfile(mask_path):
+    _rhino_idle_wait(wait_ms=50)
+    if not _wait_for_file_ready(mask_path, timeout_ms=3000, poll_ms=50):
         raise RuntimeError(f"CaptureBaseColorMask completed but output was not found: {mask_path}")
     return mask_path
 
@@ -443,6 +494,16 @@ def render_mask(rhino_view, out_path=None, width=None, height=None, max_length=N
             raise RuntimeError(msg) from exc
     finally:
         _restore_object_color_sources(changed_sources)
+        if prev_grid is not None:
+            try:
+                viewport.ConstructionGridVisible = prev_grid
+            except Exception:
+                pass
+        if prev_cplane is not None:
+            try:
+                viewport.ConstructionPlaneVisible = prev_cplane
+            except Exception:
+                pass
         viewport.DisplayMode = prev_mode
         rhino_view.Redraw()
 
@@ -551,62 +612,70 @@ def render_all_outputs(
     prev_wallpaper_file = render_view.ActiveViewport.WallpaperFilename
     render_view.Redraw()
 
-    capture_width, capture_height = _resolve_capture_size(
-        rhino_view=render_view,
-        width=width,
-        height=height,
-        max_length=max_length,
-    )
-    view_size = render_view.ActiveViewport.Size
-    view_ratio = float(view_size.Width) / float(max(1, view_size.Height))
-    out_ratio = float(capture_width) / float(max(1, capture_height))
-    if abs(view_ratio - out_ratio) > 1e-6:
-        if bool(match_viewport_aspect):
-            preserve_axis = "width" if width is not None else "height"
-            adjusted_w, adjusted_h, changed = _match_capture_aspect_to_viewport(
-                capture_width=capture_width,
-                capture_height=capture_height,
-                view_width=view_size.Width,
-                view_height=view_size.Height,
-                preserve_axis=preserve_axis,
-            )
-            if changed:
-                print(
-                    "Info: auto-adjusted output size to match viewport aspect "
-                    f"(view={view_size.Width}x{view_size.Height}, requested={capture_width}x{capture_height}, "
-                    f"adjusted={adjusted_w}x{adjusted_h})."
+    try:
+        capture_width, capture_height = _resolve_capture_size(
+            rhino_view=render_view,
+            width=width,
+            height=height,
+            max_length=max_length,
+        )
+        view_size = render_view.ActiveViewport.Size
+        view_ratio = float(view_size.Width) / float(max(1, view_size.Height))
+        out_ratio = float(capture_width) / float(max(1, capture_height))
+        if abs(view_ratio - out_ratio) > 1e-6:
+            if bool(match_viewport_aspect):
+                preserve_axis = "width" if width is not None else "height"
+                adjusted_w, adjusted_h, changed = _match_capture_aspect_to_viewport(
+                    capture_width=capture_width,
+                    capture_height=capture_height,
+                    view_width=view_size.Width,
+                    view_height=view_size.Height,
+                    preserve_axis=preserve_axis,
                 )
-                capture_width, capture_height = adjusted_w, adjusted_h
-        else:
-            print(
-                "Warning: viewport/output aspect mismatch may cause buffer FOV mismatch "
-                f"(view={view_size.Width}x{view_size.Height}, out={capture_width}x{capture_height})."
-            )
+                if changed:
+                    print(
+                        "Info: auto-adjusted output size to match viewport aspect "
+                        f"(view={view_size.Width}x{view_size.Height}, requested={capture_width}x{capture_height}, "
+                        f"adjusted={adjusted_w}x{adjusted_h})."
+                    )
+                    capture_width, capture_height = adjusted_w, adjusted_h
+            else:
+                print(
+                    "Warning: viewport/output aspect mismatch may cause buffer FOV mismatch "
+                    f"(view={view_size.Width}x{view_size.Height}, out={capture_width}x{capture_height})."
+                )
 
-    render_image(rhino_view=render_view, out_path=outputs["color"], width=capture_width, height=capture_height)
-    # Capture linear channels in the same camera/display/layer state as color.
-    _capture_render_channels_to_files(
-        render_view,
-        depth_path=outputs["depth_linear"],
-        normal_path=outputs["normal_linear"],
-        width=capture_width,
-        height=capture_height,
-    )
+        render_image(rhino_view=render_view, out_path=outputs["color"], width=capture_width, height=capture_height)
+        # Capture linear channels in the same camera/display/layer state as color.
+        _capture_render_channels_to_files(
+            render_view,
+            depth_path=outputs["depth_linear"],
+            normal_path=outputs["normal_linear"],
+            width=capture_width,
+            height=capture_height,
+        )
 
-    render_depth(rhino_view=render_view, out_path=outputs["depth"], width=capture_width, height=capture_height)
+        render_depth(rhino_view=render_view, out_path=outputs["depth"], width=capture_width, height=capture_height)
 
-    render_view.ActiveViewport.SetWallpaper("", False)
+        render_view.ActiveViewport.SetWallpaper("", False)
 
-    render_normal(rhino_view=render_view, out_path=outputs["normal"], width=capture_width, height=capture_height)
+        render_normal(rhino_view=render_view, out_path=outputs["normal"], width=capture_width, height=capture_height)
 
-    _apply_mask_layer_visibility(
-        mask_only_layers=mask_only_layers,
-        mask_hide_layers=mask_hide_layers,
-    )
-    render_view.Redraw()
+        _apply_mask_layer_visibility(
+            mask_only_layers=mask_only_layers,
+            mask_hide_layers=mask_hide_layers,
+        )
+        render_view.Redraw()
 
-    render_mask(rhino_view=render_view, out_path=outputs["mask"], width=capture_width, height=capture_height)
+        render_mask(rhino_view=render_view, out_path=outputs["mask"], width=capture_width, height=capture_height)
 
-    render_view.ActiveViewport.SetWallpaper(prev_wallpaper_file, False)
-
-    return outputs 
+        return outputs
+    finally:
+        try:
+            render_view.ActiveViewport.SetWallpaper(prev_wallpaper_file, False)
+        except Exception:
+            pass
+        try:
+            render_view.Redraw()
+        except Exception:
+            pass

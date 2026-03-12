@@ -2,6 +2,7 @@
 """Nested modeling/render driver for multi-variant dataset generation."""
 
 import copy
+import gc
 import importlib
 import os
 import random
@@ -260,6 +261,205 @@ def _count_render_frames(poses, smooth_path, transition_frames):
     return pose_count
 
 
+def _resolve_preparation_scope(nested_cfg):
+    raw = str((nested_cfg or {}).get("preparation_scope", "arrangement")).strip().lower()
+    allowed = {"arrangement", "render_iter", "model_iter"}
+    if raw not in allowed:
+        raise ValueError(
+            "nested_loop.preparation_scope must be one of: arrangement, render_iter, model_iter."
+        )
+    return raw
+
+
+def _to_non_negative_int(value, default=0):
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    return max(0, parsed)
+
+
+def _resolve_stability_cfg(nested_cfg):
+    raw = (nested_cfg or {}).get("stability")
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("nested_loop.stability must be a dict when provided.")
+
+    enabled = bool(raw.get("enabled", True))
+    cfg = {
+        "enabled": enabled,
+        "wait_after_reset_ms": _to_non_negative_int(raw.get("wait_after_reset_ms", 20)),
+        "wait_after_preparation_ms": _to_non_negative_int(
+            raw.get("wait_after_preparation_ms", 40)
+        ),
+        "wait_before_render_ms": _to_non_negative_int(raw.get("wait_before_render_ms", 40)),
+        "wait_after_render_ms": _to_non_negative_int(raw.get("wait_after_render_ms", 60)),
+        "wait_on_retry_ms": _to_non_negative_int(raw.get("wait_on_retry_ms", 400)),
+        "render_retry_count": _to_non_negative_int(raw.get("render_retry_count", 1)),
+        "gc_every_render_passes": _to_non_negative_int(raw.get("gc_every_render_passes", 1)),
+        "gc_every_model_iters": _to_non_negative_int(raw.get("gc_every_model_iters", 1)),
+        "clear_undo_every_model_iters": _to_non_negative_int(
+            raw.get("clear_undo_every_model_iters", 1)
+        ),
+        "log_memory": bool(raw.get("log_memory", True)),
+    }
+
+    if not enabled:
+        cfg.update(
+            {
+                "wait_after_reset_ms": 0,
+                "wait_after_preparation_ms": 0,
+                "wait_before_render_ms": 0,
+                "wait_after_render_ms": 0,
+                "wait_on_retry_ms": 0,
+                "render_retry_count": 0,
+                "gc_every_render_passes": 0,
+                "gc_every_model_iters": 0,
+                "clear_undo_every_model_iters": 0,
+                "log_memory": False,
+            }
+        )
+
+    return cfg
+
+
+def _stability_wait(wait_ms=0, redraw=False):
+    wait_ms = max(0, int(wait_ms))
+    if redraw:
+        try:
+            sc.doc.Views.Redraw()
+        except Exception:
+            pass
+    try:
+        Rhino.RhinoApp.Wait()
+    except Exception:
+        pass
+    if wait_ms > 0:
+        rs.Sleep(wait_ms)
+
+
+def _table_count(table):
+    if table is None:
+        return None
+    for attr in ("Count",):
+        if not hasattr(table, attr):
+            continue
+        try:
+            return int(getattr(table, attr))
+        except Exception:
+            continue
+    try:
+        return int(len(table))
+    except Exception:
+        return None
+
+
+def _object_count():
+    obj_table = getattr(sc.doc, "Objects", None)
+    if obj_table is None:
+        return None
+    for attr in ("Count",):
+        if not hasattr(obj_table, attr):
+            continue
+        try:
+            return int(getattr(obj_table, attr))
+        except Exception:
+            continue
+    return None
+
+
+def _private_memory_mb():
+    process = None
+    try:
+        import System
+
+        process = System.Diagnostics.Process.GetCurrentProcess()
+        return float(process.PrivateMemorySize64) / (1024.0 * 1024.0)
+    except Exception:
+        return None
+    finally:
+        dispose = getattr(process, "Dispose", None)
+        if callable(dispose):
+            try:
+                dispose()
+            except Exception:
+                pass
+
+
+def _log_runtime_snapshot(label, enabled=False):
+    if not enabled:
+        return
+
+    parts = []
+    obj_count = _object_count()
+    if obj_count is not None:
+        parts.append(f"objects={obj_count}")
+
+    layer_count = _table_count(getattr(sc.doc, "Layers", None))
+    if layer_count is not None:
+        parts.append(f"layers={layer_count}")
+
+    render_mat_count = _table_count(getattr(sc.doc, "RenderMaterials", None))
+    if render_mat_count is not None:
+        parts.append(f"render_materials={render_mat_count}")
+
+    basic_mat_count = _table_count(getattr(sc.doc, "Materials", None))
+    if basic_mat_count is not None:
+        parts.append(f"basic_materials={basic_mat_count}")
+
+    memory_mb = _private_memory_mb()
+    if memory_mb is not None:
+        parts.append(f"private_mem_mb={memory_mb:.1f}")
+
+    if not parts:
+        return
+    print(f"[runtime] {label}: {', '.join(parts)}")
+
+
+def _clear_undo_records():
+    clear_fn = getattr(sc.doc, "ClearUndoRecords", None)
+    if callable(clear_fn):
+        try:
+            clear_fn()
+            return True
+        except Exception:
+            return False
+    return False
+
+
+def _run_gc():
+    try:
+        gc.collect()
+    except Exception:
+        pass
+    try:
+        import System
+
+        System.GC.Collect()
+        wait_fn = getattr(System.GC, "WaitForPendingFinalizers", None)
+        if callable(wait_fn):
+            wait_fn()
+    except Exception:
+        pass
+
+
+def _run_render_with_retry(params, show_cameras=False, retry_count=0, wait_on_retry_ms=0):
+    max_retries = max(0, int(retry_count))
+    for attempt in range(max_retries + 1):
+        try:
+            return _run_render_with_frame_count(params=params, show_cameras=show_cameras)
+        except Exception as exc:
+            if attempt >= max_retries:
+                raise
+            print(
+                f"Render pass failed ({attempt + 1}/{max_retries + 1}): {exc}. "
+                f"Retrying after {int(wait_on_retry_ms)} ms..."
+            )
+            _stability_wait(wait_ms=wait_on_retry_ms, redraw=True)
+            _run_gc()
+
+
 def _run_render_with_frame_count(params, show_cameras=False):
     """Run render stage and return (captured_frame_count, preview_mode_used)."""
     render.setup_render_environment(params)
@@ -308,6 +508,8 @@ def run(
 
     cfg = load_config(config_name)
     nested_cfg = cfg.get("nested_loop", {})
+    preparation_scope = _resolve_preparation_scope(nested_cfg)
+    stability_cfg = _resolve_stability_cfg(nested_cfg)
 
     modeling_params = dict(cfg.get("modeling", {}))
     if not modeling_params:
@@ -374,6 +576,15 @@ def run(
             f"arrangement_passes={arrangement_passes}, "
             f"total_render_passes={len(model_starts) * renders_per_model * arrangement_passes}"
         )
+        print(f"Preparation scope: {preparation_scope}")
+        print(
+            "Stability controls: "
+            f"enabled={stability_cfg['enabled']}, "
+            f"render_retry_count={stability_cfg['render_retry_count']}, "
+            f"gc_every_render_passes={stability_cfg['gc_every_render_passes']}, "
+            f"gc_every_model_iters={stability_cfg['gc_every_model_iters']}, "
+            f"clear_undo_every_model_iters={stability_cfg['clear_undo_every_model_iters']}"
+        )
         if arrangement_passes > 1:
             print(f"Camera arrangements per render_iter: {list(camera_arrangements)}")
         if max_iter is not None:
@@ -384,29 +595,64 @@ def run(
 
         next_output_index = int(nested_cfg.get("output_index_start", 0))
         stop_after_preview = False
+        render_pass_count = 0
 
         for model_iter, face_idx in enumerate(model_starts):
             print(f"=== model_iter={model_iter}, start_face_index={face_idx} ===")
+            _log_runtime_snapshot(
+                label=f"before_model_iter[{model_iter}]",
+                enabled=stability_cfg["log_memory"],
+            )
 
             time_model_stage_start = perf_counter()
             _reset_scene_objects()
+            _stability_wait(
+                wait_ms=stability_cfg["wait_after_reset_ms"],
+                redraw=True,
+            )
             clear_imported_materials_from_doc()
             prepare(dict(preparation_params))
+            _stability_wait(
+                wait_ms=stability_cfg["wait_after_preparation_ms"],
+                redraw=True,
+            )
             _setup_render_view(cfg=cfg)
 
             model_params = dict(modeling_params)
             model_params["start_face_index"] = int(face_idx)
             create_model(model_params)
+            _stability_wait(
+                wait_ms=stability_cfg["wait_before_render_ms"],
+                redraw=True,
+            )
             stage_times.append(
                 (f"reset->modeling[{model_iter}]", perf_counter() - time_model_stage_start)
             )
 
             for render_iter in range(renders_per_model):
+                prepared_for_render_iter = False
                 for arrangement in camera_arrangements:
                     time_render_stage_start = perf_counter()
-                    clear_imported_materials_from_doc()
-                    prepare(dict(preparation_params))
+                    should_prepare = False
+                    if preparation_scope == "arrangement":
+                        should_prepare = True
+                    elif preparation_scope == "render_iter":
+                        should_prepare = not prepared_for_render_iter
+
+                    if should_prepare:
+                        clear_imported_materials_from_doc()
+                        prepare(dict(preparation_params))
+                        prepared_for_render_iter = True
+                        _stability_wait(
+                            wait_ms=stability_cfg["wait_after_preparation_ms"],
+                            redraw=True,
+                        )
+
                     _setup_render_view(cfg=cfg)
+                    _stability_wait(
+                        wait_ms=stability_cfg["wait_before_render_ms"],
+                        redraw=True,
+                    )
 
                     render_params = _sample_rendering_params(
                         base_rendering=base_rendering,
@@ -434,9 +680,11 @@ def run(
                         camera_cfg["cube"] = cube_cfg
                         render_params["camera"] = camera_cfg
 
-                    captured_count, preview_used = _run_render_with_frame_count(
+                    captured_count, preview_used = _run_render_with_retry(
                         params=render_params,
                         show_cameras=show_cameras,
+                        retry_count=stability_cfg["render_retry_count"],
+                        wait_on_retry_ms=stability_cfg["wait_on_retry_ms"],
                     )
                     next_output_index += int(captured_count)
                     if captured_count > 0:
@@ -450,6 +698,16 @@ def run(
                             perf_counter() - time_render_stage_start,
                         )
                     )
+                    _stability_wait(
+                        wait_ms=stability_cfg["wait_after_render_ms"],
+                        redraw=False,
+                    )
+                    render_pass_count += 1
+                    if (
+                        stability_cfg["gc_every_render_passes"] > 0
+                        and render_pass_count % stability_cfg["gc_every_render_passes"] == 0
+                    ):
+                        _run_gc()
 
                     if preview_used:
                         # Camera preview mode intentionally exits after first render pass.
@@ -459,6 +717,26 @@ def run(
                     break
             if stop_after_preview:
                 break
+
+            model_iter_1based = model_iter + 1
+            if (
+                stability_cfg["clear_undo_every_model_iters"] > 0
+                and model_iter_1based % stability_cfg["clear_undo_every_model_iters"] == 0
+            ):
+                cleared = _clear_undo_records()
+                print(
+                    f"[stability] clear_undo_after_model_iter={model_iter_1based}: "
+                    f"{'ok' if cleared else 'unsupported'}"
+                )
+            if (
+                stability_cfg["gc_every_model_iters"] > 0
+                and model_iter_1based % stability_cfg["gc_every_model_iters"] == 0
+            ):
+                _run_gc()
+            _log_runtime_snapshot(
+                label=f"after_model_iter[{model_iter}]",
+                enabled=stability_cfg["log_memory"],
+            )
 
         if print_timings:
             total = perf_counter() - timer_start
