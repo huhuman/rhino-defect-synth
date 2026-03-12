@@ -850,6 +850,35 @@ def _surface_sample_point(surface_id):
         return None
 
 
+def _resolve_efflore_z_threshold_deg(defect_cfg):
+    eff_cfg = defect_cfg if isinstance(defect_cfg, dict) else {}
+    z_threshold = _to_optional_float(eff_cfg.get("z_threshold_deg"))
+    if z_threshold is None:
+        z_threshold = _to_optional_float(eff_cfg.get("z_threshold"))
+    if z_threshold is None:
+        z_threshold = 5.0
+    return abs(float(z_threshold))
+
+
+def _filter_surface_pool_for_type(surface_ids, defect_type, defect_cfg=None):
+    if str(defect_type or "").strip().lower() != "efflore":
+        return list(surface_ids or [])
+
+    z_threshold = _resolve_efflore_z_threshold_deg(defect_cfg)
+    filtered = []
+    for surface_id in surface_ids or []:
+        if not surface_id or not rs.IsObject(surface_id) or not rs.IsSurface(surface_id):
+            continue
+        sample_point = _surface_sample_point(surface_id)
+        if sample_point is None:
+            continue
+        normal = _surface_normal_at_point(surface_id, sample_point, fallback=(0.0, 0.0, 1.0))
+        elevation = _normal_elevation_from_xy_deg(normal)
+        if abs(elevation) <= z_threshold:
+            filtered.append(surface_id)
+    return filtered
+
+
 def _flip_surface_if_conflicts_with_normal(surface_id, desired_normal, min_opposite_dot=0.25):
     if not surface_id or not rs.IsObject(surface_id) or not rs.IsSurface(surface_id):
         return False
@@ -975,7 +1004,7 @@ def _add_mask_from_polygon(points, layer_name, as_surface=True):
     return mask_ids
 
 
-def _collect_reference_candidates(cfg, model_result=None):
+def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defect_cfg=None):
     source_ids = _collect_object_ids(model_result)
     ref_cfg = cfg.get("reference") or {}
     existing_ids_before = set(
@@ -989,6 +1018,7 @@ def _collect_reference_candidates(cfg, model_result=None):
         keep_input=True,
     )
     temporary_surface_ids = [sid for sid in surface_ids if sid not in existing_ids_before]
+    surface_ids = _filter_surface_pool_for_type(surface_ids, defect_type, defect_cfg=defect_cfg)
 
     max_num_surfaces = max(0, _to_int(ref_cfg.get("max_num_surfaces"), 0))
     if max_num_surfaces > 0:
@@ -1081,7 +1111,13 @@ def _resolve_random_value(defect_cfg, random_cfg, key, default):
     return value
 
 
-def _sample_transform(defect_cfg, random_cfg, candidate, shape, rng):
+def _normal_elevation_from_xy_deg(normal):
+    n = _unit(normal, fallback=(0.0, 0.0, 1.0))
+    horizontal = math.sqrt(n[0] * n[0] + n[1] * n[1])
+    return math.degrees(math.atan2(n[2], horizontal))
+
+
+def _sample_transform(defect_type, defect_cfg, random_cfg, candidate, shape, rng):
     angle_min = _to_float(_resolve_random_value(defect_cfg, random_cfg, "orientation_min_deg", 0.0), 0.0)
     angle_max = _to_float(_resolve_random_value(defect_cfg, random_cfg, "orientation_max_deg", 360.0), 360.0)
     if angle_min > angle_max:
@@ -1094,7 +1130,10 @@ def _sample_transform(defect_cfg, random_cfg, candidate, shape, rng):
     if shape_radius > 1e-9 and shape_radius > (float(candidate["boundary_dist"]) * boundary_margin):
         return None
 
-    angle_deg = rng.uniform(angle_min, angle_max)
+    if str(defect_type or "").strip().lower() == "efflore":
+        angle_deg = 0.0
+    else:
+        angle_deg = rng.uniform(angle_min, angle_max)
     normal_offset = _to_float(_resolve_random_value(defect_cfg, random_cfg, "normal_offset", 0.0), 0.0)
 
     return {
@@ -2155,6 +2194,9 @@ def _build_instance_records_for_type(
 ):
     if not shapes or count <= 0:
         return []
+    if not candidates:
+        print("Defect {}: no valid reference points were found.".format(defect_type))
+        return []
 
     random_cfg = cfg.get("random") or {}
     seed_cfg = (debug_cfg or {}).get("defect_seeds") or {}
@@ -2179,7 +2221,7 @@ def _build_instance_records_for_type(
 
         rng.shuffle(available)
         for candidate in available[:max_attempts]:
-            transform = _sample_transform(defect_cfg, random_cfg, candidate, shape, rng=rng)
+            transform = _sample_transform(defect_type, defect_cfg, random_cfg, candidate, shape, rng=rng)
             if transform is None:
                 continue
 
@@ -2437,17 +2479,6 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
     else:
         rng = random.Random()
 
-    candidates = _collect_reference_candidates(cfg, model_result=model_result)
-    if not candidates:
-        print("Defect pipeline: no valid placement candidates were found.")
-        return {
-            "enabled": True,
-            "records": [],
-            "camera_defects": [],
-            "summary": {"total": 0},
-            "layer_map": layer_map,
-        }
-
     records = []
     used_candidate_keys = set()
     for defect_type, defect_cfg, count in active_requests:
@@ -2460,6 +2491,15 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
         )
         if not shapes:
             print("Defect {}: skipped because no shape templates were resolved.".format(defect_type))
+            continue
+        candidates = _collect_reference_candidates(
+            cfg,
+            model_result=model_result,
+            defect_type=defect_type,
+            defect_cfg=defect_cfg,
+        )
+        if not candidates:
+            print("Defect {}: skipped because no valid placement candidates were found.".format(defect_type))
             continue
         records.extend(
             _build_instance_records_for_type(
