@@ -12,7 +12,7 @@ MAP_SUFFIXES = {
     "occlusion": ("ao", "oc", "ambientocclusion", "ambient_occlusion", "occlusion", "occ"),
     "roughness": ("roughness", "rough", "rgh"),
     "metallic": ("metallic", "metalness", "metal"),
-    "height": ("height", "displacement", "disp", "bump"),
+    # "height": ("height", "displacement", "disp", "bump"),
     "opacity": ("opacity", "alpha", "mask", "transparency"),
     "specular": ("specular", "spec", "glossiness", "gloss"),
 }
