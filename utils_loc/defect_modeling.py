@@ -114,6 +114,127 @@ def _sample_domain(domain, sample_count, margin):
     return [lo + idx * step for idx in range(sample_count)]
 
 
+def _surface_domain_midpoint(domain):
+    return 0.5 * (float(domain[0]) + float(domain[1]))
+
+
+def _surface_curve_length(surface_id, direction, cross_param, sample_steps=24):
+    sample_steps = max(4, int(sample_steps))
+    domain = rs.SurfaceDomain(surface_id, 0 if int(direction) == 0 else 1)
+    if not domain:
+        return None
+
+    start = float(domain[0])
+    end = float(domain[1])
+    total = 0.0
+    prev = None
+    for idx in range(sample_steps + 1):
+        t = float(idx) / float(sample_steps)
+        param = start + (end - start) * t
+        if int(direction) == 0:
+            point = rs.EvaluateSurface(surface_id, param, cross_param)
+        else:
+            point = rs.EvaluateSurface(surface_id, cross_param, param)
+        if not point:
+            continue
+        point = _xyz(point)
+        if prev is not None:
+            total += _distance(prev, point)
+        prev = point
+    return total if total > 1e-9 else None
+
+
+def _surface_uv_lengths(surface_id, domain_u, domain_v):
+    if not surface_id or not rs.IsObject(surface_id):
+        return 0.0, 0.0
+
+    u_cross_values = [
+        float(domain_v[0]) + (float(domain_v[1]) - float(domain_v[0])) * ratio
+        for ratio in (0.2, 0.5, 0.8)
+    ]
+    v_cross_values = [
+        float(domain_u[0]) + (float(domain_u[1]) - float(domain_u[0])) * ratio
+        for ratio in (0.2, 0.5, 0.8)
+    ]
+
+    u_lengths = [
+        length for length in (_surface_curve_length(surface_id, 0, value) for value in u_cross_values)
+        if length is not None
+    ]
+    v_lengths = [
+        length for length in (_surface_curve_length(surface_id, 1, value) for value in v_cross_values)
+        if length is not None
+    ]
+    if u_lengths and v_lengths:
+        return sum(u_lengths) / float(len(u_lengths)), sum(v_lengths) / float(len(v_lengths))
+
+    bbox = rs.BoundingBox(surface_id)
+    if not bbox:
+        return 0.0, 0.0
+    xs = [pt.X for pt in bbox]
+    ys = [pt.Y for pt in bbox]
+    zs = [pt.Z for pt in bbox]
+    lengths = sorted(
+        [
+            max(xs) - min(xs),
+            max(ys) - min(ys),
+            max(zs) - min(zs),
+        ],
+        reverse=True,
+    )
+    if len(lengths) >= 2:
+        return float(lengths[0]), float(lengths[1])
+    if lengths:
+        return float(lengths[0]), float(lengths[0])
+    return 0.0, 0.0
+
+
+def _resolve_surface_sampling(
+    surface_id,
+    domain_u,
+    domain_v,
+    sample_count_u,
+    sample_count_v,
+    sample_edge_length_u=None,
+    sample_edge_length_v=None,
+):
+    su = max(1, int(sample_count_u))
+    sv = max(1, int(sample_count_v))
+    center_uv = (_surface_domain_midpoint(domain_u), _surface_domain_midpoint(domain_v))
+    edge_u = None if sample_edge_length_u is None else float(sample_edge_length_u)
+    edge_v = None if sample_edge_length_v is None else float(sample_edge_length_v)
+    if edge_u is None or edge_v is None or edge_u <= 0.0 or edge_v <= 0.0:
+        return {
+            "sample_count_u": su,
+            "sample_count_v": sv,
+            "center_uv": center_uv,
+            "skip_checks": False,
+            "sampling_mode": "count_grid",
+        }
+
+    length_u, length_v = _surface_uv_lengths(surface_id, domain_u, domain_v)
+    interval_ratio_u = float(length_u) / edge_u if edge_u > 1e-9 else 0.0
+    interval_ratio_v = float(length_v) / edge_v if edge_v > 1e-9 else 0.0
+    if interval_ratio_u < 1.0 or interval_ratio_v < 1.0:
+        return {
+            "sample_count_u": 1,
+            "sample_count_v": 1,
+            "center_uv": center_uv,
+            "skip_checks": True,
+            "sampling_mode": "center_fallback",
+        }
+
+    intervals_u = max(1, int(round(interval_ratio_u)))
+    intervals_v = max(1, int(round(interval_ratio_v)))
+    return {
+        "sample_count_u": intervals_u + 1,
+        "sample_count_v": intervals_v + 1,
+        "center_uv": center_uv,
+        "skip_checks": False,
+        "sampling_mode": "edge_grid",
+    }
+
+
 def _size_hint_for_surface(surface_id, sample_count):
     area_data = rs.SurfaceArea(surface_id)
     area = 0.0
@@ -145,8 +266,11 @@ def get_reference_points(
     surface,
     sample_count_u=3,
     sample_count_v=3,
+    sample_edge_length_u=None,
+    sample_edge_length_v=None,
     trim_margin=0.1,
     return_normals=False,
+    return_metadata=False,
 ):
     """Sample candidate defect reference points on one surface.
 
@@ -154,40 +278,79 @@ def get_reference_points(
         surface: Rhino surface object id.
         sample_count_u: Number of samples along U domain.
         sample_count_v: Number of samples along V domain.
+        sample_edge_length_u: Target surface sampling edge length along U in model units.
+        sample_edge_length_v: Target surface sampling edge length along V in model units.
         trim_margin: Domain margin ratio to avoid exact boundaries.
         return_normals: When True, also return sampled normals.
+        return_metadata: When True, also return per-point metadata.
 
     Returns:
-        Tuple of (points, sizes) or (points, sizes, normals).
+        Tuple of (points, sizes), (points, sizes, normals), or with metadata appended.
     """
     if not surface or not rs.IsObject(surface):
-        return ([], [], []) if return_normals else ([], [])
+        if return_normals and return_metadata:
+            return [], [], [], []
+        if return_normals:
+            return [], [], []
+        if return_metadata:
+            return [], [], []
+        return [], []
 
     cleanup_ids = []
     if rs.IsPolysurface(surface):
         exploded = rs.ExplodePolysurfaces(surface, delete_input=False) or []
         if not exploded:
-            return ([], [], []) if return_normals else ([], [])
+            if return_normals and return_metadata:
+                return [], [], [], []
+            if return_normals:
+                return [], [], []
+            if return_metadata:
+                return [], [], []
+            return [], []
         surface = exploded[0]
         cleanup_ids = exploded
 
     try:
         if not rs.IsSurface(surface):
-            return ([], [], []) if return_normals else ([], [])
+            if return_normals and return_metadata:
+                return [], [], [], []
+            if return_normals:
+                return [], [], []
+            if return_metadata:
+                return [], [], []
+            return [], []
 
         domain_u = rs.SurfaceDomain(surface, 0)
         domain_v = rs.SurfaceDomain(surface, 1)
         if not domain_u or not domain_v:
-            return ([], [], []) if return_normals else ([], [])
+            if return_normals and return_metadata:
+                return [], [], [], []
+            if return_normals:
+                return [], [], []
+            if return_metadata:
+                return [], [], []
+            return [], []
 
-        su = max(1, int(sample_count_u))
-        sv = max(1, int(sample_count_v))
-        u_values = _sample_domain(domain_u, su, trim_margin)
-        v_values = _sample_domain(domain_v, sv, trim_margin)
+        sampling = _resolve_surface_sampling(
+            surface,
+            domain_u,
+            domain_v,
+            sample_count_u,
+            sample_count_v,
+            sample_edge_length_u=sample_edge_length_u,
+            sample_edge_length_v=sample_edge_length_v,
+        )
+        if sampling["skip_checks"]:
+            u_values = [sampling["center_uv"][0]]
+            v_values = [sampling["center_uv"][1]]
+        else:
+            u_values = _sample_domain(domain_u, sampling["sample_count_u"], trim_margin)
+            v_values = _sample_domain(domain_v, sampling["sample_count_v"], trim_margin)
 
         points = []
         normals = []
-        size_hint = _size_hint_for_surface(surface, su * sv)
+        metadata = []
+        size_hint = _size_hint_for_surface(surface, max(1, len(u_values) * len(v_values)))
         sizes = []
 
         for u in u_values:
@@ -196,7 +359,7 @@ def get_reference_points(
                 if not point:
                     continue
                 point = _xyz(point)
-                if not rs.IsPointOnSurface(surface, point):
+                if not sampling["skip_checks"] and not rs.IsPointOnSurface(surface, point):
                     continue
                 normal = rs.SurfaceNormal(surface, (u, v))
                 normal = _unit(normal, fallback=(0.0, 0.0, 1.0))
@@ -204,13 +367,24 @@ def get_reference_points(
                 points.append(point)
                 sizes.append(size_hint)
                 normals.append(normal)
+                metadata.append(
+                    {
+                        "uv": (float(u), float(v)),
+                        "skip_checks": bool(sampling["skip_checks"]),
+                        "sampling_mode": sampling["sampling_mode"],
+                    }
+                )
     finally:
         for obj_id in cleanup_ids:
             if obj_id and rs.IsObject(obj_id):
                 rs.DeleteObject(obj_id)
 
+    if return_normals and return_metadata:
+        return points, sizes, normals, metadata
     if return_normals:
         return points, sizes, normals
+    if return_metadata:
+        return points, sizes, metadata
     return points, sizes
 
 

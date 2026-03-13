@@ -68,6 +68,8 @@ def _to_optional_float(value, default=None):
 def _vec3(value):
     if hasattr(value, "X") and hasattr(value, "Y"):
         return float(value.X), float(value.Y), float(getattr(value, "Z", 0.0))
+    if len(value) == 2:
+        return float(value[0]), float(value[1]), 0.0
     return float(value[0]), float(value[1]), float(value[2])
 
 
@@ -87,6 +89,17 @@ def _scale(v, scalar):
     x, y, z = _vec3(v)
     s = float(scalar)
     return x * s, y * s, z * s
+
+
+def _lerp(a, b, t):
+    ax, ay, az = _vec3(a)
+    bx, by, bz = _vec3(b)
+    ratio = float(t)
+    return (
+        ax + (bx - ax) * ratio,
+        ay + (by - ay) * ratio,
+        az + (bz - az) * ratio,
+    )
 
 
 def _cross(a, b):
@@ -260,6 +273,51 @@ def _polygon_area(points):
         x2, y2 = pts[(idx + 1) % len(pts)]
         area2 += x1 * y2 - x2 * y1
     return 0.5 * area2
+
+
+def _polygon_perimeter(points):
+    pts = _unique_points(points)
+    if len(pts) < 2:
+        return 0.0
+    perimeter = 0.0
+    for idx in range(len(pts)):
+        perimeter += _distance(pts[idx], pts[(idx + 1) % len(pts)])
+    return perimeter
+
+
+def _resample_closed_polygon(points, target_count):
+    pts = _unique_points(points)
+    if len(pts) < 3:
+        return pts
+
+    target_count = max(3, _to_int(target_count, len(pts)))
+    if len(pts) <= target_count:
+        return pts
+
+    cumulative = [0.0]
+    for idx in range(len(pts)):
+        segment_len = _distance(pts[idx], pts[(idx + 1) % len(pts)])
+        cumulative.append(cumulative[-1] + segment_len)
+
+    perimeter = cumulative[-1]
+    if perimeter <= 1e-9:
+        return pts[:target_count]
+
+    sampled = []
+    step = perimeter / float(target_count)
+    segment_idx = 0
+    for sample_idx in range(target_count):
+        distance_along = step * float(sample_idx)
+        while segment_idx + 1 < len(cumulative) and cumulative[segment_idx + 1] < distance_along:
+            segment_idx += 1
+        start = pts[segment_idx % len(pts)]
+        end = pts[(segment_idx + 1) % len(pts)]
+        seg_start = cumulative[segment_idx]
+        seg_end = cumulative[segment_idx + 1]
+        seg_len = max(1e-9, seg_end - seg_start)
+        local_t = (distance_along - seg_start) / seg_len
+        sampled.append(_lerp(start, end, local_t))
+    return sampled
 
 
 def _polygon_centroid(points):
@@ -865,7 +923,10 @@ def _filter_surface_pool_for_type(surface_ids, defect_type, defect_cfg=None):
         return list(surface_ids or [])
 
     z_threshold = _resolve_efflore_z_threshold_deg(defect_cfg)
-    filtered = []
+
+    strict = []
+    all_valid = []
+    surface_debug = []
     for surface_id in surface_ids or []:
         if not surface_id or not rs.IsObject(surface_id) or not rs.IsSurface(surface_id):
             continue
@@ -874,9 +935,46 @@ def _filter_surface_pool_for_type(surface_ids, defect_type, defect_cfg=None):
             continue
         normal = _surface_normal_at_point(surface_id, sample_point, fallback=(0.0, 0.0, 1.0))
         elevation = _normal_elevation_from_xy_deg(normal)
+        all_valid.append(surface_id)
+        surface_debug.append(
+            {
+                "surface_id": str(surface_id),
+                "layer": str(rs.ObjectLayer(surface_id) or ""),
+                "normal": tuple(float(v) for v in normal),
+                "elevation": float(elevation),
+            }
+        )
         if abs(elevation) <= z_threshold:
-            filtered.append(surface_id)
-    return filtered
+            strict.append(surface_id)
+    print(
+        "Defect efflore: surface filter summary total_input={} valid={} strict={} z_threshold={:.2f}".format(
+            len(surface_ids or []),
+            len(all_valid),
+            len(strict),
+            z_threshold,
+        )
+    )
+    for item in surface_debug[:12]:
+        normal = item["normal"]
+        print(
+            "Defect efflore: surface {} layer='{}' normal=({:.3f}, {:.3f}, {:.3f}) elevation_from_xy_deg={:.2f}".format(
+                item["surface_id"],
+                item["layer"],
+                normal[0],
+                normal[1],
+                normal[2],
+                item["elevation"],
+            )
+        )
+    if len(surface_debug) > 12:
+        print("Defect efflore: surface debug truncated (showing 12 of {}).".format(len(surface_debug)))
+    if all_valid:
+        print(
+            "Defect efflore: no surfaces matched z_threshold={:.2f}.".format(
+                z_threshold,
+            )
+        )
+    return strict
 
 
 def _flip_surface_if_conflicts_with_normal(surface_id, desired_normal, min_opposite_dot=0.25):
@@ -1007,6 +1105,7 @@ def _add_mask_from_polygon(points, layer_name, as_surface=True):
 def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defect_cfg=None):
     source_ids = _collect_object_ids(model_result)
     ref_cfg = cfg.get("reference") or {}
+    debug_efflore = str(defect_type or "").strip().lower() == "efflore"
     existing_ids_before = set(
         rs.AllObjects(select=False, include_lights=False, include_grips=False) or []
     )
@@ -1035,37 +1134,88 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
     seen_candidate_keys = set()
     su = max(1, _to_int(ref_cfg.get("sample_count_u"), 2))
     sv = max(1, _to_int(ref_cfg.get("sample_count_v"), 2))
+    sample_edge_length_u = _to_optional_float(ref_cfg.get("sample_edge_length_u"))
+    sample_edge_length_v = _to_optional_float(ref_cfg.get("sample_edge_length_v"))
     trim_margin = _to_float(ref_cfg.get("trim_margin"), 0.1)
     min_boundary_distance = max(0.0, _to_float(ref_cfg.get("min_boundary_distance"), 1.0))
+    if debug_efflore:
+        print(
+            "Defect efflore: reference config sample_count_u={} sample_count_v={} sample_edge_length_u={} sample_edge_length_v={} trim_margin={:.3f} min_boundary_distance={:.3f}".format(
+                su,
+                sv,
+                sample_edge_length_u,
+                sample_edge_length_v,
+                trim_margin,
+                min_boundary_distance,
+            )
+        )
+
+    stats = {
+        "surface_count": 0,
+        "sample_points_total": 0,
+        "rejected_not_on_surface": 0,
+        "rejected_boundary": 0,
+        "rejected_duplicate": 0,
+        "accepted": 0,
+    }
+    per_surface_logs = []
 
     try:
         for surface_id in surface_ids:
             if not rs.IsObject(surface_id):
                 continue
+            stats["surface_count"] += 1
             border_curves = _duplicate_surface_borders(surface_id)
             try:
-                points, sizes, normals = get_reference_points(
+                points, sizes, normals, point_meta = get_reference_points(
                     surface_id,
                     sample_count_u=su,
                     sample_count_v=sv,
+                    sample_edge_length_u=sample_edge_length_u,
+                    sample_edge_length_v=sample_edge_length_v,
                     trim_margin=trim_margin,
                     return_normals=True,
+                    return_metadata=True,
                 )
                 surface_layer = rs.ObjectLayer(surface_id)
-                for point, size, normal in zip(points, sizes, normals):
+                surface_stats = {
+                    "surface_id": str(surface_id),
+                    "layer": str(surface_layer or ""),
+                    "sampled": len(points),
+                    "accepted": 0,
+                    "rejected_not_on_surface": 0,
+                    "rejected_boundary": 0,
+                    "rejected_duplicate": 0,
+                    "boundary_min": None,
+                    "boundary_max": None,
+                }
+                for point, size, normal, meta in zip(points, sizes, normals, point_meta):
+                    stats["sample_points_total"] += 1
+                    skip_checks = bool((meta or {}).get("skip_checks"))
                     point_3d = _vec3(point)
-                    if not rs.IsPointOnSurface(surface_id, point_3d):
+                    if not skip_checks and not rs.IsPointOnSurface(surface_id, point_3d):
+                        stats["rejected_not_on_surface"] += 1
+                        surface_stats["rejected_not_on_surface"] += 1
                         continue
                     normal_3d = _surface_normal_at_point(surface_id, point_3d, fallback=normal)
                     u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
-                    boundary_dist = _distance_to_boundary(point, border_curves)
-                    if boundary_dist < min_boundary_distance:
+                    boundary_dist = float("inf") if skip_checks else _distance_to_boundary(point, border_curves)
+                    if not skip_checks:
+                        if surface_stats["boundary_min"] is None or boundary_dist < surface_stats["boundary_min"]:
+                            surface_stats["boundary_min"] = float(boundary_dist)
+                        if surface_stats["boundary_max"] is None or boundary_dist > surface_stats["boundary_max"]:
+                            surface_stats["boundary_max"] = float(boundary_dist)
+                    if not skip_checks and boundary_dist < min_boundary_distance:
+                        stats["rejected_boundary"] += 1
+                        surface_stats["rejected_boundary"] += 1
                         continue
                     candidate_key = (
                         str(surface_layer or ""),
                         _point_key(point_3d),
                     )
                     if candidate_key in seen_candidate_keys:
+                        stats["rejected_duplicate"] += 1
+                        surface_stats["rejected_duplicate"] += 1
                         continue
                     seen_candidate_keys.add(candidate_key)
                     normal_line_id = None
@@ -1091,15 +1241,54 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
                             "n_axis": n_axis,
                             "reference_size": float(size),
                             "boundary_dist": float(boundary_dist),
+                            "skip_candidate_checks": skip_checks,
+                            "sampling_mode": (meta or {}).get("sampling_mode"),
+                            "uv": list((meta or {}).get("uv") or []),
                             "normal_debug_id": str(normal_line_id) if normal_line_id else None,
                         }
                     )
+                    stats["accepted"] += 1
+                    surface_stats["accepted"] += 1
+                if debug_efflore:
+                    per_surface_logs.append(surface_stats)
             finally:
                 _delete_objects(border_curves)
     finally:
         for sid in temporary_surface_ids:
             if sid and rs.IsObject(sid):
                 rs.DeleteObject(sid)
+
+    if debug_efflore:
+        print(
+            "Defect efflore: reference candidate summary surfaces={} sampled_points={} accepted={} rejected_boundary={} rejected_not_on_surface={} rejected_duplicate={}".format(
+                stats["surface_count"],
+                stats["sample_points_total"],
+                stats["accepted"],
+                stats["rejected_boundary"],
+                stats["rejected_not_on_surface"],
+                stats["rejected_duplicate"],
+            )
+        )
+        for item in per_surface_logs[:20]:
+            boundary_min = item["boundary_min"]
+            boundary_max = item["boundary_max"]
+            min_text = "n/a" if boundary_min is None else "{:.3f}".format(boundary_min)
+            max_text = "n/a" if boundary_max is None else "{:.3f}".format(boundary_max)
+            print(
+                "Defect efflore: surface {} layer='{}' sampled={} accepted={} rejected_boundary={} rejected_not_on_surface={} rejected_duplicate={} boundary_range=[{}, {}]".format(
+                    item["surface_id"],
+                    item["layer"],
+                    item["sampled"],
+                    item["accepted"],
+                    item["rejected_boundary"],
+                    item["rejected_not_on_surface"],
+                    item["rejected_duplicate"],
+                    min_text,
+                    max_text,
+                )
+            )
+        if len(per_surface_logs) > 20:
+            print("Defect efflore: reference debug truncated (showing 20 of {}).".format(len(per_surface_logs)))
 
     return candidates
 
@@ -1168,6 +1357,34 @@ def _pick_shape_points(shape):
     inside_polys = shape.get("inside_polys") or []
     diff_polys = shape.get("diff_polys") or []
     return offset_poly, base_poly, crack_polys, inside_polys, diff_polys
+
+
+def _select_surface_cut_points(shape, default_points=None):
+    spall_poly = shape.get("spall_poly") or []
+    if len(spall_poly) >= 3:
+        return list(spall_poly)
+
+    base_poly = shape.get("base_poly") or []
+    offset_poly = shape.get("offset_poly") or []
+    if len(base_poly) >= 3 and len(offset_poly) >= 3:
+        base_key = (abs(_polygon_area(base_poly)), _polygon_perimeter(base_poly))
+        offset_key = (abs(_polygon_area(offset_poly)), _polygon_perimeter(offset_poly))
+        return list(base_poly if base_key <= offset_key else offset_poly)
+    if len(base_poly) >= 3:
+        return list(base_poly)
+    if len(offset_poly) >= 3:
+        return list(offset_poly)
+
+    primary = shape.get("primary_poly") or []
+    if len(primary) >= 3:
+        return list(primary)
+
+    crack_polys = [points for points in (shape.get("crack_polys") or []) if len(points) >= 3]
+    if crack_polys:
+        crack_polys.sort(key=lambda pts: (abs(_polygon_area(pts)), _polygon_perimeter(pts)), reverse=True)
+        return list(crack_polys[0])
+
+    return list(default_points or [])
 
 
 def _create_seed_marker(candidate, layer_name, radius_coef=0.04375, min_radius=0.625, axis_scale=1.6):
@@ -1457,10 +1674,11 @@ def _split_surfaces_by_normal(surface_ids, normal, min_parallel_dot=0.93):
 
 def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debug_cfg=None):
     offset_2d, base_2d, crack_2d, inside_2d, diff_2d = _pick_shape_points(shape)
+    cut_2d = _select_surface_cut_points(shape, default_points=base_2d or offset_2d)
     offset_3d = _project_points_to_surface(offset_2d, candidate, transform["angle_deg"], transform["normal_offset"])
     base_3d = _project_points_to_surface(base_2d, candidate, transform["angle_deg"], transform["normal_offset"])
     surface_cut_polygon = _project_points_to_surface(
-        offset_2d,
+        cut_2d,
         candidate,
         transform["angle_deg"],
         normal_offset=0.0,
@@ -1714,21 +1932,27 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
 def _build_spall_ring_points(vertices, centroid, inward_normal, t, depth, irregularity, rng, min_bottom_area_ratio=0.25):
     radial_scale = max(0.03, 1.0 - 0.92 * float(t))
     depth_base = float(depth) * math.sin(0.5 * math.pi * float(t))
-    deepest_idx = rng.randrange(len(vertices)) if t >= 0.999 and vertices else -1
+    vertex_count = len(vertices)
+    count_ratio = max(0.35, min(1.0, math.sqrt(radial_scale)))
+    if vertex_count <= 8:
+        ring_vertices = list(vertices)
+    else:
+        target_count = max(6, min(vertex_count, int(round(vertex_count * count_ratio))))
+        ring_vertices = _resample_closed_polygon(vertices, target_count)
     min_bottom_radius_ratio = math.sqrt(max(0.0, float(min_bottom_area_ratio)))
     ring = []
-    for idx, point in enumerate(vertices):
+    is_bottom_ring = t >= 0.999
+    depth_jitter_ratio = max(0.0, min(0.2, float(irregularity) * 0.2 * (1.0 - float(t))))
+    radial_jitter_ratio = max(0.0, min(0.15, float(irregularity) * 0.18 * (1.0 - 0.5 * float(t))))
+    for point in ring_vertices:
         vec = _sub(point, centroid)
-        if t >= 0.999:
+        if is_bottom_ring:
             local_scale = max(min_bottom_radius_ratio, radial_scale)
-        else:
-            jitter = 1.0 + rng.uniform(-irregularity, irregularity) * (1.0 - 0.5 * t)
-            local_scale = max(0.01, radial_scale * jitter)
-        local_depth = depth_base
-        if t > 0.0:
-            local_depth = depth_base * (1.0 - irregularity * rng.uniform(0.0, 0.35))
-        if idx == deepest_idx:
             local_depth = float(depth)
+        else:
+            shrink_jitter = 1.0 - rng.uniform(0.0, radial_jitter_ratio)
+            local_scale = max(0.01, radial_scale * shrink_jitter)
+            local_depth = depth_base * (1.0 - rng.uniform(0.0, depth_jitter_ratio))
         ring_pt = _add(_add(centroid, _scale(vec, local_scale)), _scale(inward_normal, local_depth))
         ring.append(ring_pt)
     return _ensure_closed(ring)
@@ -2357,22 +2581,28 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
             continue
 
         cutter_ids = []
+        helper_ids = []
         try:
             for record in layer_records:
                 polygon = record.get("surface_cut_polygon") or []
                 curve_id = _add_polyline(polygon)
-                if curve_id:
+                if not curve_id:
+                    continue
+                helper_ids.append(curve_id)
+                if normal_extrude_distance > 0.0:
+                    normal_vec = _unit(record.get("normal") or (0.0, 0.0, 1.0), fallback=(0.0, 0.0, 1.0))
+                    offset_span = abs(_to_float(record.get("normal_offset"), 0.0))
+                    extrude_distance = max(normal_extrude_distance, normal_extrude_distance + offset_span)
+                    anchor = _vec3(polygon[0])
+                    start_pt = _add(anchor, _scale(normal_vec, -extrude_distance))
+                    end_pt = _add(anchor, _scale(normal_vec, extrude_distance))
+                    extruded = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
+                    if extruded and rs.IsObject(extruded):
+                        cutter_ids.append(extruded)
+                    else:
+                        cutter_ids.append(curve_id)
+                else:
                     cutter_ids.append(curve_id)
-                    if normal_extrude_distance > 0.0:
-                        normal_vec = _unit(record.get("normal") or (0.0, 0.0, 1.0), fallback=(0.0, 0.0, 1.0))
-                        offset_span = abs(_to_float(record.get("normal_offset"), 0.0))
-                        extrude_distance = max(normal_extrude_distance, normal_extrude_distance + offset_span)
-                        anchor = _vec3(polygon[0])
-                        start_pt = _add(anchor, _scale(normal_vec, -extrude_distance))
-                        end_pt = _add(anchor, _scale(normal_vec, extrude_distance))
-                        extruded = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
-                        if extruded and rs.IsObject(extruded):
-                            cutter_ids.append(extruded)
             if not cutter_ids:
                 continue
 
@@ -2382,6 +2612,7 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
             cutters += len(cutter_ids)
             targets += len(target_ids)
         finally:
+            _delete_objects(helper_ids)
             _delete_objects(cutter_ids)
 
     return {"groups": groups, "cutters": cutters, "targets": targets}

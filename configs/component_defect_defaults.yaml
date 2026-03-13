@@ -20,8 +20,8 @@ modeling:
     target_layers: ["component::slab", "component::parapet", "component::beam", "component::pier"]
     max_attempts_per_instance: 40
     reference:
-      sample_count_u: 2
-      sample_count_v: 2
+      sample_edge_length_u: 100.0
+      sample_edge_length_v: 100.0
       trim_margin: 0.1
       max_num_surfaces: 0
       min_boundary_distance: 20.0
@@ -57,7 +57,7 @@ modeling:
       count: 0
       overview_csv_path: null
       cs_weights: [1, 1]
-      z_threshold: 5.0
+      z_threshold: 45.0
       span_range_cm: [30.0, 100.0]
       fixed_thickness: 0.25
     spalling:
