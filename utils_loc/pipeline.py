@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime
 
 import rhinoscriptsyntax as rs
 
@@ -27,11 +28,40 @@ def _normalize_optional_path(path):
     return os.path.abspath(os.path.expanduser(text))
 
 
+def _resolve_record_output_path(path):
+    target_path = _normalize_optional_path(path)
+    if not target_path:
+        return None
+
+    if os.path.isdir(target_path):
+        output_dir = target_path
+        prefix = "defect_records"
+    else:
+        root, ext = os.path.splitext(target_path)
+        if ext.lower() == ".json":
+            output_dir = os.path.dirname(target_path) or os.getcwd()
+            stem = os.path.basename(root).strip()
+            prefix = stem or "defect_records"
+        else:
+            output_dir = target_path
+            prefix = "defect_records"
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = os.path.join(output_dir, "{}_{}.json".format(prefix, stamp))
+    suffix = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(output_dir, "{}_{}_{:02d}.json".format(prefix, stamp, suffix))
+        suffix += 1
+    return candidate
+
+
 def _write_json_atomic(path, payload):
     if not path:
         return
 
-    target_path = _normalize_optional_path(path)
+    target_path = os.path.abspath(os.path.expanduser(str(path)))
     if not target_path:
         return
 
@@ -78,7 +108,7 @@ def _log_defect_records(defect_result):
 
 def _save_defect_records_if_requested(defect_result, debug_cfg=None):
     debug_cfg = debug_cfg if isinstance(debug_cfg, dict) else {}
-    save_path = _normalize_optional_path(debug_cfg.get("save_record_path"))
+    save_path = _resolve_record_output_path(debug_cfg.get("save_record_path"))
     if not save_path:
         return None
 

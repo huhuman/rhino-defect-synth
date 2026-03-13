@@ -49,8 +49,8 @@
 | `preparation.plugin_autoload.required_commands` | `string \| list[string]` | 進入後續流程前必須可用的 Rhino command 名稱。 | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | 任一缺失即觸發 plugin 自動載入。 |
 | `preparation.plugin_autoload.strict` | `bool` | 命令缺失或載入失敗時是否直接中止流程。 | `true` | 設 `false` 則警告後繼續。 |
 | `preparation.plugin_autoload.verbose` | `bool` | 必要命令已存在時是否輸出資訊訊息。 | `true` | 不影響 strict 的錯誤行為。 |
-| `preparation.autosave.disable_during_batch` | `bool` | 在 `main_cube_batch.py` 中，於 batch 期間暫時停用 Rhino autosave。 | `true` | 會在 `finally` 還原；若 Rhino FileSettings API 不可用則忽略。 |
-| `preparation.undo.disable_during_batch` | `bool` | 在 `main_cube_batch.py` 中，於 batch 期間暫時停用 Rhino undo recording。 | `true` | 會在 `finally` 還原；與週期性 undo 清理是不同層級的保護。 |
+| `preparation.autosave.disable_during_batch` | `bool` | 在長時間的 `main.py` / `main_cube_batch.py` 執行期間，暫時停用 Rhino autosave。 | `true` | 會在 `finally` 還原；若 Rhino FileSettings API 不可用則忽略。 |
+| `preparation.undo.disable_during_batch` | `bool` | 在長時間的 `main.py` / `main_cube_batch.py` 執行期間，暫時停用 Rhino undo recording。 | `true` | 會在 `finally` 還原；與週期性 undo 清理是不同層級的保護。 |
 | `modeling` | `dict` | 傳入 `pipeline.create_model`。 | config | 需包含 `strategy`。 |
 | `rendering` | `dict` | 傳入 `pipeline.run_render`。 | config | render stage 必要。 |
 | `nested_loop` | `dict` | 由 `main_cube_batch.run` 使用，用於 cube 批次資料產生。 | 無 | 可選；`main.py` 不會使用。 |
@@ -132,7 +132,7 @@
 | 參數路徑 | 型別 | 運作機制 | 預設來源 | 備註 |
 |---|---|---|---|---|
 | `surface_normals.*` | mixed | 繪製 component surface 法向箭頭（除錯用）。 | `component_defaults.yaml` | 僅 component 分支使用。 |
-| `save_record_path` | `string | null` | 在 component defect placement 後把 defect payload 存成 JSON。 | `component_defect_defaults.yaml` | `none`、`null` 或空字串都會停用存檔；record 細節仍會預設寫入 log。 |
+| `save_record_path` | `string | null` | 在 component defect placement 後把 defect payload 存成 JSON。 | `component_defect_defaults.yaml` | 視為輸出資料夾路徑，檔名會自動補時間戳；`none`、`null` 或空字串都會停用存檔；record 細節仍會預設寫入 log。 |
 | `defect_normals.*` | mixed | 在 defect placement 過程繪製 defect 法向箭頭。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::normal`。 |
 | `reference_points` | `bool | dict` | 在 candidate 篩選前只繪製一次 sampled reference/UV 點。 | 無 | `true` 時使用 `debug::reference_points`；若設 dict 可額外控制 `enabled/layer/radius_coef/min_radius/axis_scale`。 |
 | `defect_seeds.*` | mixed | 在放置成功點繪製 defect seed marker。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::seed`，可依 type 分層。 |

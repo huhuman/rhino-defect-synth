@@ -49,8 +49,8 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `preparation.plugin_autoload.required_commands` | `string \| list[string]` | Command names that must be available before continuing. | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | If any command is missing, preparation attempts plugin auto-load. |
 | `preparation.plugin_autoload.strict` | `bool` | Whether missing commands / load failures should stop pipeline. | `true` | Set `false` to warn and continue. |
 | `preparation.plugin_autoload.verbose` | `bool` | Controls informational logging when required commands are already available. | `true` | Does not affect strict-error behavior. |
-| `preparation.autosave.disable_during_batch` | `bool` | In `main_cube_batch.py`, temporarily disables Rhino autosave for the duration of the batch run. | `true` | Restored in `finally`; ignored when Rhino FileSettings API is unavailable. |
-| `preparation.undo.disable_during_batch` | `bool` | In `main_cube_batch.py`, temporarily disables Rhino undo recording during batch execution. | `true` | Restored in `finally`; separate from periodic undo-record cleanup cadence. |
+| `preparation.autosave.disable_during_batch` | `bool` | In long-running `main.py` / `main_cube_batch.py` runs, temporarily disables Rhino autosave during execution. | `true` | Restored in `finally`; ignored when Rhino FileSettings API is unavailable. |
+| `preparation.undo.disable_during_batch` | `bool` | In long-running `main.py` / `main_cube_batch.py` runs, temporarily disables Rhino undo recording during execution. | `true` | Restored in `finally`; separate from periodic undo-record cleanup cadence. |
 | `modeling` | `dict` | Passed to `pipeline.create_model`. | config | Must include `strategy`. |
 | `rendering` | `dict` | Passed to `pipeline.run_render`. | config | Required for render stage. |
 | `nested_loop` | `dict` | Used by `main_cube_batch.run` for batched cube dataset generation. | none | Optional; ignored by `main.py`. |
@@ -133,7 +133,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
 |---|---|---|---|---|
 | `surface_normals.*` | mixed | Draws component surface-normal arrows for debug visualization. | `component_defaults.yaml` | Used in component branch only. |
-| `save_record_path` | `string | null` | Saves the defect placement payload JSON after component defect placement. | `component_defect_defaults.yaml` | `none`, `null`, or empty disables saving; record details are still logged by default. |
+| `save_record_path` | `string | null` | Saves the defect placement payload JSON after component defect placement. | `component_defect_defaults.yaml` | Treat this as an output folder path; the filename is auto-generated with a timestamp. `none`, `null`, or empty disables saving; record details are still logged by default. |
 | `defect_normals.*` | mixed | Draws defect-normal arrows during defect placement. | `component_defect_defaults.yaml` | Layer defaults to `debug::normal`. |
 | `reference_points` | `bool | dict` | Draws sampled reference/UV points once before candidate filtering. | none | `true` uses `debug::reference_points`; dict supports `enabled/layer/radius_coef/min_radius/axis_scale`. |
 | `defect_seeds.*` | mixed | Draws defect seed markers at successful placement points. | `component_defect_defaults.yaml` | Layer defaults to `debug::seed`; supports by-type split. |

@@ -21,6 +21,11 @@ The current `main_cube_batch.py` path has been hardened for long-running Rhino s
 - stability guards can stop early on memory/material/pass-count thresholds instead of letting Rhino drift into a hard crash
 - nested-loop `seed` now drives batch-level random choices consistently within that Rhino run
 
+The same core stability ideas are now also applied in `main.py` for repeated runs:
+- `reset`, `preparation`, and `modeling` suspend redraw during heavy document mutations
+- long-running `main.py` runs can reuse the same autosave/undo safety toggles from `preparation`
+- stage transitions now yield back to Rhino via `RhinoApp.Wait()` / redraw to reduce back-to-back viewport pressure
+
 ## Requirements
 - Rhino 8 (Windows) with Python scripting enabled.
 - Python modules available in Rhino:
@@ -99,7 +104,7 @@ Used by `utils_loc/pipeline.py::prepare()`:
 - imports render materials
 - optionally creates texture-based materials
 - recreates layers and applies layer material/color assignments
-- batch runs can temporarily disable Rhino autosave and undo recording via `preparation.autosave.disable_during_batch` and `preparation.undo.disable_during_batch`
+- long-running `main.py` and `main_cube_batch.py` runs can temporarily disable Rhino autosave and undo recording via `preparation.autosave.disable_during_batch` and `preparation.undo.disable_during_batch`
 
 ### 2) `modeling`
 Used by `utils_loc/pipeline.py::create_model()`.

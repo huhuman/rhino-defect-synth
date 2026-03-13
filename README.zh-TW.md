@@ -21,6 +21,11 @@
 - stability guard 可在記憶體、材質表大小或 render pass 次數超過門檻時提早受控停止，而不是讓 Rhino 直接硬 crash
 - nested-loop 的 `seed` 現在會一致地作用在該次 Rhino run 的 batch 隨機流程
 
+同一批核心穩定化邏輯現在也套進 `main.py` 的重複執行場景：
+- `reset`、`preparation`、`modeling` 在重度 document 操作期間會暫停 redraw
+- 長時間重跑 `main.py` 時，也可共用 `preparation` 裡的 autosave / undo 安全開關
+- stage 之間會透過 `RhinoApp.Wait()` / redraw 讓 Rhino 有緩衝，降低連續 viewport 壓力
+
 ## 需求
 - Rhino 8 (Windows) 並啟用 Python scripting。
 - Rhino 內可用 Python 模組：
@@ -99,7 +104,7 @@ main_cube_batch.run(
 - 匯入渲染材質
 - 可選：從 texture 目錄建立材質
 - 重建圖層並套用圖層材質/顏色
-- batch 執行時可透過 `preparation.autosave.disable_during_batch` 與 `preparation.undo.disable_during_batch` 暫時關閉 Rhino autosave 與 undo recording
+- 長時間重跑 `main.py` 與 `main_cube_batch.py` 時，都可透過 `preparation.autosave.disable_during_batch` 與 `preparation.undo.disable_during_batch` 暫時關閉 Rhino autosave 與 undo recording
 
 ### 2) `modeling`
 由 `utils_loc/pipeline.py::create_model()` 使用。

@@ -2074,7 +2074,7 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
 
 def _build_spall_ring_points(vertices, centroid, inward_normal, t, depth, irregularity, rng, min_bottom_area_ratio=0.25):
     radial_scale = max(0.03, 1.0 - 0.92 * float(t))
-    depth_base = float(depth) * math.sin(0.5 * math.pi * float(t))
+    depth_base = float(depth) * float(t)
     vertex_count = len(vertices)
     count_ratio = max(0.35, min(1.0, math.sqrt(radial_scale)))
     if vertex_count <= 8:
@@ -2085,7 +2085,6 @@ def _build_spall_ring_points(vertices, centroid, inward_normal, t, depth, irregu
     min_bottom_radius_ratio = math.sqrt(max(0.0, float(min_bottom_area_ratio)))
     ring = []
     is_bottom_ring = t >= 0.999
-    depth_jitter_ratio = max(0.0, min(0.2, float(irregularity) * 0.2 * (1.0 - float(t))))
     radial_jitter_ratio = max(0.0, min(0.15, float(irregularity) * 0.18 * (1.0 - 0.5 * float(t))))
     for point in ring_vertices:
         vec = _sub(point, centroid)
@@ -2095,7 +2094,7 @@ def _build_spall_ring_points(vertices, centroid, inward_normal, t, depth, irregu
         else:
             shrink_jitter = 1.0 - rng.uniform(0.0, radial_jitter_ratio)
             local_scale = max(0.01, radial_scale * shrink_jitter)
-            local_depth = depth_base * (1.0 - rng.uniform(0.0, depth_jitter_ratio))
+            local_depth = depth_base
         ring_pt = _add(_add(centroid, _scale(vec, local_scale)), _scale(inward_normal, local_depth))
         ring.append(ring_pt)
     return _ensure_closed(ring)
@@ -2123,7 +2122,7 @@ def _model_spall_from_polygon(
     irregularity = max(0.0, min(0.9, float(irregularity)))
 
     ring_points = [_ensure_closed(vertices)]
-    for t in (0.35, 0.65, 1.0):
+    for t in (1.0 / 3.0, 2.0 / 3.0, 1.0):
         ring_points.append(
             _build_spall_ring_points(
                 vertices,
