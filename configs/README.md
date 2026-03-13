@@ -133,6 +133,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
 |---|---|---|---|---|
 | `surface_normals.*` | mixed | Draws component surface-normal arrows for debug visualization. | `component_defaults.yaml` | Used in component branch only. |
+| `save_record_path` | `string | null` | Saves the defect placement payload JSON after component defect placement. | `component_defect_defaults.yaml` | `none`, `null`, or empty disables saving; record details are still logged by default. |
 | `defect_normals.*` | mixed | Draws defect-normal arrows during defect placement. | `component_defect_defaults.yaml` | Layer defaults to `debug::normal`. |
 | `reference_points` | `bool | dict` | Draws sampled reference/UV points once before candidate filtering. | none | `true` uses `debug::reference_points`; dict supports `enabled/layer/radius_coef/min_radius/axis_scale`. |
 | `defect_seeds.*` | mixed | Draws defect seed markers at successful placement points. | `component_defect_defaults.yaml` | Layer defaults to `debug::seed`; supports by-type split. |
@@ -145,7 +146,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | `seed` | `int | null` | Local RNG seed for defect placement. | `component_defect_defaults.yaml` | Isolated RNG state. |
 | `target_layers` | `list[str] | null` | Limits candidate surfaces by layer. | `component_defect_defaults.yaml` | `null` means no layer filtering. |
 | `max_attempts_per_instance` | `int` | Retry budget per defect instance. | `component_defect_defaults.yaml` | Prevents infinite placement loops. |
-| `reference.*` | mixed | Candidate point extraction controls. | `component_defect_defaults.yaml` | Includes `sample_edge_length_u/v`, `boundary_margin_ratio_u/v`, and legacy `sample_count_u/v` fallback. |
+| `reference.*` | mixed | Candidate point extraction controls. | `component_defect_defaults.yaml` | Includes `sample_edge_length_u/v`, `boundary_margin_ratio_u/v`, and legacy `sample_count_u/v` fallback; `boundary_margin_ratio_*` is used both for sampling trim and candidate validation, and `trim_margin` is no longer used. |
 | `random.*` | mixed | Shared placement randomization bounds. | `component_defect_defaults.yaml` | Orientation/margin/offset. |
 | `surface_subtraction.normal_extrude_distance` | `float` | Extrude distance used when building cutters for post-placement surface subtraction. | `component_defect_defaults.yaml` | Applies to crack/spalling/exposed-rebar surface split stage. |
 | `layers.seeds` | `string` | Seed marker layer. | `component_defect_defaults.yaml` | Auto-created if missing. |

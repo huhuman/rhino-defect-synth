@@ -25,6 +25,11 @@ rendering:
   camera:
     strategy: component
     component:
+      # Demo-only path controls used by main_demo.py / utils_loc.render_demo.
+      # The component camera demo walks the scene AABB corners at mid-Z and closes the loop v3 -> v0.
+      bbox_scale: 1.5
+      smooth_path: false
+      transition_frames: 0
       cameras_per_defect: 3
       distance_min: 100.0
       distance_max: 200.0

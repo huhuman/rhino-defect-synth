@@ -132,6 +132,7 @@
 | 參數路徑 | 型別 | 運作機制 | 預設來源 | 備註 |
 |---|---|---|---|---|
 | `surface_normals.*` | mixed | 繪製 component surface 法向箭頭（除錯用）。 | `component_defaults.yaml` | 僅 component 分支使用。 |
+| `save_record_path` | `string | null` | 在 component defect placement 後把 defect payload 存成 JSON。 | `component_defect_defaults.yaml` | `none`、`null` 或空字串都會停用存檔；record 細節仍會預設寫入 log。 |
 | `defect_normals.*` | mixed | 在 defect placement 過程繪製 defect 法向箭頭。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::normal`。 |
 | `reference_points` | `bool | dict` | 在 candidate 篩選前只繪製一次 sampled reference/UV 點。 | 無 | `true` 時使用 `debug::reference_points`；若設 dict 可額外控制 `enabled/layer/radius_coef/min_radius/axis_scale`。 |
 | `defect_seeds.*` | mixed | 在放置成功點繪製 defect seed marker。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::seed`，可依 type 分層。 |
@@ -144,7 +145,7 @@
 | `seed` | `int | null` | defect placement 本地 RNG 種子。 | `component_defect_defaults.yaml` | 不污染全域 random。 |
 | `target_layers` | `list[str] | null` | 候選 surface 圖層過濾。 | `component_defect_defaults.yaml` | `null` 代表不過濾。 |
 | `max_attempts_per_instance` | `int` | 單一缺陷實例最大嘗試次數。 | `component_defect_defaults.yaml` | 防止無限重試。 |
-| `reference.*` | mixed | 候選點抽樣控制。 | `component_defect_defaults.yaml` | 含 `sample_edge_length_u/v`、`boundary_margin_ratio_u/v`，以及舊版 `sample_count_u/v` fallback。 |
+| `reference.*` | mixed | 候選點抽樣控制。 | `component_defect_defaults.yaml` | 含 `sample_edge_length_u/v`、`boundary_margin_ratio_u/v`，以及舊版 `sample_count_u/v` fallback；`boundary_margin_ratio_*` 同時用於 sample 內縮與 candidate 驗證，`trim_margin` 已不再使用。 |
 | `random.*` | mixed | 共用 placement 隨機參數。 | `component_defect_defaults.yaml` | orientation/margin/offset。 |
 | `surface_subtraction.normal_extrude_distance` | `float` | post-placement 表面切割 cutter 的法向擠出距離。 | `component_defect_defaults.yaml` | 套用於 crack/spalling/exposed_rebar 的 surface split。 |
 | `layers.seeds` | `string` | seed marker 圖層。 | `component_defect_defaults.yaml` | 不存在會自動建立。 |

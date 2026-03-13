@@ -1,5 +1,8 @@
 """Simple entry point orchestrating material, modeling, and rendering steps."""
 
+import json
+import os
+
 import rhinoscriptsyntax as rs
 
 from utils_loc.crack_modeling import create_crack
@@ -15,6 +18,74 @@ render = importlib.import_module("utils_loc.render")
 render_demo = importlib.import_module("utils_loc.render_demo")
 
 _LAST_MODEL_RESULT = None
+
+
+def _normalize_optional_path(path):
+    text = str(path or "").strip()
+    if not text or text.lower() in ("none", "null"):
+        return None
+    return os.path.abspath(os.path.expanduser(text))
+
+
+def _write_json_atomic(path, payload):
+    if not path:
+        return
+
+    target_path = _normalize_optional_path(path)
+    if not target_path:
+        return
+
+    parent_dir = os.path.dirname(target_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
+    tmp_path = target_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except Exception:
+            pass
+    os.replace(tmp_path, target_path)
+
+
+def _log_defect_records(defect_result):
+    payload = defect_result if isinstance(defect_result, dict) else {}
+    records = payload.get("records") or []
+    summary = payload.get("summary") or {}
+    print(
+        "Defect records: total={} crack={} efflore={} spalling={} exposed_rebar={}".format(
+            summary.get("total", len(records)),
+            summary.get("crack", 0),
+            summary.get("efflore", 0),
+            summary.get("spalling", 0),
+            summary.get("exposed_rebar", 0),
+        )
+    )
+    if not records:
+        print("Defect records: no placed records to log.")
+        return
+
+    for idx, record in enumerate(records):
+        try:
+            record_text = json.dumps(record, sort_keys=True)
+        except Exception:
+            record_text = str(record)
+        print("Defect record[{}]: {}".format(idx, record_text))
+
+
+def _save_defect_records_if_requested(defect_result, debug_cfg=None):
+    debug_cfg = debug_cfg if isinstance(debug_cfg, dict) else {}
+    save_path = _normalize_optional_path(debug_cfg.get("save_record_path"))
+    if not save_path:
+        return None
+
+    payload = defect_result if isinstance(defect_result, dict) else {}
+    _write_json_atomic(save_path, payload)
+    print("Defect records saved to '{}'".format(save_path))
+    return save_path
 
 
 def _filter_layer_map_by_prefix(layer_map, prefixes):
@@ -152,6 +223,8 @@ def create_model(params):
             print("-------- Start Defect Placement -------")
             defect_result = apply_defect_pipeline(defect_cfg, model_result=result, debug_cfg=debug_cfg)
             result["defect"] = defect_result
+            _log_defect_records(defect_result)
+            _save_defect_records_if_requested(defect_result, debug_cfg=debug_cfg)
             summary = defect_result.get("summary", {})
             print(
                 "-------- Defect Placement Complete ------- "
