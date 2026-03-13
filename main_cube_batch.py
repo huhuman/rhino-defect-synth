@@ -17,8 +17,11 @@ import rhinoscriptsyntax as rs
 import scriptcontext as sc
 
 from utils_loc.config import load_config
+from utils_loc.logging_utils import install_timestamped_print
 from utils_loc.materials import clear_imported_materials_from_doc
 from utils_loc.pipeline import create_model, prepare
+
+install_timestamped_print()
 
 render = importlib.import_module("utils_loc.render")
 

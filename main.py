@@ -6,8 +6,11 @@ import scriptcontext as sc
 import rhinoscriptsyntax as rs
 
 from utils_loc.config import load_config
+from utils_loc.logging_utils import install_timestamped_print
 from utils_loc.materials import clear_imported_materials_from_doc
 from utils_loc.pipeline import create_model, prepare, run_render
+
+install_timestamped_print()
 
 STAGE_ORDER = (
     "reset",
@@ -111,7 +114,7 @@ def _layer_matches(layer, names):
 def setup_render_view(cfg=None):
     """Set active view mode and configure layer visibility from config."""
     render_view = sc.doc.Views.ActiveView
-    mode = Rhino.Display.DisplayModeDescription.FindByName("Shaded")
+    mode = Rhino.Display.DisplayModeDescription.FindByName("Rendered")
     if mode:
         render_view.ActiveViewport.DisplayMode = mode
 

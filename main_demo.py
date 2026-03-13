@@ -5,7 +5,10 @@ import os
 from time import perf_counter
 
 from utils_loc.config import load_config
+from utils_loc.logging_utils import install_timestamped_print
 from utils_loc.pipeline import run_render_demo
+
+install_timestamped_print()
 
 import importlib
 render = importlib.import_module("utils_loc.render")
