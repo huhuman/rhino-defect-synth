@@ -49,6 +49,8 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `preparation.plugin_autoload.required_commands` | `string \| list[string]` | Command names that must be available before continuing. | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | If any command is missing, preparation attempts plugin auto-load. |
 | `preparation.plugin_autoload.strict` | `bool` | Whether missing commands / load failures should stop pipeline. | `true` | Set `false` to warn and continue. |
 | `preparation.plugin_autoload.verbose` | `bool` | Controls informational logging when required commands are already available. | `true` | Does not affect strict-error behavior. |
+| `preparation.autosave.disable_during_batch` | `bool` | In `main_cube_batch.py`, temporarily disables Rhino autosave for the duration of the batch run. | `true` | Restored in `finally`; ignored when Rhino FileSettings API is unavailable. |
+| `preparation.undo.disable_during_batch` | `bool` | In `main_cube_batch.py`, temporarily disables Rhino undo recording during batch execution. | `true` | Restored in `finally`; separate from periodic undo-record cleanup cadence. |
 | `modeling` | `dict` | Passed to `pipeline.create_model`. | config | Must include `strategy`. |
 | `rendering` | `dict` | Passed to `pipeline.run_render`. | config | Required for render stage. |
 | `nested_loop` | `dict` | Used by `main_cube_batch.run` for batched cube dataset generation. | none | Optional; ignored by `main.py`. |
@@ -64,19 +66,24 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `rendering_sampler` | `dict \| list \| scalar` | Randomized override spec merged into `rendering` per render iteration. | none | Must resolve to a dict after sampling. |
 | `output_index_start` | `int` | Starting offset for `view_XXX` numbering in batch mode. | `0` | Combined with per-render captured-frame count to keep filenames continuous. |
 | `preparation_scope` | `arrangement \| render_iter \| model_iter` | Controls how often material cleanup + preparation reruns in nested render loops. | `arrangement` | `arrangement` keeps original behavior; `render_iter` is a safer/faster compromise; `model_iter` is most conservative for stability/perf. |
-| `stability.enabled` | `bool` | Master switch for conservative waits/GC/retries in batch mode. | `true` | Set `false` to disable all stability helpers. |
+| `stability.enabled` | `bool` | Master switch for conservative waits/GC/retries/guards in batch mode. | `true` | Set `false` to disable all stability helpers. |
 | `stability.wait_after_reset_ms`, `stability.wait_after_preparation_ms`, `stability.wait_before_render_ms`, `stability.wait_after_render_ms`, `stability.wait_on_retry_ms` | `int` | Sleep/idle pacing around heavy Rhino operations and retry path. | `20`, `40`, `40`, `60`, `400` | Helps avoid race-like failures in long runs. |
 | `stability.render_retry_count` | `int` | Retry count for failed render pass before aborting. | `1` | Retries call full render pass again after wait + GC. |
 | `stability.gc_every_render_passes`, `stability.gc_every_model_iters` | `int` | Periodic Python/.NET GC cadence in nested loops. | `1`, `1` | Set `0` to disable a cadence. |
-| `stability.clear_undo_every_model_iters` | `int` | Clears Rhino undo records periodically to reduce memory pressure. | `1` | Set `0` to disable. |
+| `stability.clear_undo_every_render_passes`, `stability.clear_undo_every_model_iters` | `int` | Clears Rhino undo records periodically to reduce memory pressure. | `1`, `1` | Set either cadence to `0` to disable it. |
+| `stability.max_private_memory_mb` | `float` | Stops the batch early when Rhino private memory reaches this threshold. | `0.0` | `0` disables the guard; intended as a controlled stop before Rhino becomes unstable. |
+| `stability.max_render_passes_per_run` | `int` | Stops the batch after a fixed number of completed render passes. | `0` | `0` disables the guard; useful when an external supervisor restarts Rhino between chunks. |
+| `stability.max_basic_materials` | `int` | Stops the batch when the basic Rhino material table grows past this threshold. | `0` | `0` disables the guard; helps catch material-cleanup regressions. |
 | `stability.log_memory` | `bool` | Logs object/layer/material counts and private memory snapshots each model iteration. | `true` | Useful for leak diagnosis in long runs. |
 
 Batch runtime flow in `main_cube_batch.py`:
-- Per model iteration: `reset -> preparation -> view_setup -> modeling`
+- Per model iteration: `reset -> preparation -> modeling`, with redraw suspended during heavy non-render document mutations.
 - Per render iteration: run one or more `view_setup -> rendering` passes.
   Material cleanup/preparation frequency is controlled by `nested_loop.preparation_scope`;
   `camera_arrangements` controls the number of arrangement passes.
-- Stability helpers can insert waits, retries, GC, and undo cleanup between heavy stages.
+- Batch mode writes `batch_log.txt` and `batch_state.json` inside the timestamped output directory.
+- `batch_state.json` records current progress plus a safe resume point at completed model boundaries.
+- Stability helpers can insert waits, retries, GC, undo cleanup, and guard-based early stops between heavy stages.
 - View indices are kept continuous across all iterations to prevent overwrite.
 
 ## Modeling: Common
@@ -137,7 +144,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | `seed` | `int | null` | Local RNG seed for defect placement. | `component_defect_defaults.yaml` | Isolated RNG state. |
 | `target_layers` | `list[str] | null` | Limits candidate surfaces by layer. | `component_defect_defaults.yaml` | `null` means no layer filtering. |
 | `max_attempts_per_instance` | `int` | Retry budget per defect instance. | `component_defect_defaults.yaml` | Prevents infinite placement loops. |
-| `reference.*` | mixed | Candidate point extraction controls. | `component_defect_defaults.yaml` | Includes boundary distance threshold. |
+| `reference.*` | mixed | Candidate point extraction controls. | `component_defect_defaults.yaml` | Includes `sample_edge_length_u/v`, boundary distance threshold, and legacy `sample_count_u/v` fallback. |
 | `random.*` | mixed | Shared placement randomization bounds. | `component_defect_defaults.yaml` | Orientation/margin/offset. |
 | `surface_subtraction.normal_extrude_distance` | `float` | Extrude distance used when building cutters for post-placement surface subtraction. | `component_defect_defaults.yaml` | Applies to crack/spalling/exposed-rebar surface split stage. |
 | `layers.seeds` | `string` | Seed marker layer. | `component_defect_defaults.yaml` | Auto-created if missing. |

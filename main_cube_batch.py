@@ -4,9 +4,11 @@
 import copy
 import gc
 import importlib
+import json
 import os
 import random
 import sys
+from contextlib import contextmanager
 from datetime import datetime
 from time import perf_counter
 
@@ -62,6 +64,31 @@ def _stop_batch_logging(log_file, stdout_backup, stderr_backup):
         sys.stderr = stderr_backup
     if log_file is not None:
         log_file.close()
+
+
+def _write_json_atomic(path, payload):
+    if not path:
+        return
+
+    target_path = os.path.abspath(str(path))
+    tmp_path = f"{target_path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except Exception:
+            pass
+    os.replace(tmp_path, target_path)
+
+
+def _flush_batch_state(path, state):
+    if not path or not isinstance(state, dict):
+        return
+    payload = dict(state)
+    payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    _write_json_atomic(path, payload)
 
 
 def _create_timestamped_subdir(base_output_dir):
@@ -121,6 +148,8 @@ def _layer_matches(layer, names):
 def _setup_render_view(cfg=None):
     """Set active view mode and configure layer visibility."""
     render_view = sc.doc.Views.ActiveView
+    if render_view is None:
+        raise RuntimeError("No active Rhino view available for batch rendering.")
     mode = Rhino.Display.DisplayModeDescription.FindByName("Rendered")
     if mode:
         render_view.ActiveViewport.DisplayMode = mode
@@ -146,6 +175,32 @@ def _setup_render_view(cfg=None):
             layer.IsVisible = True
         if hide_set and _layer_matches(layer, hide_set):
             layer.IsVisible = False
+
+
+def _set_active_view_display_mode(mode_name):
+    if not str(mode_name or "").strip():
+        return False
+
+    render_view = getattr(sc.doc.Views, "ActiveView", None)
+    if render_view is None:
+        return False
+
+    mode = Rhino.Display.DisplayModeDescription.FindByName(str(mode_name))
+    if mode is None:
+        return False
+
+    try:
+        render_view.ActiveViewport.DisplayMode = mode
+        return True
+    except Exception:
+        return False
+
+
+def _set_batch_work_view():
+    for mode_name in ("Wireframe", "Shaded"):
+        if _set_active_view_display_mode(mode_name):
+            return mode_name
+    return None
 
 
 def _list_json_files(folder_path):
@@ -361,6 +416,43 @@ def _stability_wait(wait_ms=0, redraw=False):
         rs.Sleep(wait_ms)
 
 
+@contextmanager
+def _suspend_view_updates():
+    redraw_previous = None
+    active_view = None
+    drawing_previous = None
+
+    try:
+        redraw_previous = rs.EnableRedraw(False)
+    except Exception:
+        redraw_previous = None
+
+    try:
+        active_view = getattr(sc.doc.Views, "ActiveView", None)
+        if active_view is not None and hasattr(active_view, "EnableDrawing"):
+            drawing_previous = bool(active_view.EnableDrawing)
+            if drawing_previous:
+                active_view.EnableDrawing = False
+    except Exception:
+        drawing_previous = None
+
+    try:
+        yield
+    finally:
+        if active_view is not None and drawing_previous is not None:
+            try:
+                active_view.EnableDrawing = bool(drawing_previous)
+            except Exception:
+                pass
+        try:
+            if redraw_previous is None:
+                rs.EnableRedraw(True)
+            else:
+                rs.EnableRedraw(bool(redraw_previous))
+        except Exception:
+            pass
+
+
 def _table_count(table):
     if table is None:
         return None
@@ -563,6 +655,65 @@ def _restore_batch_autosave_policy(state):
         print("[stability] autosave policy: restore failed (properties unavailable).")
 
 
+def _apply_batch_undo_policy(preparation_params):
+    prep_cfg = dict(preparation_params or {})
+    undo_cfg = dict(prep_cfg.get("undo") or {})
+    disable_during_batch = bool(undo_cfg.get("disable_during_batch", True))
+    if not disable_during_batch:
+        print("[stability] undo policy: keep recording enabled (disable_during_batch=false).")
+        return None
+
+    doc = getattr(sc, "doc", None)
+    if doc is None or not hasattr(doc, "UndoRecordingEnabled"):
+        print("[stability] undo policy: UndoRecordingEnabled API unavailable; skipping.")
+        return None
+
+    try:
+        enabled_value = bool(doc.UndoRecordingEnabled)
+    except Exception:
+        print("[stability] undo policy: unable to read current undo state; skipping.")
+        return None
+
+    changed = False
+    if enabled_value:
+        try:
+            doc.UndoRecordingEnabled = False
+            changed = True
+            print("[stability] undo policy: disabled undo recording during batch.")
+        except Exception:
+            print("[stability] undo policy: failed to disable undo recording.")
+    else:
+        print("[stability] undo policy: already disabled before batch.")
+
+    return {
+        "doc": doc,
+        "enabled_value": enabled_value,
+        "changed": bool(changed),
+    }
+
+
+def _restore_batch_undo_policy(state):
+    state = dict(state or {})
+    if not state or not bool(state.get("changed")):
+        return
+
+    doc = state.get("doc")
+    if doc is None or not hasattr(doc, "UndoRecordingEnabled"):
+        return
+
+    restored = False
+    try:
+        doc.UndoRecordingEnabled = bool(state.get("enabled_value"))
+        restored = True
+    except Exception:
+        restored = False
+
+    if restored:
+        print("[stability] undo policy: restored previous undo-recording setting.")
+    else:
+        print("[stability] undo policy: failed to restore previous undo-recording setting.")
+
+
 def _run_render_with_frame_count(params, show_cameras=False):
     """Run render stage and return (captured_frame_count, preview_mode_used)."""
     render.setup_render_environment(params)
@@ -609,6 +760,10 @@ def run(
     stdout_backup = None
     stderr_backup = None
     autosave_state = None
+    undo_state = None
+    batch_state_path = None
+    batch_state = None
+    global_random_state = None
 
     cfg = load_config(config_name)
     nested_cfg = cfg.get("nested_loop", {})
@@ -632,16 +787,20 @@ def run(
     batch_output_dir = _create_timestamped_subdir(base_rendering.get("output_dir"))
     base_rendering["output_dir"] = batch_output_dir
     batch_log_path = os.path.join(batch_output_dir, "batch_log.txt")
+    batch_state_path = os.path.join(batch_output_dir, "batch_state.json")
 
     try:
         log_file, stdout_backup, stderr_backup = _start_batch_logging(batch_log_path)
         print(f"Batch output directory: {batch_output_dir}")
         print(f"Batch log path: {batch_log_path}")
+        print(f"Batch state path: {batch_state_path}")
 
+        global_random_state = random.getstate()
         if seed is None:
             seed = nested_cfg.get("seed")
         if seed is not None:
             rng = random.Random(int(seed))
+            random.seed(int(seed))
             print(f"Random seed: {int(seed)}")
         else:
             rng = random.Random()
@@ -660,6 +819,7 @@ def run(
         arrangement_passes = len(camera_arrangements)
 
         autosave_state = _apply_batch_autosave_policy(preparation_params)
+        undo_state = _apply_batch_undo_policy(preparation_params)
 
         json_files = _list_json_files(cube_params.get("cube_map_dir"))
         model_starts, leftovers = _compute_model_start_indices(
@@ -704,12 +864,59 @@ def run(
             )
 
         next_output_index = int(nested_cfg.get("output_index_start", 0))
+        safe_resume_face_index = int(model_starts[0]) if model_starts else None
+        safe_resume_output_index = int(next_output_index)
         stop_after_preview = False
         stop_after_guard = False
         render_pass_count = 0
+        current_face_idx = None
+        current_model_iter = None
+        current_render_iter = None
+        current_arrangement_label = None
+
+        batch_state = {
+            "status": "running",
+            "config_name": config_name,
+            "batch_output_dir": batch_output_dir,
+            "batch_log_path": batch_log_path,
+            "safe_resume": {
+                "start_face_index": safe_resume_face_index,
+                "output_index_start": safe_resume_output_index,
+                "note": "Safe resume points are exact only at completed model boundaries.",
+            },
+            "progress": {
+                "models_total": len(model_starts),
+                "renders_per_model": renders_per_model,
+                "arrangement_passes": arrangement_passes,
+                "render_pass_count": render_pass_count,
+                "next_output_index": next_output_index,
+            },
+            "current": {
+                "model_iter": None,
+                "start_face_index": None,
+                "render_iter": None,
+                "arrangement": None,
+                "stage": "startup",
+            },
+        }
+        _flush_batch_state(batch_state_path, batch_state)
 
         for model_iter, face_idx in enumerate(model_starts):
+            current_face_idx = int(face_idx)
+            current_model_iter = int(model_iter)
+            current_render_iter = None
+            current_arrangement_label = None
             print(f"=== model_iter={model_iter}, start_face_index={face_idx} ===")
+            batch_state["current"] = {
+                "model_iter": current_model_iter,
+                "start_face_index": current_face_idx,
+                "render_iter": None,
+                "arrangement": None,
+                "stage": "model_setup",
+            }
+            batch_state["progress"]["render_pass_count"] = render_pass_count
+            batch_state["progress"]["next_output_index"] = next_output_index
+            _flush_batch_state(batch_state_path, batch_state)
             _log_runtime_snapshot(
                 label=f"before_model_iter[{model_iter}]",
                 enabled=stability_cfg["log_memory"],
@@ -728,25 +935,29 @@ def run(
                 break
 
             time_model_stage_start = perf_counter()
-            _reset_scene_objects()
+            with _suspend_view_updates():
+                _set_batch_work_view()
+                _reset_scene_objects()
             _stability_wait(
                 wait_ms=stability_cfg["wait_after_reset_ms"],
                 redraw=True,
             )
-            clear_imported_materials_from_doc()
-            model_prepare_params = dict(preparation_params)
-            if preparation_scope != "model_iter":
-                model_prepare_params["_import_materials"] = False
-            prepare(model_prepare_params)
+            with _suspend_view_updates():
+                _set_batch_work_view()
+                clear_imported_materials_from_doc()
+                model_prepare_params = dict(preparation_params)
+                if preparation_scope != "model_iter":
+                    model_prepare_params["_import_materials"] = False
+                prepare(model_prepare_params)
             _stability_wait(
                 wait_ms=stability_cfg["wait_after_preparation_ms"],
                 redraw=True,
             )
-            _setup_render_view(cfg=cfg)
-
-            model_params = dict(modeling_params)
-            model_params["start_face_index"] = int(face_idx)
-            create_model(model_params)
+            with _suspend_view_updates():
+                _set_batch_work_view()
+                model_params = dict(modeling_params)
+                model_params["start_face_index"] = int(face_idx)
+                create_model(model_params)
             _stability_wait(
                 wait_ms=stability_cfg["wait_before_render_ms"],
                 redraw=True,
@@ -766,8 +977,10 @@ def run(
                         should_prepare = not prepared_for_render_iter
 
                     if should_prepare:
-                        clear_imported_materials_from_doc()
-                        prepare(dict(preparation_params))
+                        with _suspend_view_updates():
+                            _set_batch_work_view()
+                            clear_imported_materials_from_doc()
+                            prepare(dict(preparation_params))
                         prepared_for_render_iter = True
                         _stability_wait(
                             wait_ms=stability_cfg["wait_after_preparation_ms"],
@@ -829,8 +1042,22 @@ def run(
                         redraw=False,
                     )
                     render_pass_count += 1
+                    current_render_iter = int(render_iter)
+                    current_arrangement_label = arrangement_label
+                    batch_state["current"] = {
+                        "model_iter": current_model_iter,
+                        "start_face_index": current_face_idx,
+                        "render_iter": current_render_iter,
+                        "arrangement": current_arrangement_label,
+                        "stage": "post_render_pass",
+                    }
+                    batch_state["progress"]["render_pass_count"] = render_pass_count
+                    batch_state["progress"]["next_output_index"] = next_output_index
+                    _flush_batch_state(batch_state_path, batch_state)
                     if preparation_scope != "model_iter":
-                        clear_imported_materials_from_doc()
+                        with _suspend_view_updates():
+                            _set_batch_work_view()
+                            clear_imported_materials_from_doc()
                     if (
                         stability_cfg["gc_every_render_passes"] > 0
                         and render_pass_count % stability_cfg["gc_every_render_passes"] == 0
@@ -896,6 +1123,26 @@ def run(
                 and model_iter_1based % stability_cfg["gc_every_model_iters"] == 0
             ):
                 _run_gc()
+            next_model_idx = model_iter + 1
+            safe_resume_face_index = (
+                int(model_starts[next_model_idx]) if next_model_idx < len(model_starts) else None
+            )
+            safe_resume_output_index = int(next_output_index)
+            batch_state["safe_resume"] = {
+                "start_face_index": safe_resume_face_index,
+                "output_index_start": safe_resume_output_index,
+                "note": "Safe resume points are exact only at completed model boundaries.",
+            }
+            batch_state["current"] = {
+                "model_iter": current_model_iter,
+                "start_face_index": current_face_idx,
+                "render_iter": None,
+                "arrangement": None,
+                "stage": "completed_model",
+            }
+            batch_state["progress"]["render_pass_count"] = render_pass_count
+            batch_state["progress"]["next_output_index"] = next_output_index
+            _flush_batch_state(batch_state_path, batch_state)
             _log_runtime_snapshot(
                 label=f"after_model_iter[{model_iter}]",
                 enabled=stability_cfg["log_memory"],
@@ -914,10 +1161,58 @@ def run(
                 break
 
         if stop_after_guard:
+            batch_state["status"] = "stopped_by_guard"
+            batch_state["current"] = {
+                "model_iter": current_model_iter,
+                "start_face_index": current_face_idx,
+                "render_iter": current_render_iter,
+                "arrangement": current_arrangement_label,
+                "stage": "guard_stop",
+            }
+            batch_state["progress"]["render_pass_count"] = render_pass_count
+            batch_state["progress"]["next_output_index"] = next_output_index
+            _flush_batch_state(batch_state_path, batch_state)
             print(
                 "[stability] run stopped early by guard. "
-                f"resume_hint: start_face_index={face_idx}, output_index_start={next_output_index}"
+                f"safe_resume: start_face_index={safe_resume_face_index}, "
+                f"output_index_start={safe_resume_output_index}"
             )
+            if current_face_idx != safe_resume_face_index:
+                print(
+                    "[stability] note: guard tripped mid-model. Resume from the safe model "
+                    "boundary above to avoid partial-iteration duplication."
+                )
+
+        if stop_after_preview:
+            batch_state["status"] = "preview_stopped"
+            batch_state["current"] = {
+                "model_iter": current_model_iter,
+                "start_face_index": current_face_idx,
+                "render_iter": current_render_iter,
+                "arrangement": current_arrangement_label,
+                "stage": "preview_stop",
+            }
+            batch_state["progress"]["render_pass_count"] = render_pass_count
+            batch_state["progress"]["next_output_index"] = next_output_index
+            _flush_batch_state(batch_state_path, batch_state)
+
+        if not stop_after_guard and not stop_after_preview:
+            batch_state["status"] = "completed"
+            batch_state["current"] = {
+                "model_iter": None,
+                "start_face_index": None,
+                "render_iter": None,
+                "arrangement": None,
+                "stage": "completed",
+            }
+            batch_state["safe_resume"] = {
+                "start_face_index": None,
+                "output_index_start": next_output_index,
+                "note": "Batch completed; no further resume point is required.",
+            }
+            batch_state["progress"]["render_pass_count"] = render_pass_count
+            batch_state["progress"]["next_output_index"] = next_output_index
+            _flush_batch_state(batch_state_path, batch_state)
 
         if print_timings:
             total = perf_counter() - timer_start
@@ -927,7 +1222,28 @@ def run(
             print(f"total: {total:.2f}s")
 
         return stage_times
+    except Exception as exc:
+        if batch_state is not None:
+            batch_state["status"] = "failed"
+            batch_state["error"] = f"{type(exc).__name__}: {exc}"
+            batch_state["current"] = {
+                "model_iter": current_model_iter,
+                "start_face_index": current_face_idx,
+                "render_iter": current_render_iter,
+                "arrangement": current_arrangement_label,
+                "stage": "exception",
+            }
+            batch_state["progress"]["render_pass_count"] = render_pass_count
+            batch_state["progress"]["next_output_index"] = next_output_index
+            _flush_batch_state(batch_state_path, batch_state)
+        raise
     finally:
+        if global_random_state is not None:
+            try:
+                random.setstate(global_random_state)
+            except Exception:
+                pass
+        _restore_batch_undo_policy(undo_state)
         _restore_batch_autosave_policy(autosave_state)
         _stop_batch_logging(log_file, stdout_backup, stderr_backup)
 

@@ -12,6 +12,15 @@
 - 兩種相機策略：`cube` 與 `component`。
 - 多通道輸出：color、depth、normal、mask，以及線性 `.pfm`（depth/normal）。
 
+## Batch 穩定化重點
+目前 `main_cube_batch.py` 這條 batch 路徑，已針對長時間 Rhino session 做過一輪加固：
+- 重度的非 render document 操作現在會先暫停 redraw，並切到較輕量的工作 display mode，再於 capture 前切回 `Rendered`
+- batch 執行時可暫時關閉 Rhino autosave 與 undo recording，結束時再恢復
+- 每個 timestamped batch 輸出資料夾都會額外寫入 `batch_log.txt` 與 `batch_state.json`
+- `batch_state.json` 會記錄目前進度，以及完成 model 邊界上的安全 resume 點
+- stability guard 可在記憶體、材質表大小或 render pass 次數超過門檻時提早受控停止，而不是讓 Rhino 直接硬 crash
+- nested-loop 的 `seed` 現在會一致地作用在該次 Rhino run 的 batch 隨機流程
+
 ## 需求
 - Rhino 8 (Windows) 並啟用 Python scripting。
 - Rhino 內可用 Python 模組：
@@ -90,6 +99,7 @@ main_cube_batch.run(
 - 匯入渲染材質
 - 可選：從 texture 目錄建立材質
 - 重建圖層並套用圖層材質/顏色
+- batch 執行時可透過 `preparation.autosave.disable_during_batch` 與 `preparation.undo.disable_during_batch` 暫時關閉 Rhino autosave 與 undo recording
 
 ### 2) `modeling`
 由 `utils_loc/pipeline.py::create_model()` 使用。
@@ -209,11 +219,15 @@ main_cube_batch.run(
 - `output_index_start`（`view_XXX` 命名起始編號）
 - `seed`
 - `rendering_sampler`
+- `stability.*`（等待/重試/GC/undo/memory guard）
 
 `main_cube_batch.py` 目前流程：
-- 每個模型 iteration：`reset -> preparation -> view_setup -> modeling`
+- 每個模型 iteration：`reset -> preparation -> modeling`，且在重度的非 render document 操作期間會暫停 redraw。
 - 每個渲染 iteration：會執行一或多次 `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
   （次數由 `camera_arrangements` 控制）
+- batch 輸出資料夾內除了 render 輸出，還會寫入 `batch_log.txt` 與 `batch_state.json`。
+- `batch_state.json` 會記錄目前進度與「安全可續跑」的 model-boundary resume 點；若 guard 在 model 中途觸發，resume 點會刻意回到最近一個乾淨邊界，而不是停住當下的位置。
+- nested-loop 的 seed 現在會一致地套用到該次 Rhino run 內的 batch 隨機流程，例如 camera/lighting/render sampler。
 - 透過 `output_index_offset` 讓 render view id 跨 iteration 連續，避免覆蓋檔案。
 
 ## 輸出結構
@@ -226,6 +240,10 @@ main_cube_batch.run(
 - `mask/<basename>.png`
 - `depth_buffer/<basename>.pfm`
 - `normal_buffer/<basename>.pfm`
+
+若由 `main_cube_batch.py` 執行，timestamped run 資料夾還會包含：
+- `batch_log.txt`
+- `batch_state.json`
 
 預設 `basename` 為 `view_XXX`。batch 模式下會跨 iteration 連續編號，避免覆蓋。
 

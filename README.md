@@ -12,6 +12,15 @@ Implemented and wired in the main pipeline:
 - Camera generation for both `cube` and `component` strategies.
 - Multi-pass output capture: color, depth, normal, mask, plus linear depth/normal `.pfm` channels.
 
+## Batch Stability Improvements
+The current `main_cube_batch.py` path has been hardened for long-running Rhino sessions:
+- heavy non-render document operations now suspend redraw and use a lighter working display mode before switching back to `Rendered` for capture
+- batch runs can temporarily disable Rhino autosave and undo recording, then restore both settings on exit
+- each timestamped batch folder now records both `batch_log.txt` and `batch_state.json`
+- `batch_state.json` records current progress plus a safe resume point at completed model boundaries
+- stability guards can stop early on memory/material/pass-count thresholds instead of letting Rhino drift into a hard crash
+- nested-loop `seed` now drives batch-level random choices consistently within that Rhino run
+
 ## Requirements
 - Rhino 8 (Windows) with Python scripting enabled.
 - Python modules available in Rhino:
@@ -90,6 +99,7 @@ Used by `utils_loc/pipeline.py::prepare()`:
 - imports render materials
 - optionally creates texture-based materials
 - recreates layers and applies layer material/color assignments
+- batch runs can temporarily disable Rhino autosave and undo recording via `preparation.autosave.disable_during_batch` and `preparation.undo.disable_during_batch`
 
 ### 2) `modeling`
 Used by `utils_loc/pipeline.py::create_model()`.
@@ -209,11 +219,15 @@ Optional section to control batch iterations and per-model render variants:
 - `output_index_start` (starting index for `view_XXX` naming)
 - `seed`
 - `rendering_sampler`
+- `stability.*` (wait/retry/GC/undo/memory guards)
 
 Batch flow in `main_cube_batch.py`:
-- Per model iteration: `reset -> preparation -> view_setup -> modeling`
+- Per model iteration: `reset -> preparation -> modeling`, with redraw suspended during heavy non-render document mutations.
 - Per render iteration: one or more `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
   passes (count controlled by `camera_arrangements`)
+- Batch mode writes both `batch_log.txt` and `batch_state.json` inside the timestamped output folder.
+- `batch_state.json` tracks current progress and a safe resume point at completed model boundaries; if a guard trips mid-model, the safe resume index intentionally points to the next known-clean model boundary.
+- Nested-loop seed now drives batch-level random choices consistently across camera/lighting/render sampling within that Rhino run.
 - Render view indices are continuous across iterations via `output_index_offset`, preventing filename overwrite.
 
 ## Output Structure
@@ -226,6 +240,10 @@ For each camera pose, outputs are saved under:
 - `mask/<basename>.png`
 - `depth_buffer/<basename>.pfm`
 - `normal_buffer/<basename>.pfm`
+
+For `main_cube_batch.py`, the timestamped run directory also contains:
+- `batch_log.txt`
+- `batch_state.json`
 
 By default, `basename` is `view_XXX`. In batch mode, indices continue across iterations to avoid overwrite.
 

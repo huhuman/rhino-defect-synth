@@ -49,6 +49,8 @@
 | `preparation.plugin_autoload.required_commands` | `string \| list[string]` | 進入後續流程前必須可用的 Rhino command 名稱。 | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | 任一缺失即觸發 plugin 自動載入。 |
 | `preparation.plugin_autoload.strict` | `bool` | 命令缺失或載入失敗時是否直接中止流程。 | `true` | 設 `false` 則警告後繼續。 |
 | `preparation.plugin_autoload.verbose` | `bool` | 必要命令已存在時是否輸出資訊訊息。 | `true` | 不影響 strict 的錯誤行為。 |
+| `preparation.autosave.disable_during_batch` | `bool` | 在 `main_cube_batch.py` 中，於 batch 期間暫時停用 Rhino autosave。 | `true` | 會在 `finally` 還原；若 Rhino FileSettings API 不可用則忽略。 |
+| `preparation.undo.disable_during_batch` | `bool` | 在 `main_cube_batch.py` 中，於 batch 期間暫時停用 Rhino undo recording。 | `true` | 會在 `finally` 還原；與週期性 undo 清理是不同層級的保護。 |
 | `modeling` | `dict` | 傳入 `pipeline.create_model`。 | config | 需包含 `strategy`。 |
 | `rendering` | `dict` | 傳入 `pipeline.run_render`。 | config | render stage 必要。 |
 | `nested_loop` | `dict` | 由 `main_cube_batch.run` 使用，用於 cube 批次資料產生。 | 無 | 可選；`main.py` 不會使用。 |
@@ -64,19 +66,24 @@
 | `rendering_sampler` | `dict \| list \| scalar` | 每次 render iteration 對 `rendering` 的隨機覆蓋規格。 | 無 | 抽樣後必須可解析為 dict。 |
 | `output_index_start` | `int` | batch 模式 `view_XXX` 命名起始 offset。 | `0` | 會和每次 capture 影格數累加，確保檔名連續。 |
 | `preparation_scope` | `arrangement \| render_iter \| model_iter` | 控制 nested render loop 中材質清理 + preparation 的重跑頻率。 | `arrangement` | `arrangement` 為原本行為；`render_iter` 是穩定/效能折衷；`model_iter` 最保守、最省資源。 |
-| `stability.enabled` | `bool` | batch 模式保守穩定化（等待/GC/重試）總開關。 | `true` | 設為 `false` 會關閉所有穩定化輔助。 |
+| `stability.enabled` | `bool` | batch 模式保守穩定化（等待/GC/重試/guard）總開關。 | `true` | 設為 `false` 會關閉所有穩定化輔助。 |
 | `stability.wait_after_reset_ms`, `stability.wait_after_preparation_ms`, `stability.wait_before_render_ms`, `stability.wait_after_render_ms`, `stability.wait_on_retry_ms` | `int` | 在 Rhino 重操作與重試路徑前後插入等待/idle。 | `20`, `40`, `40`, `60`, `400` | 有助於降低長迴圈中的時序性失敗。 |
 | `stability.render_retry_count` | `int` | render pass 失敗後重試次數。 | `1` | 每次重試前會等待並執行 GC。 |
 | `stability.gc_every_render_passes`, `stability.gc_every_model_iters` | `int` | nested loop 的 Python/.NET GC 週期。 | `1`, `1` | 設 `0` 可關閉該 GC 週期。 |
-| `stability.clear_undo_every_model_iters` | `int` | 定期清 Rhino undo records 以降低記憶體壓力。 | `1` | 設 `0` 可停用。 |
+| `stability.clear_undo_every_render_passes`, `stability.clear_undo_every_model_iters` | `int` | 定期清 Rhino undo records 以降低記憶體壓力。 | `1`, `1` | 任一 cadence 設 `0` 可單獨停用。 |
+| `stability.max_private_memory_mb` | `float` | 當 Rhino private memory 到達門檻時，提早安全停止 batch。 | `0.0` | `0` 代表停用；用途是讓程式受控停下，而不是等 Rhino 失穩。 |
+| `stability.max_render_passes_per_run` | `int` | 完成固定數量的 render pass 後提早停止 batch。 | `0` | `0` 代表停用；適合配合外部 supervisor 分段重啟 Rhino。 |
+| `stability.max_basic_materials` | `int` | 當 Rhino basic material table 成長超過門檻時提早停止 batch。 | `0` | `0` 代表停用；可用來抓 material cleanup 失效。 |
 | `stability.log_memory` | `bool` | 每個 model iteration 記錄 objects/layers/materials 與 private memory。 | `true` | 方便追查長跑記憶體成長。 |
 
 `main_cube_batch.py` 目前執行流程：
-- 每個模型 iteration：`reset -> preparation -> view_setup -> modeling`
+- 每個模型 iteration：`reset -> preparation -> modeling`，且在重度的非 render document 操作期間會暫停 redraw。
 - 每個渲染 iteration：會執行一或多次 `view_setup -> rendering`。
   材質清理與 preparation 的重跑頻率由 `nested_loop.preparation_scope` 控制；
   arrangement pass 次數由 `camera_arrangements` 決定。
-- 穩定化設定可在重操作間插入等待、重試、GC 與 undo 清理。
+- batch 會在 timestamped 輸出資料夾中寫入 `batch_log.txt` 與 `batch_state.json`。
+- `batch_state.json` 會記錄目前進度，以及完成 model 邊界上的安全 resume 點。
+- 穩定化設定可在重操作間插入等待、重試、GC、undo 清理，以及 guard 式提早停止。
 - view index 會跨 iteration 連續，避免覆蓋前次輸出。
 
 ## Modeling：共用
@@ -136,7 +143,7 @@
 | `seed` | `int | null` | defect placement 本地 RNG 種子。 | `component_defect_defaults.yaml` | 不污染全域 random。 |
 | `target_layers` | `list[str] | null` | 候選 surface 圖層過濾。 | `component_defect_defaults.yaml` | `null` 代表不過濾。 |
 | `max_attempts_per_instance` | `int` | 單一缺陷實例最大嘗試次數。 | `component_defect_defaults.yaml` | 防止無限重試。 |
-| `reference.*` | mixed | 候選點抽樣控制。 | `component_defect_defaults.yaml` | 含邊界距離限制。 |
+| `reference.*` | mixed | 候選點抽樣控制。 | `component_defect_defaults.yaml` | 含 `sample_edge_length_u/v`、邊界距離限制，以及舊版 `sample_count_u/v` fallback。 |
 | `random.*` | mixed | 共用 placement 隨機參數。 | `component_defect_defaults.yaml` | orientation/margin/offset。 |
 | `surface_subtraction.normal_extrude_distance` | `float` | post-placement 表面切割 cutter 的法向擠出距離。 | `component_defect_defaults.yaml` | 套用於 crack/spalling/exposed_rebar 的 surface split。 |
 | `layers.seeds` | `string` | seed marker 圖層。 | `component_defect_defaults.yaml` | 不存在會自動建立。 |
