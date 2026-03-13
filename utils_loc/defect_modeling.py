@@ -118,6 +118,59 @@ def _surface_domain_midpoint(domain):
     return 0.5 * (float(domain[0]) + float(domain[1]))
 
 
+def _domain_param_from_distance(domain, total_length, distance):
+    start = float(domain[0])
+    end = float(domain[1])
+    if total_length <= 1e-9:
+        return _surface_domain_midpoint(domain)
+    ratio = max(0.0, min(1.0, float(distance) / float(total_length)))
+    return start + (end - start) * ratio
+
+
+def _resolve_axis_sampling(domain, length, edge_length, fallback_count, center_param, boundary_margin_ratio=0.0):
+    count = max(1, int(fallback_count))
+    edge = None if edge_length is None else float(edge_length)
+    if edge is None or edge <= 0.0:
+        values = _sample_domain(domain, count, 0.0)
+        return {
+            "values": values,
+            "sample_count": len(values),
+            "centered": False,
+            "insufficient": False,
+            "boundary_distance": 0.0,
+            "sample_margin": 0.0,
+        }
+
+    boundary_distance = max(0.0, edge * max(0.0, float(boundary_margin_ratio or 0.0)))
+    usable_length = float(length) - 2.0 * boundary_distance
+    if usable_length + 1e-9 < edge:
+        return {
+            "values": [float(center_param)],
+            "sample_count": 1,
+            "centered": True,
+            "insufficient": True,
+            "boundary_distance": boundary_distance,
+            "sample_margin": 0.0 if length <= 1e-9 else boundary_distance / float(length),
+        }
+
+    cell_count = max(1, int(math.floor((usable_length + 1e-9) / edge)))
+    occupied_length = float(cell_count) * edge
+    leftover = max(0.0, usable_length - occupied_length)
+    first_center_distance = boundary_distance + 0.5 * leftover + 0.5 * edge
+    values = [
+        _domain_param_from_distance(domain, length, first_center_distance + edge * float(idx))
+        for idx in range(cell_count)
+    ]
+    return {
+        "values": values,
+        "sample_count": len(values),
+        "centered": False,
+        "insufficient": False,
+        "boundary_distance": boundary_distance,
+        "sample_margin": 0.0 if length <= 1e-9 else boundary_distance / float(length),
+    }
+
+
 def _surface_curve_length(surface_id, direction, cross_param, sample_steps=24):
     sample_steps = max(4, int(sample_steps))
     domain = rs.SurfaceDomain(surface_id, 0 if int(direction) == 0 else 1)
@@ -197,41 +250,45 @@ def _resolve_surface_sampling(
     sample_count_v,
     sample_edge_length_u=None,
     sample_edge_length_v=None,
+    boundary_margin_ratio_u=0.0,
+    boundary_margin_ratio_v=0.0,
 ):
-    su = max(1, int(sample_count_u))
-    sv = max(1, int(sample_count_v))
     center_uv = (_surface_domain_midpoint(domain_u), _surface_domain_midpoint(domain_v))
-    edge_u = None if sample_edge_length_u is None else float(sample_edge_length_u)
-    edge_v = None if sample_edge_length_v is None else float(sample_edge_length_v)
-    if edge_u is None or edge_v is None or edge_u <= 0.0 or edge_v <= 0.0:
-        return {
-            "sample_count_u": su,
-            "sample_count_v": sv,
-            "center_uv": center_uv,
-            "skip_checks": False,
-            "sampling_mode": "count_grid",
-        }
-
     length_u, length_v = _surface_uv_lengths(surface_id, domain_u, domain_v)
-    interval_ratio_u = float(length_u) / edge_u if edge_u > 1e-9 else 0.0
-    interval_ratio_v = float(length_v) / edge_v if edge_v > 1e-9 else 0.0
-    if interval_ratio_u < 1.0 or interval_ratio_v < 1.0:
-        return {
-            "sample_count_u": 1,
-            "sample_count_v": 1,
-            "center_uv": center_uv,
-            "skip_checks": True,
-            "sampling_mode": "center_fallback",
-        }
-
-    intervals_u = max(1, int(round(interval_ratio_u)))
-    intervals_v = max(1, int(round(interval_ratio_v)))
+    u_sampling = _resolve_axis_sampling(
+        domain_u,
+        length_u,
+        sample_edge_length_u,
+        sample_count_u,
+        center_uv[0],
+        boundary_margin_ratio=boundary_margin_ratio_u,
+    )
+    v_sampling = _resolve_axis_sampling(
+        domain_v,
+        length_v,
+        sample_edge_length_v,
+        sample_count_v,
+        center_uv[1],
+        boundary_margin_ratio=boundary_margin_ratio_v,
+    )
+    both_centered = bool(u_sampling["insufficient"] and v_sampling["insufficient"])
+    one_centered = bool(u_sampling["centered"] or v_sampling["centered"])
     return {
-        "sample_count_u": intervals_u + 1,
-        "sample_count_v": intervals_v + 1,
+        "sample_count_u": int(u_sampling["sample_count"]),
+        "sample_count_v": int(v_sampling["sample_count"]),
+        "u_values": list(u_sampling["values"]),
+        "v_values": list(v_sampling["values"]),
         "center_uv": center_uv,
-        "skip_checks": False,
-        "sampling_mode": "edge_grid",
+        "center_u": bool(u_sampling["centered"]),
+        "center_v": bool(v_sampling["centered"]),
+        "sample_margin_u": float(u_sampling["sample_margin"]),
+        "sample_margin_v": float(v_sampling["sample_margin"]),
+        "skip_checks": both_centered,
+        "sampling_mode": (
+            "center_fallback" if both_centered else
+            "axis_centered_grid" if one_centered else
+            "edge_grid"
+        ),
     }
 
 
@@ -262,13 +319,48 @@ def _size_hint_for_surface(surface_id, sample_count):
     return max(1e-3, lengths[1] if len(lengths) > 1 else lengths[0])
 
 
+def _reference_size_hint(
+    surface_id,
+    sample_count,
+    sample_edge_length_u=None,
+    sample_edge_length_v=None,
+    sampling_mode=None,
+):
+    edge_lengths = []
+    for value in (sample_edge_length_u, sample_edge_length_v):
+        if value is None:
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric > 1e-9:
+            edge_lengths.append(numeric)
+
+    if edge_lengths:
+        return max(1e-3, min(edge_lengths))
+
+    if sampling_mode == "center_fallback":
+        domain_u = rs.SurfaceDomain(surface_id, 0)
+        domain_v = rs.SurfaceDomain(surface_id, 1)
+        if domain_u and domain_v:
+            length_u, length_v = _surface_uv_lengths(surface_id, domain_u, domain_v)
+            lengths = [length for length in (length_u, length_v) if length > 1e-9]
+            if lengths:
+                return max(1e-3, min(lengths))
+
+    return _size_hint_for_surface(surface_id, sample_count)
+
+
 def get_reference_points(
     surface,
     sample_count_u=3,
     sample_count_v=3,
     sample_edge_length_u=None,
     sample_edge_length_v=None,
-    trim_margin=0.1,
+    boundary_margin_ratio_u=0.0,
+    boundary_margin_ratio_v=0.0,
+    trim_margin=0.0,
     return_normals=False,
     return_metadata=False,
 ):
@@ -280,7 +372,9 @@ def get_reference_points(
         sample_count_v: Number of samples along V domain.
         sample_edge_length_u: Target surface sampling edge length along U in model units.
         sample_edge_length_v: Target surface sampling edge length along V in model units.
-        trim_margin: Domain margin ratio to avoid exact boundaries.
+        boundary_margin_ratio_u: Inner sampling margin ratio relative to `sample_edge_length_u`.
+        boundary_margin_ratio_v: Inner sampling margin ratio relative to `sample_edge_length_v`.
+        trim_margin: Deprecated and ignored.
         return_normals: When True, also return sampled normals.
         return_metadata: When True, also return per-point metadata.
 
@@ -339,18 +433,22 @@ def get_reference_points(
             sample_count_v,
             sample_edge_length_u=sample_edge_length_u,
             sample_edge_length_v=sample_edge_length_v,
+            boundary_margin_ratio_u=boundary_margin_ratio_u,
+            boundary_margin_ratio_v=boundary_margin_ratio_v,
         )
-        if sampling["skip_checks"]:
-            u_values = [sampling["center_uv"][0]]
-            v_values = [sampling["center_uv"][1]]
-        else:
-            u_values = _sample_domain(domain_u, sampling["sample_count_u"], trim_margin)
-            v_values = _sample_domain(domain_v, sampling["sample_count_v"], trim_margin)
+        u_values = list(sampling.get("u_values") or [sampling["center_uv"][0]])
+        v_values = list(sampling.get("v_values") or [sampling["center_uv"][1]])
 
         points = []
         normals = []
         metadata = []
-        size_hint = _size_hint_for_surface(surface, max(1, len(u_values) * len(v_values)))
+        size_hint = _reference_size_hint(
+            surface,
+            max(1, len(u_values) * len(v_values)),
+            sample_edge_length_u=sample_edge_length_u,
+            sample_edge_length_v=sample_edge_length_v,
+            sampling_mode=sampling.get("sampling_mode"),
+        )
         sizes = []
 
         for u in u_values:
@@ -372,6 +470,10 @@ def get_reference_points(
                         "uv": (float(u), float(v)),
                         "skip_checks": bool(sampling["skip_checks"]),
                         "sampling_mode": sampling["sampling_mode"],
+                        "center_u": bool(sampling["center_u"]),
+                        "center_v": bool(sampling["center_v"]),
+                        "sample_margin_u": float(sampling.get("sample_margin_u", 0.0)),
+                        "sample_margin_v": float(sampling.get("sample_margin_v", 0.0)),
                     }
                 )
     finally:

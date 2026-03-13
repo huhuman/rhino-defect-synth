@@ -437,6 +437,37 @@ def _resolve_reference_metric_px(defect_type, row, polygon_payload):
     return max(width_px, height_px, 1.0)
 
 
+def _sanitize_reference_metric_px(defect_type, metric_px, row, polygon_payload):
+    try:
+        metric = float(metric_px)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(metric) or metric <= 0.0:
+        return None
+
+    row = row or {}
+    polygon_payload = polygon_payload or {}
+    bbox_w = _to_optional_float(row.get("bbox_w"))
+    bbox_h = _to_optional_float(row.get("bbox_h"))
+    payload_w = _to_optional_float(polygon_payload.get("width_px"))
+    payload_h = _to_optional_float(polygon_payload.get("height_px"))
+
+    long_side_candidates = [value for value in (bbox_w, bbox_h, payload_w, payload_h) if value and value > 0.0]
+    short_side_candidates = [value for value in (bbox_w, bbox_h) if value and value > 0.0]
+    bbox_long = max(long_side_candidates) if long_side_candidates else None
+    bbox_short = min(short_side_candidates) if short_side_candidates else bbox_long
+
+    if defect_type == "crack":
+        # Crack width in pixels should not explode far beyond the mask bbox scale.
+        if bbox_long is not None and metric > max(float(bbox_long), float(bbox_short or bbox_long) * 4.0):
+            return None
+    elif defect_type == "efflore":
+        if bbox_long is not None and metric > float(bbox_long) * 2.0:
+            return None
+
+    return metric
+
+
 def _uniform_sample(rng, lo, hi):
     lo = float(lo)
     hi = float(hi)
@@ -585,9 +616,23 @@ def _build_shape_from_overview_row(defect_type, row, defect_cfg, rng, target_pro
         ))
         return None
 
-    metric_px = _resolve_reference_metric_px(defect_type, row, payload)
-    if metric_px <= 0.0:
-        metric_px = 1.0
+    metric_px = _sanitize_reference_metric_px(
+        defect_type,
+        _resolve_reference_metric_px(defect_type, row, payload),
+        row,
+        payload,
+    )
+    if metric_px is None:
+        print(
+            "Defect {}: skipped row '{}' because metric_px is invalid for bbox (bbox_w={}, bbox_h={}, width_px={}).".format(
+                defect_type,
+                row.get("instance_id"),
+                row.get("bbox_w"),
+                row.get("bbox_h"),
+                row.get("width_px"),
+            )
+        )
+        return None
     if not isinstance(target_profile, dict):
         target_profile = _resolve_target_profile(defect_type, defect_cfg, rng=rng)
     target_metric_cm = max(1e-6, _to_float(target_profile.get("target_metric_cm"), 1.0))
@@ -1189,19 +1234,17 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
     sv = max(1, _to_int(ref_cfg.get("sample_count_v"), 2))
     sample_edge_length_u = _to_optional_float(ref_cfg.get("sample_edge_length_u"))
     sample_edge_length_v = _to_optional_float(ref_cfg.get("sample_edge_length_v"))
-    trim_margin = _to_float(ref_cfg.get("trim_margin"), 0.1)
     boundary_margin_ratio_u = max(0.0, _to_float(ref_cfg.get("boundary_margin_ratio_u"), 0.25))
     boundary_margin_ratio_v = max(0.0, _to_float(ref_cfg.get("boundary_margin_ratio_v"), 0.25))
     boundary_distance_u = max(0.0, (sample_edge_length_u or 0.0) * boundary_margin_ratio_u)
     boundary_distance_v = max(0.0, (sample_edge_length_v or 0.0) * boundary_margin_ratio_v)
     if debug_efflore:
         print(
-            "Defect efflore: reference config sample_count_u={} sample_count_v={} sample_edge_length_u={} sample_edge_length_v={} trim_margin={:.3f} boundary_distance_u={:.3f} boundary_distance_v={:.3f}".format(
+            "Defect efflore: reference config sample_count_u={} sample_count_v={} sample_edge_length_u={} sample_edge_length_v={} boundary_distance_u={:.3f} boundary_distance_v={:.3f}".format(
                 su,
                 sv,
                 sample_edge_length_u,
                 sample_edge_length_v,
-                trim_margin,
                 boundary_distance_u,
                 boundary_distance_v,
             )
@@ -1229,7 +1272,8 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
                 sample_count_v=sv,
                 sample_edge_length_u=sample_edge_length_u,
                 sample_edge_length_v=sample_edge_length_v,
-                trim_margin=trim_margin,
+                boundary_margin_ratio_u=boundary_margin_ratio_u,
+                boundary_margin_ratio_v=boundary_margin_ratio_v,
                 return_normals=True,
                 return_metadata=True,
             )
@@ -2564,7 +2608,8 @@ def _draw_reference_points_debug(cfg, model_result=None, debug_cfg=None):
     sv = max(1, _to_int(ref_cfg.get("sample_count_v"), 2))
     sample_edge_length_u = _to_optional_float(ref_cfg.get("sample_edge_length_u"))
     sample_edge_length_v = _to_optional_float(ref_cfg.get("sample_edge_length_v"))
-    trim_margin = _to_float(ref_cfg.get("trim_margin"), 0.1)
+    boundary_margin_ratio_u = max(0.0, _to_float(ref_cfg.get("boundary_margin_ratio_u"), 0.25))
+    boundary_margin_ratio_v = max(0.0, _to_float(ref_cfg.get("boundary_margin_ratio_v"), 0.25))
     radius_coef = max(0.0, _to_float(ref_debug_cfg.get("radius_coef"), 0.04375))
     min_radius = max(0.0, _to_float(ref_debug_cfg.get("min_radius"), 0.625))
     axis_scale = max(0.0, _to_float(ref_debug_cfg.get("axis_scale"), 1.6))
@@ -2581,7 +2626,8 @@ def _draw_reference_points_debug(cfg, model_result=None, debug_cfg=None):
                 sample_count_v=sv,
                 sample_edge_length_u=sample_edge_length_u,
                 sample_edge_length_v=sample_edge_length_v,
-                trim_margin=trim_margin,
+                boundary_margin_ratio_u=boundary_margin_ratio_u,
+                boundary_margin_ratio_v=boundary_margin_ratio_v,
                 return_normals=True,
                 return_metadata=True,
             )
