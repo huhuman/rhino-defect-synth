@@ -365,11 +365,12 @@ def _build_slab_and_parapet(result, base_pts, norm_dirs, cfg):
             _add_polygon(result, "slab", slab_layer, section, cfg)
         if parapet_enabled:
             for i, rail in enumerate(rail_points[station_idx]):
-                upper = rail[:5][::-1] if i == 1 else rail[:5]
-                lower = rail[5:] + rail[4:6] if i == 1 else (rail[5:] + rail[4:6])[::-1]
-                if station_idx == 0:
-                    upper = upper[::-1]
-                    lower = lower[::-1]
+                if (station_idx == 0 and i == 0) or (station_idx != 0 and i == 1):
+                    upper = rail[:5]
+                    lower = (rail[5:] + rail[4:6])[::-1]
+                else:
+                    upper = rail[:5][::-1]
+                    lower = rail[5:] + rail[4:6]
                 _add_polygon(result, "parapet", parapet_layer, upper, cfg)
                 _add_polygon(result, "parapet", parapet_layer, lower, cfg)
 
@@ -388,9 +389,12 @@ def _build_slab_and_parapet(result, base_pts, norm_dirs, cfg):
             cur_rails = rail_points[sid]
             for i, (prev, cur) in enumerate(zip(prev_rails, cur_rails)):
                 # left/right
+                reversed_edge_indices = (4, 5, 6) if i == 0 else (0, 1, 2)
                 for edge_idx in range(len(cur) - 1):
+                    if edge_idx == 3: # skip the inner face 
+                        continue
                     quad = [cur[edge_idx], cur[edge_idx + 1], prev[edge_idx + 1], prev[edge_idx]]
-                    if i == 0 :
+                    if edge_idx in reversed_edge_indices:
                         quad = quad[::-1]
                     _add_polygon(result, "parapet", parapet_layer, quad, cfg)
                 quad = [cur[0], cur[4], prev[4], prev[0]]
