@@ -307,6 +307,9 @@ def _resolve_stability_cfg(nested_cfg):
         "render_retry_count": _to_non_negative_int(raw.get("render_retry_count", 1)),
         "gc_every_render_passes": _to_non_negative_int(raw.get("gc_every_render_passes", 1)),
         "gc_every_model_iters": _to_non_negative_int(raw.get("gc_every_model_iters", 1)),
+        "clear_undo_every_render_passes": _to_non_negative_int(
+            raw.get("clear_undo_every_render_passes", 1)
+        ),
         "clear_undo_every_model_iters": _to_non_negative_int(
             raw.get("clear_undo_every_model_iters", 1)
         ),
@@ -331,6 +334,7 @@ def _resolve_stability_cfg(nested_cfg):
                 "render_retry_count": 0,
                 "gc_every_render_passes": 0,
                 "gc_every_model_iters": 0,
+                "clear_undo_every_render_passes": 0,
                 "clear_undo_every_model_iters": 0,
                 "max_private_memory_mb": 0.0,
                 "max_render_passes_per_run": 0,
@@ -685,6 +689,7 @@ def run(
             f"render_retry_count={stability_cfg['render_retry_count']}, "
             f"gc_every_render_passes={stability_cfg['gc_every_render_passes']}, "
             f"gc_every_model_iters={stability_cfg['gc_every_model_iters']}, "
+            f"clear_undo_every_render_passes={stability_cfg['clear_undo_every_render_passes']}, "
             f"clear_undo_every_model_iters={stability_cfg['clear_undo_every_model_iters']}, "
             f"max_private_memory_mb={stability_cfg['max_private_memory_mb']}, "
             f"max_render_passes_per_run={stability_cfg['max_render_passes_per_run']}, "
@@ -729,7 +734,10 @@ def run(
                 redraw=True,
             )
             clear_imported_materials_from_doc()
-            prepare(dict(preparation_params))
+            model_prepare_params = dict(preparation_params)
+            if preparation_scope != "model_iter":
+                model_prepare_params["_import_materials"] = False
+            prepare(model_prepare_params)
             _stability_wait(
                 wait_ms=stability_cfg["wait_after_preparation_ms"],
                 redraw=True,
@@ -821,11 +829,22 @@ def run(
                         redraw=False,
                     )
                     render_pass_count += 1
+                    if preparation_scope != "model_iter":
+                        clear_imported_materials_from_doc()
                     if (
                         stability_cfg["gc_every_render_passes"] > 0
                         and render_pass_count % stability_cfg["gc_every_render_passes"] == 0
                     ):
                         _run_gc()
+                    if (
+                        stability_cfg["clear_undo_every_render_passes"] > 0
+                        and render_pass_count % stability_cfg["clear_undo_every_render_passes"] == 0
+                    ):
+                        cleared = _clear_undo_records()
+                        print(
+                            f"[stability] clear_undo_after_render_pass={render_pass_count}: "
+                            f"{'ok' if cleared else 'unsupported'}"
+                        )
                     if (
                         stability_cfg["max_render_passes_per_run"] > 0
                         and render_pass_count >= stability_cfg["max_render_passes_per_run"]
@@ -918,7 +937,7 @@ if __name__ == "__main__":
         config_name="cube.local.yaml",
         renders_per_model=None,
         max_iter=None,
-        start_face_index=0,
+        start_face_index=24,
         faces_per_model=6,
         seed=None,
         show_cameras=False,

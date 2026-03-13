@@ -42,7 +42,8 @@ def prepare(params=None):
     Args:
         params (dict): Dictionary containing preparation parameters.
     """
-    params = params or {}
+    params = dict(params or {})
+    import_materials = bool(params.pop("_import_materials", True))
     plugin_autoload_cfg = params.get("plugin_autoload")
     print("Preparation plugin autoload: checking configuration...")
     ensure_plugin_commands(plugin_autoload_cfg)
@@ -53,25 +54,29 @@ def prepare(params=None):
     texture_materials = params.get("texture_materials", {})
     builtin_cfg = params.get("builtin_material_library", {}) or {}
 
-    # Materials: pick one available option per layer, then import only selected ones.
-    selected_materials = choose_and_import_layer_materials(
-        layer_material_choices=material_choices,
-        rng_seed=params.get("seed"),
-        texture_root_dir=texture_materials.get("texture_root_dir"),
-        texture_recursive=texture_materials.get("recursive", True),
-        builtin_category=builtin_cfg.get("category", "Architectural"),
-        builtin_subcategory1=builtin_cfg.get("subcategory1", "Wall"),
-        builtin_subcategory2=builtin_cfg.get("subcategory2", "Concrete"),
-        material_search_paths=params.get("material_search_paths"),
-    )
-    if selected_materials:
-        print(
-            "Preparation layer materials: "
-            + ", ".join(
-                "{}={}".format(layer_name, material_name)
-                for layer_name, material_name in sorted(selected_materials.items())
-            )
+    selected_materials = {}
+    if import_materials:
+        # Materials: pick one available option per layer, then import only selected ones.
+        selected_materials = choose_and_import_layer_materials(
+            layer_material_choices=material_choices,
+            rng_seed=params.get("seed"),
+            texture_root_dir=texture_materials.get("texture_root_dir"),
+            texture_recursive=texture_materials.get("recursive", True),
+            builtin_category=builtin_cfg.get("category", "Architectural"),
+            builtin_subcategory1=builtin_cfg.get("subcategory1", "Wall"),
+            builtin_subcategory2=builtin_cfg.get("subcategory2", "Concrete"),
+            material_search_paths=params.get("material_search_paths"),
         )
+        if selected_materials:
+            print(
+                "Preparation layer materials: "
+                + ", ".join(
+                    "{}={}".format(layer_name, material_name)
+                    for layer_name, material_name in sorted(selected_materials.items())
+                )
+            )
+    else:
+        print("Preparation layer materials: skipped import for modeling-only pass.")
 
     # Layers
     create_layers(

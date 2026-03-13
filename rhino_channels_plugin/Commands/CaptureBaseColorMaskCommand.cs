@@ -20,18 +20,16 @@ namespace RhinoChannelsPlugin.Commands
     {
         private readonly struct LayerMaskEntry
         {
-            public LayerMaskEntry(int index, Color color, string name, Guid[] objectIds)
+            public LayerMaskEntry(int index, Color color, string name)
             {
                 Index = index;
                 Color = color;
                 Name = name;
-                ObjectIds = objectIds;
             }
 
             public int Index { get; }
             public Color Color { get; }
             public string Name { get; }
-            public Guid[] ObjectIds { get; }
         }
 
         public override string EnglishName => "CaptureBaseColorMask";
@@ -86,7 +84,7 @@ namespace RhinoChannelsPlugin.Commands
                 RhinoApp.WriteLine(
                     $"CaptureBaseColorMask: using view '{view.ActiveViewport.Name}', source={srcSize.Width}x{srcSize.Height}, output={outWidth}x{outHeight}.");
 
-                var objectVisibilitySnapshot = SnapshotObjectVisibility(doc);
+                var layerVisibilitySnapshot = SnapshotLayerVisibility(doc);
                 var changedAa = TrySetOpenGlAntialiasLevel(0, out var prevAaLevel);
 
                 try
@@ -111,16 +109,10 @@ namespace RhinoChannelsPlugin.Commands
 
                     var pointTolerance = Math.Max(doc.ModelAbsoluteTolerance * 0.1, 1e-6);
                     var pointToleranceSq = pointTolerance * pointTolerance;
-                    var initiallyVisibleObjectIds = new List<Guid>();
-                    foreach (var pair in objectVisibilitySnapshot)
-                    {
-                        if (pair.Value)
-                            initiallyVisibleObjectIds.Add(pair.Key);
-                    }
 
                     foreach (var layer in maskLayers)
                     {
-                        SetOnlyObjectsVisible(doc, initiallyVisibleObjectIds, layer.ObjectIds);
+                        SetOnlyLayerVisible(doc, layerVisibilitySnapshot.Keys, layer.Index);
                         view.Redraw();
 
                         var layerPoints = new Point3d[pixelCount];
@@ -149,7 +141,7 @@ namespace RhinoChannelsPlugin.Commands
                 }
                 finally
                 {
-                    RestoreObjectVisibility(doc, objectVisibilitySnapshot);
+                    RestoreLayerVisibility(doc, layerVisibilitySnapshot);
                     if (changedAa)
                         TrySetOpenGlAntialiasLevel(prevAaLevel, out _);
                     view.Redraw();
@@ -176,32 +168,32 @@ namespace RhinoChannelsPlugin.Commands
             return value;
         }
 
-        private static Dictionary<Guid, bool> SnapshotObjectVisibility(RhinoDoc doc)
+        private static Dictionary<int, bool> SnapshotLayerVisibility(RhinoDoc doc)
         {
-            var snapshot = new Dictionary<Guid, bool>();
-            foreach (var obj in doc.Objects)
+            var snapshot = new Dictionary<int, bool>();
+            for (var i = 0; i < doc.Layers.Count; i++)
             {
-                if (obj == null || obj.IsDeleted)
+                var layer = doc.Layers[i];
+                if (layer == null || layer.IsDeleted)
                     continue;
-                snapshot[obj.Id] = obj.Attributes.Visible;
+                snapshot[i] = layer.IsVisible;
             }
             return snapshot;
         }
 
-        private static void RestoreObjectVisibility(RhinoDoc doc, IReadOnlyDictionary<Guid, bool> snapshot)
+        private static void RestoreLayerVisibility(RhinoDoc doc, IReadOnlyDictionary<int, bool> snapshot)
         {
             foreach (var pair in snapshot)
             {
-                var obj = doc.Objects.FindId(pair.Key);
-                if (obj == null || obj.IsDeleted)
+                if (pair.Key < 0 || pair.Key >= doc.Layers.Count)
                     continue;
-                SetObjectVisible(doc, pair.Key, pair.Value);
+                SetLayerVisible(doc, pair.Key, pair.Value);
             }
         }
 
         private static List<LayerMaskEntry> CollectVisibleLayersWithObjects(RhinoDoc doc)
         {
-            var objectIdsByLayer = new Dictionary<int, List<Guid>>();
+            var usedLayerIndices = new HashSet<int>();
             foreach (var obj in doc.Objects)
             {
                 if (obj == null || obj.IsDeleted)
@@ -217,18 +209,13 @@ namespace RhinoChannelsPlugin.Commands
                 if (layer == null || layer.IsDeleted || !layer.IsVisible)
                     continue;
 
-                if (!objectIdsByLayer.TryGetValue(layerIndex, out var ids))
-                {
-                    ids = new List<Guid>();
-                    objectIdsByLayer[layerIndex] = ids;
-                }
-                ids.Add(obj.Id);
+                usedLayerIndices.Add(layerIndex);
             }
 
             var layers = new List<LayerMaskEntry>();
             for (var i = 0; i < doc.Layers.Count; i++)
             {
-                if (!objectIdsByLayer.TryGetValue(i, out var ids))
+                if (!usedLayerIndices.Contains(i))
                     continue;
 
                 var layer = doc.Layers[i];
@@ -238,36 +225,71 @@ namespace RhinoChannelsPlugin.Commands
                 var name = string.IsNullOrWhiteSpace(layer.FullPath)
                     ? (string.IsNullOrWhiteSpace(layer.Name) ? $"Layer_{i}" : layer.Name)
                     : layer.FullPath;
-                layers.Add(new LayerMaskEntry(i, layer.Color, name, ids.ToArray()));
+                layers.Add(new LayerMaskEntry(i, layer.Color, name));
             }
 
             return layers;
         }
 
-        private static void SetOnlyObjectsVisible(
+        private static void SetOnlyLayerVisible(
             RhinoDoc doc,
-            IReadOnlyList<Guid> candidateObjectIds,
-            IReadOnlyList<Guid> targetVisibleObjectIds)
+            IEnumerable<int> candidateLayerIndices,
+            int targetLayerIndex)
         {
-            var targetSet = new HashSet<Guid>(targetVisibleObjectIds);
-            foreach (var objectId in candidateObjectIds)
+            var visibleLayerIndices = new HashSet<int>();
+            if (targetLayerIndex >= 0 && targetLayerIndex < doc.Layers.Count)
             {
-                var shouldBeVisible = targetSet.Contains(objectId);
-                SetObjectVisible(doc, objectId, shouldBeVisible);
+                foreach (var layerIndex in EnumerateLayerAncestors(doc, targetLayerIndex))
+                    visibleLayerIndices.Add(layerIndex);
+            }
+
+            foreach (var layerIndex in candidateLayerIndices)
+            {
+                SetLayerVisible(doc, layerIndex, visibleLayerIndices.Contains(layerIndex));
             }
         }
 
-        private static void SetObjectVisible(RhinoDoc doc, Guid objectId, bool visible)
+        private static IEnumerable<int> EnumerateLayerAncestors(RhinoDoc doc, int layerIndex)
         {
-            var obj = doc.Objects.FindId(objectId);
-            if (obj == null || obj.IsDeleted)
-                return;
-            if (obj.Attributes.Visible == visible)
+            var currentIndex = layerIndex;
+            while (currentIndex >= 0 && currentIndex < doc.Layers.Count)
+            {
+                yield return currentIndex;
+
+                var current = doc.Layers[currentIndex];
+                if (current == null || current.IsDeleted)
+                    yield break;
+
+                if (current.ParentLayerId == Guid.Empty)
+                {
+                    currentIndex = -1;
+                    continue;
+                }
+
+                var parentLayer = doc.Layers.FindId(current.ParentLayerId);
+                currentIndex = parentLayer?.Index ?? -1;
+            }
+        }
+
+        private static void SetLayerVisible(RhinoDoc doc, int layerIndex, bool visible)
+        {
+            if (layerIndex < 0 || layerIndex >= doc.Layers.Count)
                 return;
 
-            var attrs = obj.Attributes.Duplicate();
-            attrs.Visible = visible;
-            doc.Objects.ModifyAttributes(objectId, attrs, true);
+            var layer = doc.Layers[layerIndex];
+            if (layer == null || layer.IsDeleted)
+                return;
+            if (layer.IsVisible == visible)
+                return;
+
+            try
+            {
+                layer.IsVisible = visible;
+            }
+            catch
+            {
+                // Ignore visibility mutations that Rhino rejects; capture will remain best-effort.
+            }
         }
 
         private static void CaptureWorldPoints(
