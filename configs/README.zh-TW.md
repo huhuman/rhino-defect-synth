@@ -49,8 +49,8 @@
 | `preparation.plugin_autoload.required_commands` | `string \| list[string]` | 進入後續流程前必須可用的 Rhino command 名稱。 | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | 任一缺失即觸發 plugin 自動載入。 |
 | `preparation.plugin_autoload.strict` | `bool` | 命令缺失或載入失敗時是否直接中止流程。 | `true` | 設 `false` 則警告後繼續。 |
 | `preparation.plugin_autoload.verbose` | `bool` | 必要命令已存在時是否輸出資訊訊息。 | `true` | 不影響 strict 的錯誤行為。 |
-| `preparation.autosave.disable_during_batch` | `bool` | 在長時間的 `main.py` / `main_cube_batch.py` 執行期間，暫時停用 Rhino autosave。 | `true` | 會在 `finally` 還原；若 Rhino FileSettings API 不可用則忽略。 |
-| `preparation.undo.disable_during_batch` | `bool` | 在長時間的 `main.py` / `main_cube_batch.py` 執行期間，暫時停用 Rhino undo recording。 | `true` | 會在 `finally` 還原；與週期性 undo 清理是不同層級的保護。 |
+| `preparation.autosave.disable_during_batch` | `bool` | 在長時間的 `main_cube_batch.py` 執行期間，暫時停用 Rhino autosave。 | `true` | 會在 `finally` 還原；若 Rhino FileSettings API 不可用則忽略。 |
+| `preparation.undo.disable_during_batch` | `bool` | 在長時間的 `main_cube_batch.py` 執行期間，暫時停用 Rhino undo recording。 | `true` | 會在 `finally` 還原；與週期性 undo 清理是不同層級的保護。 |
 | `modeling` | `dict` | 傳入 `pipeline.create_model`。 | config | 需包含 `strategy`。 |
 | `rendering` | `dict` | 傳入 `pipeline.run_render`。 | config | render stage 必要。 |
 | `nested_loop` | `dict` | 由 `main_cube_batch.run` 使用，用於 cube 批次資料產生。 | 無 | 可選；`main.py` 不會使用。 |
