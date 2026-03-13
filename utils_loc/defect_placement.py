@@ -1102,10 +1102,11 @@ def _add_mask_from_polygon(points, layer_name, as_surface=True):
     return mask_ids
 
 
-def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defect_cfg=None):
+def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defect_cfg=None, layer_map=None, debug_cfg=None):
     source_ids = _collect_object_ids(model_result)
     ref_cfg = cfg.get("reference") or {}
     debug_efflore = str(defect_type or "").strip().lower() == "efflore"
+    reference_debug_cfg = _reference_points_debug_config(debug_cfg)
     existing_ids_before = set(
         rs.AllObjects(select=False, include_lights=False, include_grips=False) or []
     )
@@ -1127,11 +1128,20 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
     draw_normal_debug = bool(normal_debug_cfg.get("enabled", False))
     normal_debug_layer = str(normal_debug_cfg.get("layer") or "defects::normal_debug")
     normal_debug_length = max(1e-3, _to_float(normal_debug_cfg.get("length"), 60.0))
+    draw_reference_seed_markers = bool(reference_debug_cfg.get("enabled", False))
+    reference_seed_radius_coef = max(0.0, _to_float(reference_debug_cfg.get("radius_coef"), 0.04375))
+    reference_seed_min_radius = max(0.0, _to_float(reference_debug_cfg.get("min_radius"), 0.625))
+    reference_seed_axis_scale = max(0.0, _to_float(reference_debug_cfg.get("axis_scale"), 1.6))
     if draw_normal_debug:
         ensure_layer(normal_debug_layer)
+    reference_seed_layer = None
+    if draw_reference_seed_markers:
+        reference_seed_layer = _reference_layer_for_type(reference_debug_cfg, defect_type)
+        ensure_layer(reference_seed_layer)
 
     candidates = []
     seen_candidate_keys = set()
+    seen_reference_marker_keys = set()
     su = max(1, _to_int(ref_cfg.get("sample_count_u"), 2))
     sv = max(1, _to_int(ref_cfg.get("sample_count_v"), 2))
     sample_edge_length_u = _to_optional_float(ref_cfg.get("sample_edge_length_u"))
@@ -1193,12 +1203,31 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
                     stats["sample_points_total"] += 1
                     skip_checks = bool((meta or {}).get("skip_checks"))
                     point_3d = _vec3(point)
+                    normal_3d = _surface_normal_at_point(surface_id, point_3d, fallback=normal)
+                    u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
+                    if draw_reference_seed_markers and reference_seed_layer:
+                        marker_key = (str(surface_id), _point_key(point_3d))
+                        if marker_key not in seen_reference_marker_keys:
+                            seen_reference_marker_keys.add(marker_key)
+                            _create_seed_marker(
+                                {
+                                    "surface_id": surface_id,
+                                    "point": point_3d,
+                                    "normal": normal_3d,
+                                    "u_axis": u_axis,
+                                    "v_axis": v_axis,
+                                    "n_axis": n_axis,
+                                    "reference_size": float(size),
+                                },
+                                reference_seed_layer,
+                                radius_coef=reference_seed_radius_coef,
+                                min_radius=reference_seed_min_radius,
+                                axis_scale=reference_seed_axis_scale,
+                            )
                     if not skip_checks and not rs.IsPointOnSurface(surface_id, point_3d):
                         stats["rejected_not_on_surface"] += 1
                         surface_stats["rejected_not_on_surface"] += 1
                         continue
-                    normal_3d = _surface_normal_at_point(surface_id, point_3d, fallback=normal)
-                    u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
                     boundary_dist = float("inf") if skip_checks else _distance_to_boundary(point, border_curves)
                     if not skip_checks:
                         if surface_stats["boundary_min"] is None or boundary_dist < surface_stats["boundary_min"]:
@@ -2390,6 +2419,52 @@ def _resolve_layer_map(cfg, debug_cfg=None):
     return layer_map
 
 
+def _reference_points_debug_config(debug_cfg=None):
+    debug_cfg = debug_cfg if isinstance(debug_cfg, dict) else {}
+    ref_debug = debug_cfg.get("reference_points")
+    legacy_seed_debug = debug_cfg.get("defect_seeds") or {}
+
+    if isinstance(ref_debug, bool):
+        return {
+            "enabled": ref_debug,
+            "layer": "debug::reference_points",
+            "by_type": True,
+            "radius_coef": 0.04375,
+            "min_radius": 0.625,
+            "axis_scale": 1.6,
+        }
+
+    if isinstance(ref_debug, dict):
+        return {
+            "enabled": bool(ref_debug.get("enabled", True)),
+            "layer": str(ref_debug.get("layer") or "debug::reference_points"),
+            "by_type": bool(ref_debug.get("by_type", True)),
+            "radius_coef": max(0.0, _to_float(ref_debug.get("radius_coef"), 0.04375)),
+            "min_radius": max(0.0, _to_float(ref_debug.get("min_radius"), 0.625)),
+            "axis_scale": max(0.0, _to_float(ref_debug.get("axis_scale"), 1.6)),
+        }
+
+    return {
+        "enabled": bool(legacy_seed_debug.get("reference_points_enabled", False)),
+        "layer": "debug::reference_points",
+        "by_type": True,
+        "radius_coef": max(0.0, _to_float(legacy_seed_debug.get("reference_radius_coef"), 0.04375)),
+        "min_radius": max(0.0, _to_float(legacy_seed_debug.get("reference_min_radius"), 0.625)),
+        "axis_scale": max(0.0, _to_float(legacy_seed_debug.get("reference_axis_scale"), 1.6)),
+    }
+
+
+def _reference_layer_for_type(reference_cfg, defect_type):
+    base_layer = str((reference_cfg or {}).get("layer") or "debug::reference_points")
+    if not bool((reference_cfg or {}).get("by_type", True)):
+        return base_layer
+    if defect_type in ("spalling", "exposed_rebar"):
+        return "{}::spalling".format(base_layer)
+    if defect_type == "efflore":
+        return "{}::efflore".format(base_layer)
+    return "{}::crack".format(base_layer)
+
+
 
 def _seed_layer_for_type(layer_map, defect_type):
     seeds = (layer_map or {}).get("seeds")
@@ -2728,6 +2803,8 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
             model_result=model_result,
             defect_type=defect_type,
             defect_cfg=defect_cfg,
+            layer_map=layer_map,
+            debug_cfg=debug_cfg,
         )
         if not candidates:
             print("Defect {}: skipped because no valid placement candidates were found.".format(defect_type))

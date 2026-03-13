@@ -133,6 +133,7 @@
 |---|---|---|---|---|
 | `surface_normals.*` | mixed | 繪製 component surface 法向箭頭（除錯用）。 | `component_defaults.yaml` | 僅 component 分支使用。 |
 | `defect_normals.*` | mixed | 在 defect placement 過程繪製 defect 法向箭頭。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::normal`。 |
+| `reference_points` | `bool | dict` | 在 candidate 篩選前繪製 sampled reference/UV 點。 | 無 | `true` 時使用 `debug::reference_points`；若設 dict 可額外控制 `enabled/layer/by_type/radius_coef/min_radius/axis_scale`。 |
 | `defect_seeds.*` | mixed | 在放置成功點繪製 defect seed marker。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::seed`，可依 type 分層。 |
 
 ## Modeling：Defect (`modeling.defect`)

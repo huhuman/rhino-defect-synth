@@ -134,6 +134,7 @@ Batch runtime flow in `main_cube_batch.py`:
 |---|---|---|---|---|
 | `surface_normals.*` | mixed | Draws component surface-normal arrows for debug visualization. | `component_defaults.yaml` | Used in component branch only. |
 | `defect_normals.*` | mixed | Draws defect-normal arrows during defect placement. | `component_defect_defaults.yaml` | Layer defaults to `debug::normal`. |
+| `reference_points` | `bool | dict` | Draws sampled reference/UV points before candidate filtering. | none | `true` uses `debug::reference_points`; dict also supports `enabled/layer/by_type/radius_coef/min_radius/axis_scale`. |
 | `defect_seeds.*` | mixed | Draws defect seed markers at successful placement points. | `component_defect_defaults.yaml` | Layer defaults to `debug::seed`; supports by-type split. |
 
 ## Modeling: Defect (`modeling.defect`)

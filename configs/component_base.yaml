@@ -278,7 +278,11 @@ preparation:
     "defect::spalling::CS3": DarkOrange
     "defect::exposed_rebar::CS2": Silver
     "defect::exposed_rebar::CS3": Gray
-    "debug::seed": Magenta
-    "debug::seed::crack": Magenta
-    "debug::seed::efflore": DeepPink
-    "debug::seed::spalling": Violet
+    "debug::reference_points": LawnGreen
+    "debug::reference_points::crack": LawnGreen
+    "debug::reference_points::efflore": Aqua
+    "debug::reference_points::spalling": Orange
+    "debug::seed": White
+    "debug::seed::crack": Red
+    "debug::seed::efflore": DeepSkyBlue
+    "debug::seed::spalling": Gold

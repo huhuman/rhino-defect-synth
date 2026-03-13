@@ -7,6 +7,9 @@ modeling:
       length: 40.0
       head_length_ratio: 0.25
       head_width_ratio: 0.35
+    reference_points:
+      enabled: false
+      radius_coef: 0.04375
     defect_seeds:
       enabled: true
       layer: "debug::seed"
