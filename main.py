@@ -215,13 +215,24 @@ def run(
             debug_cfg = dict(modeling_cfg.get("debug") or {})
             surface_normals_cfg = dict(debug_cfg.get("surface_normals") or {})
             defect_normals_cfg = dict(debug_cfg.get("defect_normals") or {})
+            reference_points_cfg = debug_cfg.get("reference_points")
             defect_seeds_cfg = dict(debug_cfg.get("defect_seeds") or {})
+
+            if isinstance(reference_points_cfg, dict):
+                reference_points_enabled = bool(reference_points_cfg.get("enabled", False))
+                reference_points_layer = str(reference_points_cfg.get("layer") or "debug::reference_points")
+            else:
+                reference_points_enabled = bool(reference_points_cfg)
+                reference_points_layer = "debug::reference_points"
 
             if not (
                 bool(surface_normals_cfg.get("enabled", False))
                 or bool(defect_normals_cfg.get("enabled", False))
             ):
                 exclude_layer_prefixes.append("debug::normal")
+
+            if not reference_points_enabled:
+                exclude_layer_prefixes.append(reference_points_layer)
 
             if not bool(defect_seeds_cfg.get("enabled", True)):
                 exclude_layer_prefixes.append(str(defect_seeds_cfg.get("layer") or "debug::seed"))

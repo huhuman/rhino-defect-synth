@@ -25,9 +25,10 @@ modeling:
     reference:
       sample_edge_length_u: 100.0
       sample_edge_length_v: 100.0
+      boundary_margin_ratio_u: 0.25
+      boundary_margin_ratio_v: 0.25
       trim_margin: 0.1
       max_num_surfaces: 0
-      min_boundary_distance: 20.0
     surface_subtraction:
       normal_extrude_distance: 8.0
     random:

@@ -825,28 +825,81 @@ def _collect_object_ids(model_result):
     return ordered
 
 
-def _duplicate_surface_borders(surface_id):
-    borders = rs.DuplicateSurfaceBorder(surface_id) or []
-    return _coerce_ids(borders)
+def _surface_curve_length(surface_id, direction, cross_param, sample_steps=24):
+    sample_steps = max(4, _to_int(sample_steps, 24))
+    domain = rs.SurfaceDomain(surface_id, 0 if int(direction) == 0 else 1)
+    if not domain:
+        return None
+
+    start = float(domain[0])
+    end = float(domain[1])
+    total = 0.0
+    prev = None
+    for idx in range(sample_steps + 1):
+        t = float(idx) / float(sample_steps)
+        param = start + (end - start) * t
+        if int(direction) == 0:
+            point = rs.EvaluateSurface(surface_id, param, cross_param)
+        else:
+            point = rs.EvaluateSurface(surface_id, cross_param, param)
+        if point is None:
+            continue
+        point = _vec3(point)
+        if prev is not None:
+            total += _distance(prev, point)
+        prev = point
+    return total if total > 1e-9 else None
 
 
-def _distance_to_boundary(point, border_curves):
-    if not border_curves:
-        return float("inf")
-    best = float("inf")
-    for curve_id in border_curves:
-        if not rs.IsObject(curve_id):
-            continue
-        param = rs.CurveClosestPoint(curve_id, point)
-        if param is None:
-            continue
-        closest = rs.EvaluateCurve(curve_id, param)
-        if closest is None:
-            continue
-        dist = _distance(point, _vec3(closest))
-        if dist < best:
-            best = dist
-    return best
+def _surface_uv_lengths(surface_id):
+    if not surface_id or not rs.IsObject(surface_id) or not rs.IsSurface(surface_id):
+        return 0.0, 0.0, None, None
+
+    domain_u = rs.SurfaceDomain(surface_id, 0)
+    domain_v = rs.SurfaceDomain(surface_id, 1)
+    if not domain_u or not domain_v:
+        return 0.0, 0.0, None, None
+
+    u_cross_values = [
+        float(domain_v[0]) + (float(domain_v[1]) - float(domain_v[0])) * ratio
+        for ratio in (0.2, 0.5, 0.8)
+    ]
+    v_cross_values = [
+        float(domain_u[0]) + (float(domain_u[1]) - float(domain_u[0])) * ratio
+        for ratio in (0.2, 0.5, 0.8)
+    ]
+
+    u_lengths = [
+        length for length in (_surface_curve_length(surface_id, 0, value) for value in u_cross_values)
+        if length is not None
+    ]
+    v_lengths = [
+        length for length in (_surface_curve_length(surface_id, 1, value) for value in v_cross_values)
+        if length is not None
+    ]
+    length_u = sum(u_lengths) / float(len(u_lengths)) if u_lengths else 0.0
+    length_v = sum(v_lengths) / float(len(v_lengths)) if v_lengths else 0.0
+    return float(length_u), float(length_v), domain_u, domain_v
+
+
+def _uv_axis_boundary_distances_from_surface_data(uv, length_u, length_v, domain_u, domain_v):
+    if not uv or len(uv) < 2 or not domain_u or not domain_v:
+        return float("inf"), float("inf")
+
+    u0 = float(domain_u[0])
+    u1 = float(domain_u[1])
+    v0 = float(domain_v[0])
+    v1 = float(domain_v[1])
+    u_span = abs(u1 - u0)
+    v_span = abs(v1 - v0)
+    if u_span <= 1e-9 or v_span <= 1e-9:
+        return float("inf"), float("inf")
+
+    u = float(uv[0])
+    v = float(uv[1])
+    u_ratio = min(abs(u - u0), abs(u1 - u)) / u_span
+    v_ratio = min(abs(v - v0), abs(v1 - v)) / v_span
+    return max(0.0, float(length_u) * u_ratio), max(0.0, float(length_v) * v_ratio)
 
 
 def _surface_axes(surface_id, point, normal):
@@ -1106,7 +1159,6 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
     source_ids = _collect_object_ids(model_result)
     ref_cfg = cfg.get("reference") or {}
     debug_efflore = str(defect_type or "").strip().lower() == "efflore"
-    reference_debug_cfg = _reference_points_debug_config(debug_cfg)
     existing_ids_before = set(
         rs.AllObjects(select=False, include_lights=False, include_grips=False) or []
     )
@@ -1128,35 +1180,30 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
     draw_normal_debug = bool(normal_debug_cfg.get("enabled", False))
     normal_debug_layer = str(normal_debug_cfg.get("layer") or "defects::normal_debug")
     normal_debug_length = max(1e-3, _to_float(normal_debug_cfg.get("length"), 60.0))
-    draw_reference_seed_markers = bool(reference_debug_cfg.get("enabled", False))
-    reference_seed_radius_coef = max(0.0, _to_float(reference_debug_cfg.get("radius_coef"), 0.04375))
-    reference_seed_min_radius = max(0.0, _to_float(reference_debug_cfg.get("min_radius"), 0.625))
-    reference_seed_axis_scale = max(0.0, _to_float(reference_debug_cfg.get("axis_scale"), 1.6))
     if draw_normal_debug:
         ensure_layer(normal_debug_layer)
-    reference_seed_layer = None
-    if draw_reference_seed_markers:
-        reference_seed_layer = _reference_layer_for_type(reference_debug_cfg, defect_type)
-        ensure_layer(reference_seed_layer)
 
     candidates = []
     seen_candidate_keys = set()
-    seen_reference_marker_keys = set()
     su = max(1, _to_int(ref_cfg.get("sample_count_u"), 2))
     sv = max(1, _to_int(ref_cfg.get("sample_count_v"), 2))
     sample_edge_length_u = _to_optional_float(ref_cfg.get("sample_edge_length_u"))
     sample_edge_length_v = _to_optional_float(ref_cfg.get("sample_edge_length_v"))
     trim_margin = _to_float(ref_cfg.get("trim_margin"), 0.1)
-    min_boundary_distance = max(0.0, _to_float(ref_cfg.get("min_boundary_distance"), 1.0))
+    boundary_margin_ratio_u = max(0.0, _to_float(ref_cfg.get("boundary_margin_ratio_u"), 0.25))
+    boundary_margin_ratio_v = max(0.0, _to_float(ref_cfg.get("boundary_margin_ratio_v"), 0.25))
+    boundary_distance_u = max(0.0, (sample_edge_length_u or 0.0) * boundary_margin_ratio_u)
+    boundary_distance_v = max(0.0, (sample_edge_length_v or 0.0) * boundary_margin_ratio_v)
     if debug_efflore:
         print(
-            "Defect efflore: reference config sample_count_u={} sample_count_v={} sample_edge_length_u={} sample_edge_length_v={} trim_margin={:.3f} min_boundary_distance={:.3f}".format(
+            "Defect efflore: reference config sample_count_u={} sample_count_v={} sample_edge_length_u={} sample_edge_length_v={} trim_margin={:.3f} boundary_distance_u={:.3f} boundary_distance_v={:.3f}".format(
                 su,
                 sv,
                 sample_edge_length_u,
                 sample_edge_length_v,
                 trim_margin,
-                min_boundary_distance,
+                boundary_distance_u,
+                boundary_distance_v,
             )
         )
 
@@ -1169,119 +1216,116 @@ def _collect_reference_candidates(cfg, model_result=None, defect_type=None, defe
         "accepted": 0,
     }
     per_surface_logs = []
+    surface_uv_cache = {}
 
     try:
         for surface_id in surface_ids:
             if not rs.IsObject(surface_id):
                 continue
             stats["surface_count"] += 1
-            border_curves = _duplicate_surface_borders(surface_id)
-            try:
-                points, sizes, normals, point_meta = get_reference_points(
-                    surface_id,
-                    sample_count_u=su,
-                    sample_count_v=sv,
-                    sample_edge_length_u=sample_edge_length_u,
-                    sample_edge_length_v=sample_edge_length_v,
-                    trim_margin=trim_margin,
-                    return_normals=True,
-                    return_metadata=True,
+            points, sizes, normals, point_meta = get_reference_points(
+                surface_id,
+                sample_count_u=su,
+                sample_count_v=sv,
+                sample_edge_length_u=sample_edge_length_u,
+                sample_edge_length_v=sample_edge_length_v,
+                trim_margin=trim_margin,
+                return_normals=True,
+                return_metadata=True,
+            )
+            surface_layer = rs.ObjectLayer(surface_id)
+            if surface_id not in surface_uv_cache:
+                surface_uv_cache[surface_id] = _surface_uv_lengths(surface_id)
+            surface_length_u, surface_length_v, surface_domain_u, surface_domain_v = surface_uv_cache[surface_id]
+            surface_stats = {
+                "surface_id": str(surface_id),
+                "layer": str(surface_layer or ""),
+                "sampled": len(points),
+                "accepted": 0,
+                "rejected_not_on_surface": 0,
+                "rejected_boundary": 0,
+                "rejected_duplicate": 0,
+                "boundary_min": None,
+                "boundary_max": None,
+            }
+            for point, size, normal, meta in zip(points, sizes, normals, point_meta):
+                stats["sample_points_total"] += 1
+                skip_checks = bool((meta or {}).get("skip_checks"))
+                point_3d = _vec3(point)
+                normal_3d = _surface_normal_at_point(surface_id, point_3d, fallback=normal)
+                u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
+                if not skip_checks and not rs.IsPointOnSurface(surface_id, point_3d):
+                    stats["rejected_not_on_surface"] += 1
+                    surface_stats["rejected_not_on_surface"] += 1
+                    continue
+                uv = (meta or {}).get("uv") or []
+                boundary_dist_u, boundary_dist_v = (
+                    (float("inf"), float("inf"))
+                    if skip_checks else _uv_axis_boundary_distances_from_surface_data(
+                        uv,
+                        surface_length_u,
+                        surface_length_v,
+                        surface_domain_u,
+                        surface_domain_v,
+                    )
                 )
-                surface_layer = rs.ObjectLayer(surface_id)
-                surface_stats = {
-                    "surface_id": str(surface_id),
-                    "layer": str(surface_layer or ""),
-                    "sampled": len(points),
-                    "accepted": 0,
-                    "rejected_not_on_surface": 0,
-                    "rejected_boundary": 0,
-                    "rejected_duplicate": 0,
-                    "boundary_min": None,
-                    "boundary_max": None,
-                }
-                for point, size, normal, meta in zip(points, sizes, normals, point_meta):
-                    stats["sample_points_total"] += 1
-                    skip_checks = bool((meta or {}).get("skip_checks"))
-                    point_3d = _vec3(point)
-                    normal_3d = _surface_normal_at_point(surface_id, point_3d, fallback=normal)
-                    u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
-                    if draw_reference_seed_markers and reference_seed_layer:
-                        marker_key = (str(surface_id), _point_key(point_3d))
-                        if marker_key not in seen_reference_marker_keys:
-                            seen_reference_marker_keys.add(marker_key)
-                            _create_seed_marker(
-                                {
-                                    "surface_id": surface_id,
-                                    "point": point_3d,
-                                    "normal": normal_3d,
-                                    "u_axis": u_axis,
-                                    "v_axis": v_axis,
-                                    "n_axis": n_axis,
-                                    "reference_size": float(size),
-                                },
-                                reference_seed_layer,
-                                radius_coef=reference_seed_radius_coef,
-                                min_radius=reference_seed_min_radius,
-                                axis_scale=reference_seed_axis_scale,
-                            )
-                    if not skip_checks and not rs.IsPointOnSurface(surface_id, point_3d):
-                        stats["rejected_not_on_surface"] += 1
-                        surface_stats["rejected_not_on_surface"] += 1
-                        continue
-                    boundary_dist = float("inf") if skip_checks else _distance_to_boundary(point, border_curves)
-                    if not skip_checks:
-                        if surface_stats["boundary_min"] is None or boundary_dist < surface_stats["boundary_min"]:
-                            surface_stats["boundary_min"] = float(boundary_dist)
-                        if surface_stats["boundary_max"] is None or boundary_dist > surface_stats["boundary_max"]:
-                            surface_stats["boundary_max"] = float(boundary_dist)
-                    if not skip_checks and boundary_dist < min_boundary_distance:
-                        stats["rejected_boundary"] += 1
-                        surface_stats["rejected_boundary"] += 1
-                        continue
-                    candidate_key = (
-                        str(surface_layer or ""),
-                        _point_key(point_3d),
-                    )
-                    if candidate_key in seen_candidate_keys:
-                        stats["rejected_duplicate"] += 1
-                        surface_stats["rejected_duplicate"] += 1
-                        continue
-                    seen_candidate_keys.add(candidate_key)
-                    normal_line_id = None
-                    if draw_normal_debug:
-                        end_pt = _add(point_3d, _scale(normal_3d, normal_debug_length))
-                        normal_line_id = rs.AddLine(point_3d, end_pt)
-                        if normal_line_id:
-                            _assign_layer([normal_line_id], normal_debug_layer)
-                    candidates.append(
-                        {
-                            "candidate_key": "{}|{:.4f}|{:.4f}|{:.4f}".format(
-                                str(surface_layer or ""),
-                                point_3d[0],
-                                point_3d[1],
-                                point_3d[2],
-                            ),
-                            "surface_id": surface_id,
-                            "surface_layer": surface_layer,
-                            "point": point_3d,
-                            "normal": normal_3d,
-                            "u_axis": u_axis,
-                            "v_axis": v_axis,
-                            "n_axis": n_axis,
-                            "reference_size": float(size),
-                            "boundary_dist": float(boundary_dist),
-                            "skip_candidate_checks": skip_checks,
-                            "sampling_mode": (meta or {}).get("sampling_mode"),
-                            "uv": list((meta or {}).get("uv") or []),
-                            "normal_debug_id": str(normal_line_id) if normal_line_id else None,
-                        }
-                    )
-                    stats["accepted"] += 1
-                    surface_stats["accepted"] += 1
-                if debug_efflore:
-                    per_surface_logs.append(surface_stats)
-            finally:
-                _delete_objects(border_curves)
+                boundary_dist = min(boundary_dist_u, boundary_dist_v)
+                if not skip_checks:
+                    if surface_stats["boundary_min"] is None or boundary_dist < surface_stats["boundary_min"]:
+                        surface_stats["boundary_min"] = float(boundary_dist)
+                    if surface_stats["boundary_max"] is None or boundary_dist > surface_stats["boundary_max"]:
+                        surface_stats["boundary_max"] = float(boundary_dist)
+                if (
+                    not skip_checks and
+                    (boundary_dist_u < boundary_distance_u or boundary_dist_v < boundary_distance_v)
+                ):
+                    stats["rejected_boundary"] += 1
+                    surface_stats["rejected_boundary"] += 1
+                    continue
+                candidate_key = (
+                    str(surface_layer or ""),
+                    _point_key(point_3d),
+                )
+                if candidate_key in seen_candidate_keys:
+                    stats["rejected_duplicate"] += 1
+                    surface_stats["rejected_duplicate"] += 1
+                    continue
+                seen_candidate_keys.add(candidate_key)
+                normal_line_id = None
+                if draw_normal_debug:
+                    end_pt = _add(point_3d, _scale(normal_3d, normal_debug_length))
+                    normal_line_id = rs.AddLine(point_3d, end_pt)
+                    if normal_line_id:
+                        _assign_layer([normal_line_id], normal_debug_layer)
+                candidates.append(
+                    {
+                        "candidate_key": "{}|{:.4f}|{:.4f}|{:.4f}".format(
+                            str(surface_layer or ""),
+                            point_3d[0],
+                            point_3d[1],
+                            point_3d[2],
+                        ),
+                        "surface_id": surface_id,
+                        "surface_layer": surface_layer,
+                        "point": point_3d,
+                        "normal": normal_3d,
+                        "u_axis": u_axis,
+                        "v_axis": v_axis,
+                        "n_axis": n_axis,
+                        "reference_size": float(size),
+                        "boundary_dist": float(boundary_dist),
+                        "boundary_dist_u": float(boundary_dist_u),
+                        "boundary_dist_v": float(boundary_dist_v),
+                        "skip_candidate_checks": skip_checks,
+                        "sampling_mode": (meta or {}).get("sampling_mode"),
+                        "uv": list((meta or {}).get("uv") or []),
+                        "normal_debug_id": str(normal_line_id) if normal_line_id else None,
+                    }
+                )
+                stats["accepted"] += 1
+                surface_stats["accepted"] += 1
+            if debug_efflore:
+                per_surface_logs.append(surface_stats)
     finally:
         for sid in temporary_surface_ids:
             if sid and rs.IsObject(sid):
@@ -1412,6 +1456,31 @@ def _select_surface_cut_points(shape, default_points=None):
     if crack_polys:
         crack_polys.sort(key=lambda pts: (abs(_polygon_area(pts)), _polygon_perimeter(pts)), reverse=True)
         return list(crack_polys[0])
+
+    return list(default_points or [])
+
+
+def _select_crack_surface_cut_points(shape, crack_polys, default_points=None):
+    crack_candidates = [points for points in (crack_polys or []) if len(points) >= 3]
+    if crack_candidates:
+        crack_candidates.sort(key=lambda pts: (abs(_polygon_area(pts)), _polygon_perimeter(pts)), reverse=True)
+        return list(crack_candidates[0])
+
+    diff_candidates = [points for points in (shape.get("diff_polys") or []) if len(points) >= 3]
+    if diff_candidates:
+        diff_candidates.sort(key=lambda pts: (abs(_polygon_area(pts)), _polygon_perimeter(pts)), reverse=True)
+        return list(diff_candidates[0])
+
+    base_poly = shape.get("base_poly") or []
+    offset_poly = shape.get("offset_poly") or []
+    if len(base_poly) >= 3 and len(offset_poly) >= 3:
+        base_key = (abs(_polygon_area(base_poly)), _polygon_perimeter(base_poly))
+        offset_key = (abs(_polygon_area(offset_poly)), _polygon_perimeter(offset_poly))
+        return list(base_poly if base_key <= offset_key else offset_poly)
+    if len(base_poly) >= 3:
+        return list(base_poly)
+    if len(offset_poly) >= 3:
+        return list(offset_poly)
 
     return list(default_points or [])
 
@@ -1703,7 +1772,7 @@ def _split_surfaces_by_normal(surface_ids, normal, min_parallel_dot=0.93):
 
 def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debug_cfg=None):
     offset_2d, base_2d, crack_2d, inside_2d, diff_2d = _pick_shape_points(shape)
-    cut_2d = _select_surface_cut_points(shape, default_points=base_2d or offset_2d)
+    cut_2d = _select_crack_surface_cut_points(shape, crack_2d, default_points=base_2d or offset_2d)
     offset_3d = _project_points_to_surface(offset_2d, candidate, transform["angle_deg"], transform["normal_offset"])
     base_3d = _project_points_to_surface(base_2d, candidate, transform["angle_deg"], transform["normal_offset"])
     surface_cut_polygon = _project_points_to_surface(
@@ -1767,6 +1836,7 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debu
         + (crack_created.get("bottom_caps") or [])
     )
     parent_fills = _coerce_ids(crack_created.get("parent_fills") or [])
+    _delete_objects(parent_fills)
     if not crack_geometry:
         _delete_objects(
             crack_polys
@@ -2428,7 +2498,6 @@ def _reference_points_debug_config(debug_cfg=None):
         return {
             "enabled": ref_debug,
             "layer": "debug::reference_points",
-            "by_type": True,
             "radius_coef": 0.04375,
             "min_radius": 0.625,
             "axis_scale": 1.6,
@@ -2438,7 +2507,6 @@ def _reference_points_debug_config(debug_cfg=None):
         return {
             "enabled": bool(ref_debug.get("enabled", True)),
             "layer": str(ref_debug.get("layer") or "debug::reference_points"),
-            "by_type": bool(ref_debug.get("by_type", True)),
             "radius_coef": max(0.0, _to_float(ref_debug.get("radius_coef"), 0.04375)),
             "min_radius": max(0.0, _to_float(ref_debug.get("min_radius"), 0.625)),
             "axis_scale": max(0.0, _to_float(ref_debug.get("axis_scale"), 1.6)),
@@ -2447,24 +2515,10 @@ def _reference_points_debug_config(debug_cfg=None):
     return {
         "enabled": bool(legacy_seed_debug.get("reference_points_enabled", False)),
         "layer": "debug::reference_points",
-        "by_type": True,
         "radius_coef": max(0.0, _to_float(legacy_seed_debug.get("reference_radius_coef"), 0.04375)),
         "min_radius": max(0.0, _to_float(legacy_seed_debug.get("reference_min_radius"), 0.625)),
         "axis_scale": max(0.0, _to_float(legacy_seed_debug.get("reference_axis_scale"), 1.6)),
     }
-
-
-def _reference_layer_for_type(reference_cfg, defect_type):
-    base_layer = str((reference_cfg or {}).get("layer") or "debug::reference_points")
-    if not bool((reference_cfg or {}).get("by_type", True)):
-        return base_layer
-    if defect_type in ("spalling", "exposed_rebar"):
-        return "{}::spalling".format(base_layer)
-    if defect_type == "efflore":
-        return "{}::efflore".format(base_layer)
-    return "{}::crack".format(base_layer)
-
-
 
 def _seed_layer_for_type(layer_map, defect_type):
     seeds = (layer_map or {}).get("seeds")
@@ -2477,6 +2531,90 @@ def _seed_layer_for_type(layer_map, defect_type):
     else:
         key = "crack"
     return seeds.get(key) or seeds.get("default")
+
+
+def _draw_reference_points_debug(cfg, model_result=None, debug_cfg=None):
+    ref_debug_cfg = _reference_points_debug_config(debug_cfg)
+    if not bool(ref_debug_cfg.get("enabled", False)):
+        return 0
+
+    ref_cfg = cfg.get("reference") or {}
+    source_ids = _collect_object_ids(model_result)
+    existing_ids_before = set(
+        rs.AllObjects(select=False, include_lights=False, include_grips=False) or []
+    )
+    surface_ids = get_surfaces(
+        object_ids=source_ids,
+        layer_names=cfg.get("target_layers"),
+        convert_polylines=True,
+        explode_polysurfaces=True,
+        keep_input=True,
+    )
+    temporary_surface_ids = [sid for sid in surface_ids if sid not in existing_ids_before]
+    max_num_surfaces = max(0, _to_int(ref_cfg.get("max_num_surfaces"), 0))
+    if max_num_surfaces > 0:
+        surface_ids = surface_ids[:max_num_surfaces]
+
+    layer_name = str(ref_debug_cfg.get("layer") or "debug::reference_points")
+    ensure_layer(layer_name)
+    if not rs.IsLayer(layer_name):
+        return 0
+
+    su = max(1, _to_int(ref_cfg.get("sample_count_u"), 2))
+    sv = max(1, _to_int(ref_cfg.get("sample_count_v"), 2))
+    sample_edge_length_u = _to_optional_float(ref_cfg.get("sample_edge_length_u"))
+    sample_edge_length_v = _to_optional_float(ref_cfg.get("sample_edge_length_v"))
+    trim_margin = _to_float(ref_cfg.get("trim_margin"), 0.1)
+    radius_coef = max(0.0, _to_float(ref_debug_cfg.get("radius_coef"), 0.04375))
+    min_radius = max(0.0, _to_float(ref_debug_cfg.get("min_radius"), 0.625))
+    axis_scale = max(0.0, _to_float(ref_debug_cfg.get("axis_scale"), 1.6))
+
+    marker_count = 0
+    seen_marker_keys = set()
+    try:
+        for surface_id in surface_ids:
+            if not rs.IsObject(surface_id):
+                continue
+            points, sizes, normals, _point_meta = get_reference_points(
+                surface_id,
+                sample_count_u=su,
+                sample_count_v=sv,
+                sample_edge_length_u=sample_edge_length_u,
+                sample_edge_length_v=sample_edge_length_v,
+                trim_margin=trim_margin,
+                return_normals=True,
+                return_metadata=True,
+            )
+            for point, size, normal in zip(points, sizes, normals):
+                point_3d = _vec3(point)
+                marker_key = (str(surface_id), _point_key(point_3d))
+                if marker_key in seen_marker_keys:
+                    continue
+                seen_marker_keys.add(marker_key)
+                normal_3d = _surface_normal_at_point(surface_id, point_3d, fallback=normal)
+                u_axis, v_axis, n_axis = _surface_axes(surface_id, point_3d, normal_3d)
+                marker_ids = _create_seed_marker(
+                    {
+                        "surface_id": surface_id,
+                        "point": point_3d,
+                        "normal": normal_3d,
+                        "u_axis": u_axis,
+                        "v_axis": v_axis,
+                        "n_axis": n_axis,
+                        "reference_size": float(size),
+                    },
+                    layer_name,
+                    radius_coef=radius_coef,
+                    min_radius=min_radius,
+                    axis_scale=axis_scale,
+                )
+                if marker_ids:
+                    marker_count += 1
+    finally:
+        for sid in temporary_surface_ids:
+            if sid and rs.IsObject(sid):
+                rs.DeleteObject(sid)
+    return marker_count
 
 
 def _build_instance_records_for_type(
@@ -2787,6 +2925,13 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
 
     records = []
     used_candidate_keys = set()
+    reference_marker_count = _draw_reference_points_debug(
+        cfg,
+        model_result=model_result,
+        debug_cfg=debug_cfg,
+    )
+    if reference_marker_count:
+        print("Defect reference_points: drew {} sampled reference markers.".format(reference_marker_count))
     for defect_type, defect_cfg, count in active_requests:
         shapes = _resolve_shapes_for_type(
             defect_type=defect_type,
