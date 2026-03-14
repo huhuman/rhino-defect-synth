@@ -10,6 +10,13 @@ rendering:
   match_viewport_aspect: true
   output_dir: "C:/path/to/your/rendered"
   background_wallpaper_dir: "C:/path/to/your/background_wallpapers"
+  channel:
+    color: true
+    depth: true
+    normal: true
+    depth_buffer: true
+    normal_buffer: true
+    mask: true
   outputs:
     scene: {}
     mask: {}

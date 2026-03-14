@@ -202,6 +202,7 @@ def _build_render_context(params):
     strategy = _normalize_camera_strategy(camera_cfg)
     outputs_cfg = params.get("outputs") or {}
     mask_cfg = outputs_cfg.get("mask") or {}
+    channel_cfg = params.get("channel") or {}
     bbox_data = _bbox_center_lengths()
     cube_camera_cfg = {}
     component_camera_cfg = {}
@@ -281,6 +282,7 @@ def _build_render_context(params):
         "scene_hide_layers": (outputs_cfg.get("scene") or {}).get("hide_layers"),
         "mask_only_layers": mask_cfg.get("only_layers"),
         "mask_hide_layers": mask_cfg.get("hide_layers"),
+        "channels": dict(channel_cfg) if isinstance(channel_cfg, dict) else {},
     }
 
 
@@ -519,6 +521,7 @@ def _capture_pose(idx, pose, context):
         scene_hide_layers=context.get("scene_hide_layers"),
         mask_only_layers=context.get("mask_only_layers"),
         mask_hide_layers=context.get("mask_hide_layers"),
+        channels=context.get("channels"),
     )
 
 

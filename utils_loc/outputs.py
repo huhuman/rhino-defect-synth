@@ -8,6 +8,7 @@ import rhinoscriptsyntax as rs
 import scriptcontext as sc
 import System.Drawing as Drawing
 import System.Drawing.Imaging as Imaging
+import System.IO as IO
 
 
 def _ensure_out_dir(path):
@@ -365,6 +366,53 @@ def _capture_render_channels_to_files(rhino_view, depth_path, normal_path, width
         )
 
 
+def _capture_selected_render_channels(
+    rhino_view,
+    depth_path=None,
+    normal_path=None,
+    width=None,
+    height=None,
+    renderer_id=None,
+):
+    """Capture buffer channels while allowing either depth or normal buffer to be disabled."""
+    want_depth = bool(depth_path)
+    want_normal = bool(normal_path)
+    if not want_depth and not want_normal:
+        return
+
+    temp_paths = []
+    capture_depth_path = depth_path
+    capture_normal_path = normal_path
+
+    if not want_depth:
+        capture_depth_path = os.path.abspath(
+            os.path.join(IO.Path.GetTempPath(), f"rhino_depth_{IO.Path.GetRandomFileName()}.pfm")
+        )
+        temp_paths.append(capture_depth_path)
+    if not want_normal:
+        capture_normal_path = os.path.abspath(
+            os.path.join(IO.Path.GetTempPath(), f"rhino_normal_{IO.Path.GetRandomFileName()}.pfm")
+        )
+        temp_paths.append(capture_normal_path)
+
+    try:
+        _capture_render_channels_to_files(
+            rhino_view,
+            depth_path=capture_depth_path,
+            normal_path=capture_normal_path,
+            width=width,
+            height=height,
+            renderer_id=renderer_id,
+        )
+    finally:
+        for temp_path in temp_paths:
+            try:
+                if os.path.isfile(temp_path):
+                    os.remove(temp_path)
+            except Exception:
+                pass
+
+
 def _capture_mask_basecolor_to_file(rhino_view, mask_path, width=None, height=None):
     """
     Use the CaptureBaseColorMask Rhino command (from the C# plugin) to write a crisp PNG mask.
@@ -571,6 +619,57 @@ def _apply_mask_layer_visibility(mask_only_layers=None, mask_hide_layers=None):
             layer.IsVisible = False
 
 
+def _snapshot_layer_visibility():
+    snapshot = []
+    for layer in sc.doc.Layers:
+        layer_id = getattr(layer, "Id", None)
+        if layer_id is None:
+            continue
+        snapshot.append((layer_id, bool(getattr(layer, "IsVisible", True))))
+    return snapshot
+
+
+def _restore_layer_visibility(snapshot):
+    for layer_id, is_visible in snapshot or []:
+        try:
+            layer = sc.doc.Layers.FindId(layer_id)
+        except Exception:
+            layer = None
+        if layer is None:
+            continue
+        try:
+            layer.IsVisible = bool(is_visible)
+        except Exception:
+            continue
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "on")
+    return bool(value)
+
+
+def _normalize_channel_flags(channels):
+    defaults = {
+        "color": True,
+        "depth": True,
+        "normal": True,
+        "depth_buffer": True,
+        "normal_buffer": True,
+        "mask": True,
+    }
+    if not isinstance(channels, dict):
+        return defaults
+    for key in list(defaults.keys()):
+        if key in channels:
+            defaults[key] = _coerce_bool(channels.get(key))
+    return defaults
+
+
 def render_all_outputs(
     view=None,
     out_dir=None,
@@ -583,6 +682,7 @@ def render_all_outputs(
     scene_hide_layers=None,
     mask_only_layers=None,
     mask_hide_layers=None,
+    channels=None,
 ):
     """
     Convenience helper to render color, depth, normal, and mask in one call.
@@ -590,13 +690,17 @@ def render_all_outputs(
     if not out_dir:
         raise ValueError("out_dir is required to save renders.")
 
-    outputs = {
+    all_outputs = {
         "color": os.path.abspath(os.path.join(out_dir, f"color/{basename}.png")),
         "depth": os.path.abspath(os.path.join(out_dir, f"depth/{basename}.png")),
         "normal": os.path.abspath(os.path.join(out_dir, f"normal/{basename}.png")),
-        "depth_linear": os.path.abspath(os.path.join(out_dir, f"depth_buffer/{basename}.pfm")),
-        "normal_linear": os.path.abspath(os.path.join(out_dir, f"normal_buffer/{basename}.pfm")),
+        "depth_buffer": os.path.abspath(os.path.join(out_dir, f"depth_buffer/{basename}.pfm")),
+        "normal_buffer": os.path.abspath(os.path.join(out_dir, f"normal_buffer/{basename}.pfm")),
         "mask": os.path.abspath(os.path.join(out_dir, f"mask/{basename}.png")),
+    }
+    channel_flags = _normalize_channel_flags(channels)
+    outputs = {
+        name: path for name, path in all_outputs.items() if channel_flags.get(name, True)
     }
     for path in outputs.values():
         _ensure_out_dir(path)
@@ -604,12 +708,9 @@ def render_all_outputs(
     render_view = sc.doc.Views.ActiveView if view is None else sc.doc.Views.Find(view, False)
     mode = Rhino.Display.DisplayModeDescription.FindByName("Rendered")
     render_view.ActiveViewport.DisplayMode = mode
-    _apply_scene_layer_visibility(
-        scene_only_layers=scene_only_layers,
-        scene_hide_layers=scene_hide_layers,
-    )
 
     prev_wallpaper_file = render_view.ActiveViewport.WallpaperFilename
+    layer_visibility_snapshot = _snapshot_layer_visibility()
     render_view.Redraw()
 
     try:
@@ -645,32 +746,64 @@ def render_all_outputs(
                     f"(view={view_size.Width}x{view_size.Height}, out={capture_width}x{capture_height})."
                 )
 
-        render_image(rhino_view=render_view, out_path=outputs["color"], width=capture_width, height=capture_height)
-        # Capture linear channels in the same camera/display/layer state as color.
-        _capture_render_channels_to_files(
-            render_view,
-            depth_path=outputs["depth_linear"],
-            normal_path=outputs["normal_linear"],
-            width=capture_width,
-            height=capture_height,
-        )
+        if any(channel_flags[name] for name in ("color", "depth", "normal", "depth_buffer", "normal_buffer")):
+            _apply_scene_layer_visibility(
+                scene_only_layers=scene_only_layers,
+                scene_hide_layers=scene_hide_layers,
+            )
+            render_view.Redraw()
 
-        render_depth(rhino_view=render_view, out_path=outputs["depth"], width=capture_width, height=capture_height)
+        if channel_flags["color"]:
+            render_image(
+                rhino_view=render_view,
+                out_path=outputs["color"],
+                width=capture_width,
+                height=capture_height,
+            )
 
-        render_view.ActiveViewport.SetWallpaper("", False)
+        if channel_flags["depth_buffer"] or channel_flags["normal_buffer"]:
+            _capture_selected_render_channels(
+                render_view,
+                depth_path=outputs.get("depth_buffer"),
+                normal_path=outputs.get("normal_buffer"),
+                width=capture_width,
+                height=capture_height,
+            )
 
-        render_normal(rhino_view=render_view, out_path=outputs["normal"], width=capture_width, height=capture_height)
+        if channel_flags["depth"]:
+            render_depth(
+                rhino_view=render_view,
+                out_path=outputs["depth"],
+                width=capture_width,
+                height=capture_height,
+            )
 
-        _apply_mask_layer_visibility(
-            mask_only_layers=mask_only_layers,
-            mask_hide_layers=mask_hide_layers,
-        )
-        render_view.Redraw()
+        if channel_flags["normal"]:
+            render_view.ActiveViewport.SetWallpaper("", False)
+            render_normal(
+                rhino_view=render_view,
+                out_path=outputs["normal"],
+                width=capture_width,
+                height=capture_height,
+            )
 
-        render_mask(rhino_view=render_view, out_path=outputs["mask"], width=capture_width, height=capture_height)
+        if channel_flags["mask"]:
+            _restore_layer_visibility(layer_visibility_snapshot)
+            _apply_mask_layer_visibility(
+                mask_only_layers=mask_only_layers,
+                mask_hide_layers=mask_hide_layers,
+            )
+            render_view.Redraw()
+            render_mask(
+                rhino_view=render_view,
+                out_path=outputs["mask"],
+                width=capture_width,
+                height=capture_height,
+            )
 
         return outputs
     finally:
+        _restore_layer_visibility(layer_visibility_snapshot)
         try:
             render_view.ActiveViewport.SetWallpaper(prev_wallpaper_file, False)
         except Exception:
