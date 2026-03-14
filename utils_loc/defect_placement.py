@@ -731,14 +731,14 @@ def _add_curve(points):
 
 def _sample_rebar_radius_cm(rebar_cfg, rng):
     radius = _sample_numeric_choice(
-        rebar_cfg.get("rebar_radius_choices_cm") or rebar_cfg.get("rebar_radius_choices"),
+        rebar_cfg.get("radius_choices_cm") or rebar_cfg.get("radius_choices"),
         rng=rng,
-        weights=rebar_cfg.get("rebar_radius_weights"),
+        weights=rebar_cfg.get("radius_weights"),
     )
     if radius is not None and radius > 0.0:
         return float(radius)
 
-    radius_min, radius_max = rebar_cfg.get("rebar_radius_range", [0.8, 2.5])
+    radius_min, radius_max = rebar_cfg.get("radius_range", [0.8, 2.5])
     radius_min = max(0.05, _to_float(radius_min, 0.8))
     radius_max = max(0.05, _to_float(radius_max, 2.5))
     if radius_min > radius_max:
@@ -746,30 +746,35 @@ def _sample_rebar_radius_cm(rebar_cfg, rng):
     return float(rng.uniform(radius_min, radius_max))
 
 
-def _minimum_rebar_center_spacing_cm(diameter_cm):
+def _minimum_rebar_center_spacing_cm(diameter_cm, max_aggregate_size_cm=2.54):
     diameter_cm = max(0.1, float(diameter_cm))
-    min_clear_spacing = max(3.81, 3.25 * diameter_cm)
+    aggregate_cm = max(0.0, _to_float(max_aggregate_size_cm, 2.54))
+    # Approximate AASHTO/Caltrans minimum spacing using clear spacing + bar diameter.
+    min_clear_spacing = max(1.5 * diameter_cm, 1.5 * aggregate_cm, 3.81)
     return float(diameter_cm + min_clear_spacing)
 
 
 def _sample_rebar_cover_depth_cm(rebar_cfg, radius_cm, rng):
     cover_depth = _sample_numeric_range(
         rebar_cfg,
-        range_key="rebar_cover_depth_range",
-        min_key="rebar_cover_depth_min",
-        max_key="rebar_cover_depth_max",
-        fixed_key="rebar_cover_depth",
+        range_key="cover_depth_range",
+        min_key="cover_depth_min",
+        max_key="cover_depth_max",
+        fixed_key="cover_depth",
         rng=rng,
         default=2.0,
     )
     return float(max(radius_cm + 0.25, float(cover_depth)))
 
 
-def _sample_rebar_spacing_cm(rebar_cfg, diameter_cm, span_hint_cm, fallback_count, rng):
-    min_center_spacing = _minimum_rebar_center_spacing_cm(diameter_cm)
+def _sample_rebar_spacing_cm(rebar_cfg, diameter_cm, span_hint_cm, rng):
+    min_center_spacing = _minimum_rebar_center_spacing_cm(
+        diameter_cm,
+        max_aggregate_size_cm=rebar_cfg.get("max_aggregate_size_cm", 2.54),
+    )
     choices = _numeric_choices(
-        rebar_cfg.get("rebar_spacing_choices_cm")
-        or rebar_cfg.get("rebar_spacing_choices")
+        rebar_cfg.get("spacing_choices_cm")
+        or rebar_cfg.get("spacing_choices")
     )
     if choices:
         filtered = [value for value in choices if value >= min_center_spacing - 1e-6]
@@ -786,24 +791,22 @@ def _sample_rebar_spacing_cm(rebar_cfg, diameter_cm, span_hint_cm, fallback_coun
         spacing = _sample_numeric_choice(
             filtered,
             rng=rng,
-            weights=rebar_cfg.get("rebar_spacing_weights"),
+            weights=rebar_cfg.get("spacing_weights"),
             default=min_center_spacing,
         )
         return float(max(min_center_spacing, spacing))
 
-    spacing = _to_optional_float(rebar_cfg.get("rebar_spacing"))
+    spacing = _to_optional_float(rebar_cfg.get("spacing"))
     if spacing is None:
-        spacing = _to_optional_float(rebar_cfg.get("spacing"))
-    if spacing is None:
-        spacing = max(0.0, float(span_hint_cm)) / float(max(1, int(fallback_count)))
+        spacing = min_center_spacing if span_hint_cm <= 0.0 else min_center_spacing
     return float(max(min_center_spacing, float(spacing)))
 
 
 def _build_rebar_centerline_points(start, end, radius_cm, lateral_axis, inward_normal, rebar_cfg, rng):
-    if not _to_bool(rebar_cfg.get("rebar_curve_enabled"), default=True):
+    if not _to_bool(rebar_cfg.get("curve_enabled"), default=True):
         return [tuple(_vec3(start)), tuple(_vec3(end))]
 
-    curve_range = rebar_cfg.get("rebar_curve_offset_ratio_range")
+    curve_range = rebar_cfg.get("curve_offset_ratio_range")
     if not isinstance(curve_range, (list, tuple)) or len(curve_range) < 2:
         curve_range = [0.15, 0.45]
     ratio_min = max(0.0, _to_float(curve_range[0], 0.15))
@@ -821,7 +824,7 @@ def _build_rebar_centerline_points(start, end, radius_cm, lateral_axis, inward_n
     if offset_mag <= 1e-6:
         return [tuple(_vec3(start)), tuple(_vec3(end))]
 
-    normal_ratio = _clamp(_to_float(rebar_cfg.get("rebar_curve_normal_ratio"), 0.25), 0.0, 1.0)
+    normal_ratio = _clamp(_to_float(rebar_cfg.get("curve_normal_ratio"), 0.25), 0.0, 1.0)
     bend_axis = _unit(
         _add(_scale(lateral_axis, 1.0), _scale(inward_normal, normal_ratio)),
         fallback=lateral_axis,
@@ -851,7 +854,7 @@ def _visible_interval_distances(interval, axis_range, path_length):
 
 
 def _build_rebar_rib_ids(centerline_points, radius_cm, axis_range, visible_interval, rebar_cfg):
-    if not _to_bool(rebar_cfg.get("rebar_rib_enabled"), default=True):
+    if not _to_bool(rebar_cfg.get("rib_enabled"), default=True):
         return []
 
     path_length = _polyline_length(centerline_points)
@@ -865,10 +868,10 @@ def _build_rebar_rib_ids(centerline_points, radius_cm, axis_range, visible_inter
         return []
 
     diameter_cm = 2.0 * float(radius_cm)
-    spacing_factor = max(0.5, _to_float(rebar_cfg.get("rebar_rib_spacing_diameter_factor"), 1.2))
-    band_factor = max(0.2, _to_float(rebar_cfg.get("rebar_rib_band_diameter_factor"), 0.5))
-    height_ratio = max(0.01, _to_float(rebar_cfg.get("rebar_rib_height_ratio"), 0.08))
-    max_count = max(0, _to_int(rebar_cfg.get("rebar_rib_max_count"), 8))
+    spacing_factor = max(0.5, _to_float(rebar_cfg.get("rib_spacing_diameter_factor"), 1.2))
+    band_factor = max(0.2, _to_float(rebar_cfg.get("rib_band_diameter_factor"), 0.5))
+    height_ratio = max(0.01, _to_float(rebar_cfg.get("rib_height_ratio"), 0.08))
+    max_count = max(0, _to_int(rebar_cfg.get("rib_max_count"), 8))
     if max_count <= 0:
         return []
 
@@ -2822,7 +2825,7 @@ def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rn
     bottom, top = min(vs), max(vs)
     span_u = max(1e-4, right - left)
     span_v = max(1e-4, top - bottom)
-    length_scale = max(0.2, _to_float(rebar_cfg.get("rebar_length_scale"), 1.3))
+    length_scale = max(0.2, _to_float(rebar_cfg.get("length_scale"), 1.3))
 
     mid_u = 0.5 * (left + right)
     mid_v = 0.5 * (bottom + top)
@@ -2830,13 +2833,6 @@ def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rn
     half_v = 0.5 * span_v * length_scale
     left_ext, right_ext = mid_u - half_u, mid_u + half_u
     bottom_ext, top_ext = mid_v - half_v, mid_v + half_v
-
-    bar_count_min, bar_count_max = rebar_cfg.get("rebar_count_range", [1, 3])
-    bar_count_min = max(1, _to_int(bar_count_min, 1))
-    bar_count_max = max(1, _to_int(bar_count_max, 3))
-    if bar_count_min > bar_count_max:
-        bar_count_min, bar_count_max = bar_count_max, bar_count_min
-    fallback_count = rng.randint(bar_count_min, bar_count_max)
 
     radius = _sample_rebar_radius_cm(rebar_cfg, rng=rng)
     diameter = 2.0 * radius
@@ -2848,16 +2844,15 @@ def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rn
         rebar_cfg,
         diameter_cm=diameter,
         span_hint_cm=max(span_u, span_v),
-        fallback_count=fallback_count,
         rng=rng,
     )
 
-    keep_probability = max(0.0, min(1.0, _to_float(rebar_cfg.get("rebar_keep_probability"), 1.0)))
-    padding = _to_float(rebar_cfg.get("rebar_extent_padding"), 0.5)
-    use_dual_direction = _to_bool(rebar_cfg.get("rebar_dual_direction"), default=True)
-    visible_length_factor = max(0.5, _to_float(rebar_cfg.get("rebar_visible_length_min_diameter_factor"), 2.5))
-    visible_length_min = max(0.5, _to_float(rebar_cfg.get("rebar_visible_length_min_cm"), 3.0))
-    secondary_offset = max(diameter, _to_float(rebar_cfg.get("rebar_secondary_layer_offset"), diameter))
+    place_probability = _clamp(_to_float(rebar_cfg.get("place_probability"), 0.75), 0.0, 1.0)
+    padding = _to_float(rebar_cfg.get("extent_padding"), 0.5)
+    use_dual_direction = _to_bool(rebar_cfg.get("dual_direction"), default=True)
+    visible_length_factor = max(0.5, _to_float(rebar_cfg.get("visible_length_min_diameter_factor"), 2.5))
+    visible_length_min = max(0.5, _to_float(rebar_cfg.get("visible_length_min_cm"), 3.0))
+    secondary_offset = max(diameter, _to_float(rebar_cfg.get("secondary_layer_offset"), diameter))
 
     xs = _rebar_line_positions(left, right, spacing, rng, padding=padding)
     ys = _rebar_line_positions(bottom, top, spacing, rng, padding=padding)
@@ -2880,8 +2875,6 @@ def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rn
         if len(visible_poly) < 3:
             return
         for line_value in line_values:
-            if rng.random() > keep_probability:
-                continue
             visibility = _polygon_line_visibility(visible_poly, axis=line_axis, value=line_value)
             if visibility["total_length"] < required_visible_length:
                 continue
@@ -2922,9 +2915,19 @@ def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rn
         }
 
     rng.shuffle(visible_candidates)
-    requested_count = rng.randint(bar_count_min, bar_count_max)
-    requested_count = max(1, requested_count)
-    selected_candidates = visible_candidates[: min(len(visible_candidates), requested_count)]
+    selected_candidates = [
+        item for item in visible_candidates
+        if rng.random() < place_probability
+    ]
+    if not selected_candidates:
+        return [], {
+            "bar_count": 0,
+            "candidate_count_total": int(len(xs) + (len(ys) if use_dual_direction else 0)),
+            "candidate_count_visible": int(len(visible_candidates)),
+            "candidate_count_selected": 0,
+            "place_probability": float(place_probability),
+            "skipped_reason": "no_candidates_selected",
+        }
 
     created = []
     count_u = 0
@@ -3016,6 +3019,7 @@ def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rn
         "candidate_count_total": int(len(xs) + (len(ys) if use_dual_direction else 0)),
         "candidate_count_visible": int(len(visible_candidates)),
         "candidate_count_selected": int(count_u + count_v),
+        "place_probability": float(place_probability),
         "visible_length_threshold": float(required_visible_length),
         "curved_bar_count": int(curved_count),
         "rib_object_count": int(rib_count),
@@ -3023,25 +3027,7 @@ def _model_rebar_bars(candidate, polygon, spall_depth, rebar_cfg, layer_name, rn
 
 
 def _resolve_spalling_cfg(cfg):
-    spalling_cfg = dict(cfg.get("spalling") or {})
-    legacy_cfg = dict(cfg.get("exposed_rebar") or {})
-
-    if not spalling_cfg and legacy_cfg:
-        spalling_cfg = dict(legacy_cfg)
-        count = _to_int(legacy_cfg.get("count"), 0)
-        spalling_cfg.setdefault("count", count)
-        spalling_cfg.setdefault("rebar_enabled", True)
-        if count > 0:
-            spalling_cfg.setdefault("rebar_probability", 1.0)
-
-    for key in (
-        "depth_threshold",
-        "diameter_threshold",
-        "cs_weights",
-    ):
-        if key in legacy_cfg and key not in spalling_cfg:
-            spalling_cfg[key] = legacy_cfg[key]
-    return spalling_cfg
+    return dict(cfg.get("spalling") or {})
 
 
 def get_active_defect_requests(cfg):
@@ -3060,7 +3046,7 @@ def get_active_defect_requests(cfg):
         if bool(defect_cfg.get("enabled", True)) and count > 0:
             requests.append((defect_type, defect_cfg, count))
 
-    if "spalling" in cfg or "exposed_rebar" in cfg:
+    if "spalling" in cfg:
         spalling_cfg = _resolve_spalling_cfg(cfg)
         count = max(0, _to_int(spalling_cfg.get("count"), 0))
         if bool(spalling_cfg.get("enabled", True)) and count > 0:
@@ -3068,42 +3054,8 @@ def get_active_defect_requests(cfg):
     return requests
 
 
-def _resolve_rebar_cfg(cfg, spalling_cfg):
-    rebar_cfg = _deep_merge(cfg.get("exposed_rebar") or {}, (spalling_cfg or {}).get("rebar") or {})
-    for key in (
-        "rebar_count_range",
-        "rebar_radius_range",
-        "rebar_radius_choices_cm",
-        "rebar_radius_choices",
-        "rebar_radius_weights",
-        "rebar_length_scale",
-        "rebar_cover_depth",
-        "rebar_cover_depth_range",
-        "rebar_cover_depth_min",
-        "rebar_cover_depth_max",
-        "rebar_spacing",
-        "rebar_spacing_choices_cm",
-        "rebar_spacing_choices",
-        "rebar_spacing_weights",
-        "spacing",
-        "rebar_keep_probability",
-        "rebar_extent_padding",
-        "rebar_dual_direction",
-        "rebar_secondary_layer_offset",
-        "rebar_visible_length_min_cm",
-        "rebar_visible_length_min_diameter_factor",
-        "rebar_curve_enabled",
-        "rebar_curve_offset_ratio_range",
-        "rebar_curve_normal_ratio",
-        "rebar_rib_enabled",
-        "rebar_rib_spacing_diameter_factor",
-        "rebar_rib_band_diameter_factor",
-        "rebar_rib_height_ratio",
-        "rebar_rib_max_count",
-    ):
-        if key in (spalling_cfg or {}):
-            rebar_cfg[key] = copy.deepcopy(spalling_cfg[key])
-    return rebar_cfg
+def _resolve_rebar_cfg(spalling_cfg):
+    return dict((spalling_cfg or {}).get("rebar") or {})
 
 
 def _resolve_spalling_condition_state(spalling_cfg, diameter_cm, depth_cm):
@@ -3130,16 +3082,6 @@ def _resolve_spalling_depth_cm(shape, spalling_cfg, rng):
     return float(sampled.get("target_spall_depth_cm", 1.0))
 
 
-def _should_place_rebar(shape, spalling_cfg, condition_state, rng):
-    if not _to_bool((spalling_cfg or {}).get("rebar_enabled"), default=True):
-        return False
-    if _to_bool((spalling_cfg or {}).get("force_rebar"), default=False):
-        return True
-    probability = _to_float((spalling_cfg or {}).get("rebar_probability"), 0.0)
-    probability = max(0.0, min(1.0, probability))
-    return rng.random() < probability
-
-
 def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, spalling_cfg=None, debug_cfg=None):
     spalling_cfg = dict(spalling_cfg or _resolve_spalling_cfg(cfg))
     offset_2d = shape.get("spall_poly") or shape.get("offset_poly") or shape.get("base_poly") or []
@@ -3161,7 +3103,8 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, s
     else:
         condition_state = _resolve_spalling_condition_state(spalling_cfg, diameter_cm=diameter_cm, depth_cm=spall_depth)
 
-    place_rebar = _should_place_rebar(shape, spalling_cfg, condition_state, rng=rng)
+    rebar_cfg = _resolve_rebar_cfg(spalling_cfg)
+    place_rebar = _to_bool(rebar_cfg.get("enabled"), default=True)
     spall_layer_name = _geometry_layer_for_condition(layer_map, "spall", condition_state)
     spall_ids, spall_metrics = _model_spall_from_polygon(
         polygon,
@@ -3178,7 +3121,6 @@ def _model_spalling_instance(candidate, shape, transform, cfg, layer_map, rng, s
     rebar_ids = []
     rebar_metrics = {}
     if place_rebar:
-        rebar_cfg = _resolve_rebar_cfg(cfg, spalling_cfg)
         rebar_layer_name = _geometry_layer_for_condition(layer_map, "exposed_rebar", condition_state, part="rebar")
         rebar_ids, rebar_metrics = _model_rebar_bars(
             candidate,

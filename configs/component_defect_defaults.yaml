@@ -76,23 +76,24 @@ modeling:
       cs_weights: [1, 1]
       depth_irregularity: 0.2
       min_bottom_area_ratio: 0.25
-      rebar_enabled: true
-      rebar_probability: 0.5
-      force_rebar: false
       rebar:
-        rebar_count_range: [1, 3]
-        rebar_radius_choices_cm: [0.635, 0.795, 0.955, 1.11, 1.27]
-        rebar_spacing_choices_cm: [7.62, 10.16, 12.70, 15.24, 20.32, 25.40]
-        rebar_length_scale: 1.3
-        rebar_cover_depth_range: [2.54, 3.81]
-        rebar_visible_length_min_cm: 3.0
-        rebar_visible_length_min_diameter_factor: 2.5
-        rebar_secondary_layer_offset: 2.0
-        rebar_curve_enabled: true
-        rebar_curve_offset_ratio_range: [0.15, 0.45]
-        rebar_curve_normal_ratio: 0.25
-        rebar_rib_enabled: true
-        rebar_rib_spacing_diameter_factor: 1.2
-        rebar_rib_band_diameter_factor: 0.5
-        rebar_rib_height_ratio: 0.08
-        rebar_rib_max_count: 8
+        enabled: true
+        place_probability: 0.75
+        radius_choices_cm: [0.635, 0.795, 0.955, 1.11, 1.27]
+        spacing_choices_cm: [7.62, 10.16, 12.70, 15.24, 20.32, 25.40]
+        max_aggregate_size_cm: 2.54
+        length_scale: 1.3
+        cover_depth_range: [2.54, 3.81]
+        visible_length_min_cm: 3.0
+        visible_length_min_diameter_factor: 2.5
+        secondary_layer_offset: 2.0
+        dual_direction: true
+        extent_padding: 0.5
+        curve_enabled: true
+        curve_offset_ratio_range: [0.15, 0.45]
+        curve_normal_ratio: 0.25
+        rib_enabled: true
+        rib_spacing_diameter_factor: 1.2
+        rib_band_diameter_factor: 0.5
+        rib_height_ratio: 0.08
+        rib_max_count: 8
