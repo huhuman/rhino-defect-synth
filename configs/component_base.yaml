@@ -38,7 +38,6 @@ preparation:
       "concrete_0006_color_2k",
       "concrete_0013_color_2k",
       "concrete_0019_color_2k",
-      "concrete_0022_color_2k",
       "concrete_0030_color_2k",
       "concrete_0031_color_2k",
       "concrete_0032_color_2k",
@@ -91,7 +90,6 @@ preparation:
       "concrete_0006_color_2k",
       "concrete_0013_color_2k",
       "concrete_0019_color_2k",
-      "concrete_0022_color_2k",
       "concrete_0030_color_2k",
       "concrete_0031_color_2k",
       "concrete_0032_color_2k",
@@ -152,7 +150,6 @@ preparation:
       "concrete_0006_color_2k",
       "concrete_0013_color_2k",
       "concrete_0019_color_2k",
-      "concrete_0022_color_2k",
       "concrete_0030_color_2k",
       "concrete_0031_color_2k",
       "concrete_0032_color_2k",
@@ -216,24 +213,23 @@ preparation:
       "Leaking008_2K-PNG",
       "Leaking009_2K-PNG"
     ]
-    "defect::efflore::CS3": *defect_efflore_materials
     "defect::efflore::CS3::inner": *defect_efflore_materials
     "defect::efflore::CS3::outer": [
-      "imperfection_0006_color_2k",
-      "decals_0001_color_2k",
-      "SurfaceImperfections011_2K-PNG",
-      "GrungeWall01_2K",
-      "GrungeWall02_2K",
-      "GrungeWall03_2K",
-      "Leaking001_2K-PNG",
-      "Leaking002_2K-PNG",
-      "Leaking003_2K-PNG",
-      "Leaking004_2K-PNG",
-      "Leaking005_2K-PNG",
-      "Leaking006_2K-PNG",
-      "Leaking007_2K-PNG",
-      "Leaking008_2K-PNG",
-      "Leaking009_2K-PNG"
+      "Corten rusty",
+      "Rust002_1K-JPG",
+      "Rust002_2K",
+      "Rust003_1K-JPG",
+      "Rust003_2K",
+      "Rust004_1K-JPG",
+      "Rust004_2K",
+      "Rust005_1K-JPG",
+      "Rust005_2K",
+      "Rust006_1K-JPG",
+      "Rust006_2K",
+      "Rust007_1K-JPG",
+      "Rust008_1K-JPG",
+      "Rust009_1K-JPG",
+      "Rust010_1K-JPG",
     ]
     "defect::spalling::CS2": &defect_spalling_materials [
       "Conc dark gray",
@@ -263,7 +259,8 @@ preparation:
       "GreyRock05_2K",
     ]
     "defect::spalling::CS3": *defect_spalling_materials
-    "defect::exposed_rebar::CS2": &defect_rebar_materials [
+    "defect::exposed_rebar::CS2::spalling": *defect_spalling_materials
+    "defect::exposed_rebar::CS2::rebar": &defect_rebar_materials [
       "CorrugatedSteel002_2K",
       "CorrugatedSteel004_2K",  
       "Corten darker",
@@ -324,7 +321,8 @@ preparation:
       "MetalPlates012_2K-PNG",
       "MetalPlates013_2K-PNG"
     ]
-    "defect::exposed_rebar::CS3": *defect_rebar_materials
+    "defect::exposed_rebar::CS3::spalling": *defect_spalling_materials
+    "defect::exposed_rebar::CS3::rebar": *defect_rebar_materials
   colors:
     "component::slab": Red
     "component::beam": Blue
@@ -343,13 +341,14 @@ preparation:
     "defect::crack::CS2": Yellow
     "defect::crack::CS3": OrangeRed
     "defect::efflore::CS2": LightSkyBlue
-    "defect::efflore::CS3": DeepSkyBlue
     "defect::efflore::CS3::inner": LightSkyBlue
     "defect::efflore::CS3::outer": DeepSkyBlue
     "defect::spalling::CS2": Gold
     "defect::spalling::CS3": DarkOrange
-    "defect::exposed_rebar::CS2": Silver
-    "defect::exposed_rebar::CS3": Gray
+    "defect::exposed_rebar::CS2::spalling": Gold
+    "defect::exposed_rebar::CS2::rebar": Silver
+    "defect::exposed_rebar::CS3::spalling": DarkOrange
+    "defect::exposed_rebar::CS3::rebar": Gray
     "debug::reference_points": LawnGreen
     "debug::seed": White
     "debug::seed::crack": Red

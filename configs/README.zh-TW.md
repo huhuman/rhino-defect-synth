@@ -175,7 +175,9 @@
 | `spalling.cs_weights` | `list[float]` | spalling CS 加權隨機。 | `component_defect_defaults.yaml` | 順序為 `[CS2, CS3]`，預設 `[1,1]`。 |
 | `spalling.depth_threshold`, `spalling.diameter_threshold` | `float` | depth/diameter 的 CS2/CS3 抽樣門檻。 | `component_defect_defaults.yaml` | CS2 用 `0.5*threshold..threshold`；CS3 用 `threshold..2*threshold`。 |
 | `spalling.depth_irregularity`, `spalling.min_bottom_area_ratio` | `float` | spall 腔體剖面控制。 | `component_defect_defaults.yaml` | 最深 ring 會保證底面比例下限。 |
-| `spalling.rebar_enabled`, `spalling.rebar_probability`, `spalling.force_rebar`, `spalling.rebar.*` | mixed | rebar 放置與幾何控制。 | `component_defect_defaults.yaml` | 有 rebar 時 spall+rebar 會一起歸類到 `defect::exposed_rebar::*`。 |
+| `spalling.rebar_enabled`, `spalling.rebar_probability`, `spalling.force_rebar`, `spalling.rebar.*` | mixed | rebar 放置與幾何控制。 | `component_defect_defaults.yaml` | 有 rebar 時仍記成同一個 exposed_rebar defect，但 layer/material 會拆成 `defect::exposed_rebar::CS*::spalling` 與 `defect::exposed_rebar::CS*::rebar`。 |
+| `spalling.rebar.rebar_radius_choices_cm`, `spalling.rebar.rebar_spacing_choices_cm`, `spalling.rebar.rebar_cover_depth_range` | `list[float]`, `list[float]`, `list[float,float]` | 橋梁常見 bar 半徑/spacing 離散選項與保護層深度抽樣。 | `component_defect_defaults.yaml` | 預設單位為 cm，會先抽尺寸再做可見性篩選。 |
+| `spalling.rebar.rebar_visible_length_min_cm`, `spalling.rebar.rebar_visible_length_min_diameter_factor`, `spalling.rebar.rebar_curve_*`, `spalling.rebar.rebar_rib_*` | mixed | exposed rebar 的可見性門檻與曲折/竹節細節控制。 | `component_defect_defaults.yaml` | 只有在抽樣 spall depth 下仍可見的 candidate 才會真的建立幾何。 |
 | `shape_library.*` | mixed | 保留於 cube defect defaults 的舊 shape-library 相容區塊。 | `cube_defect_defaults.yaml` | 目前 component defect placement 不使用。 |
 | `random.scale_min`, `random.scale_max` | `float` | 保留於 cube defect defaults 的舊隨機縮放參數。 | `cube_defect_defaults.yaml` | 目前 component defect placement 不使用。 |
 | Cube defect scope | literal | cube 目前直接由六個面 map 生成 crack，並不執行 `modeling.defect`。 | `cube_defaults.yaml` | `cube_defect_defaults.yaml` 仍保留給相容與設定組合用途。 |
