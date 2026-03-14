@@ -23,7 +23,7 @@ def _resolve_demo_out_dir(cfg, demo_type, base_out_dir=None):
     output_root = rendering_cfg.get("output_dir")
     if not output_root:
         raise ValueError("Config rendering.output_dir is required when base_out_dir is not provided.")
-    return os.path.join(output_root, "demo", demo_type)
+    return os.path.join(output_root, "demo", cfg["modeling"]["strategy"], demo_type)
 
 
 def _build_demo_params(cfg, demo_type, demo_params=None):
@@ -149,8 +149,17 @@ if __name__ == "__main__":
     # )
 
     # Example usage: camera placement demo.
+    # show_camera_placement(
+    #     config_name="cube_render.local.yaml",
+    #     demo_params={},
+    #     print_timings=True,
+    # )
+    
+    # Example usage: capture for component drone-like camera setup.
     show_camera_placement(
-        config_name="cube_render.local.yaml",
-        demo_params={},
+        config_name="component.local.yaml",
+        demo_params={
+            "camera_demo_mode": "capture",
+        },
         print_timings=True,
     )
