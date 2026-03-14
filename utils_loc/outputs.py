@@ -126,164 +126,6 @@ def _try_set_attr(target, name, value):
         pass
 
 
-def _clone_display_attributes(attrs):
-    """Create a mutable copy of display attributes with compatibility fallbacks."""
-    if attrs is None:
-        return Rhino.Display.DisplayPipelineAttributes()
-
-    try:
-        return Rhino.Display.DisplayPipelineAttributes(attrs)
-    except Exception:
-        pass
-
-    if hasattr(attrs, "Duplicate"):
-        try:
-            return attrs.Duplicate()
-        except Exception:
-            pass
-
-    cloned = Rhino.Display.DisplayPipelineAttributes()
-    if hasattr(cloned, "CopyContentsFrom"):
-        try:
-            cloned.CopyContentsFrom(attrs)
-            return cloned
-        except Exception:
-            pass
-    return cloned
-
-
-def _mask_display_mode():
-    return (
-        Rhino.Display.DisplayModeDescription.FindByName("Flat Shade")
-        or Rhino.Display.DisplayModeDescription.FindByName("Base Color")
-    )
-
-
-def _build_mask_display_attributes(viewport):
-    """
-    Build display attributes for segmentation-like masks:
-    no shadows/edges/transparency/post effects; preserve object/layer display colors.
-    """
-    mode = _mask_display_mode()
-    base_mode = mode or viewport.DisplayMode
-    attrs = _clone_display_attributes(getattr(base_mode, "DisplayAttributes", None))
-
-    bool_overrides = {
-        "CastShadows": False,
-        "DisableTransparency": True,
-        "FlatShade": True,
-        "IgnoreHighlights": True,
-        "PostProcessFrameBuffer": False,
-        "ShadowsOn": False,
-        "ShowAnnotations": False,
-        "ShowClippingPlanes": False,
-        "ShowConduits": False,
-        "ShowCurves": False,
-        "ShowIsocurves": False,
-        "ShowLights": False,
-        "ShowMeshEdges": False,
-        "ShowMeshNakedEdges": False,
-        "ShowMeshWires": False,
-        "ShowPoints": False,
-        "ShowSurfaceEdges": False,
-        "ShowText": False,
-        "UseAssignedObjectMaterial": False,
-        "UseCustomObjectColor": False,
-        "UseCustomObjectColorBackfaces": False,
-        "UseCustomObjectMaterial": False,
-        "UseCustomObjectMaterialBackfaces": False,
-        "UseObjectMaterial": False,
-        "UseObjectMaterialBackfaces": False,
-        "UseSingleObjectColor": False,
-    }
-    for name, value in bool_overrides.items():
-        _try_set_attr(attrs, name, value)
-
-    _try_set_attr(attrs, "ShadowEdgeBlur", 0)
-
-    if hasattr(attrs, "SetFill"):
-        try:
-            attrs.SetFill(Drawing.Color.Black)
-        except Exception:
-            pass
-
-    return attrs
-
-
-def _capture_mask_bitmap(rhino_view, width=None, height=None, max_length=None):
-    """Capture mask bitmap with dedicated display attributes and AA disabled."""
-    resolved_width, resolved_height = _resolve_capture_size(
-        rhino_view=rhino_view,
-        width=width,
-        height=height,
-        max_length=max_length,
-    )
-    out_size = Drawing.Size(resolved_width, resolved_height)
-    viewport = rhino_view.ActiveViewport
-    attrs = _build_mask_display_attributes(viewport)
-
-    prev_aa = None
-    aa_changed = False
-    try:
-        ogl = Rhino.ApplicationSettings.OpenGLSettings
-        prev_aa = ogl.AntialiasLevel
-        if prev_aa != 0:
-            ogl.AntialiasLevel = 0
-            aa_changed = True
-    except Exception:
-        prev_aa = None
-
-    try:
-        rhino_view.Redraw()
-        rs.Sleep(50)
-        bitmap = None
-        try:
-            bitmap = rhino_view.CaptureToBitmap(out_size, attrs)
-        except Exception:
-            try:
-                bitmap = rhino_view.CaptureToBitmap(attrs)
-            except Exception:
-                bitmap = None
-
-        if bitmap is None:
-            raise RuntimeError("RhinoView.CaptureToBitmap returned no bitmap for mask output.")
-        return bitmap
-    finally:
-        if aa_changed and prev_aa is not None:
-            try:
-                Rhino.ApplicationSettings.OpenGLSettings.AntialiasLevel = prev_aa
-                rhino_view.Redraw()
-            except Exception:
-                pass
-
-
-def _force_visible_objects_color_by_layer():
-    """
-    Temporarily force visible objects to use layer color source.
-    Returns list of (obj_id, previous_source) for restoration.
-    """
-    changed = []
-    for obj_id in rs.VisibleObjects() or []:
-        try:
-            prev_source = rs.ObjectColorSource(obj_id)
-            if prev_source is None or prev_source == 0:
-                continue
-            if rs.ObjectColorSource(obj_id, 0) is not None:
-                changed.append((obj_id, prev_source))
-        except Exception:
-            continue
-    return changed
-
-
-def _restore_object_color_sources(changed_items):
-    for obj_id, source in changed_items:
-        try:
-            if rs.IsObject(obj_id):
-                rs.ObjectColorSource(obj_id, source)
-        except Exception:
-            continue
-
-
 def _save_bitmap(bitmap, out_path):
     """Save a bitmap to disk as PNG."""
     if not out_path:
@@ -509,25 +351,35 @@ def render_normal(rhino_view, out_path=None, width=None, height=None, max_length
 
 def render_mask(rhino_view, out_path=None, width=None, height=None, max_length=None):
     """
-    Render an object mask pass using plugin-based base-color capture only.
+    Render an object mask pass using the RhinoChannels plugin command.
     """
     rs.CurrentView(rhino_view.ActiveViewport.Name)
     viewport = rhino_view.ActiveViewport
     prev_mode = viewport.DisplayMode
     prev_grid = getattr(viewport, "ConstructionGridVisible", None)
     prev_cplane = getattr(viewport, "ConstructionPlaneVisible", None)
+    prev_caxes = getattr(viewport, "ConstructionAxesVisible", None)
+    prev_waxes = getattr(viewport, "WorldAxesVisible", None)
+    prev_wallpaper_file = getattr(viewport, "WallpaperFilename", "")
 
     if prev_grid is not None:
         viewport.ConstructionGridVisible = False
     if prev_cplane is not None:
         viewport.ConstructionPlaneVisible = False
+    if prev_caxes is not None:
+        viewport.ConstructionAxesVisible = False
+    if prev_waxes is not None:
+        viewport.WorldAxesVisible = False
+    try:
+        viewport.SetWallpaper("", False)
+    except Exception:
+        pass
     capture_width, capture_height = _resolve_capture_size(
         rhino_view=rhino_view,
         width=width,
         height=height,
         max_length=max_length,
     )
-    changed_sources = _force_visible_objects_color_by_layer()
     try:
         try:
             return _capture_mask_basecolor_to_file(
@@ -541,7 +393,6 @@ def render_mask(rhino_view, out_path=None, width=None, height=None, max_length=N
             print(f"ERROR: {msg}")
             raise RuntimeError(msg) from exc
     finally:
-        _restore_object_color_sources(changed_sources)
         if prev_grid is not None:
             try:
                 viewport.ConstructionGridVisible = prev_grid
@@ -552,6 +403,20 @@ def render_mask(rhino_view, out_path=None, width=None, height=None, max_length=N
                 viewport.ConstructionPlaneVisible = prev_cplane
             except Exception:
                 pass
+        if prev_caxes is not None:
+            try:
+                viewport.ConstructionAxesVisible = prev_caxes
+            except Exception:
+                pass
+        if prev_waxes is not None:
+            try:
+                viewport.WorldAxesVisible = prev_waxes
+            except Exception:
+                pass
+        try:
+            viewport.SetWallpaper(prev_wallpaper_file, False)
+        except Exception:
+            pass
         viewport.DisplayMode = prev_mode
         rhino_view.Redraw()
 

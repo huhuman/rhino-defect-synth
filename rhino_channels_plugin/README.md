@@ -2,7 +2,7 @@ Rhino Channels Plugin
 
 This plugin provides:
 - `CaptureRenderChannels` for writing linear depth/normal PFM files.
-- `CaptureBaseColorMask` for writing a quantized base-color PNG mask (no gradient edge colors).
+- `CaptureBaseColorMask` for writing a conduit-driven flat-color PNG mask.
 
 Build
 1) Set `RhinoCommonPath` in `rhino_channels_plugin/RhinoChannelsPlugin.csproj` to your RhinoCommon.dll.
@@ -36,7 +36,7 @@ Usage (from Python)
 
 Notes
 - `CaptureRenderChannels` captures from the current viewport using `ZBufferCapture` and world-point-derived normals.
-- `CaptureBaseColorMask` uses `ZBufferCapture` only (no `ViewCapture`) to build a hard-edge mask: it compares full-scene depth points against per-layer depth points and writes each visible pixel as that layer's color.
+- `CaptureBaseColorMask` uses a custom `DisplayConduit` to clear the framebuffer to white, cull the regular scene draw, and redraw visible objects with per-layer flat colors before saving the bitmap.
 - These commands do not invoke the offline render engine, so they should return quickly and avoid long `Processing geometry table` waits.
 
 The Python pipeline calls this command from `utils_loc/outputs.py`.
