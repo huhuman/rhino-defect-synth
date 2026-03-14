@@ -65,7 +65,6 @@ preparation:
       "Concrete023_2K-PNG",
       "Concrete024_2K-PNG",
       "Concrete025_2K-PNG",
-      "Concrete026_2K-PNG",
       "Concrete027_2K-PNG",
       "Concrete028_2K-PNG",
       "Concrete029_2K-PNG",
@@ -218,6 +217,24 @@ preparation:
       "Leaking009_2K-PNG"
     ]
     "defect::efflore::CS3": *defect_efflore_materials
+    "defect::efflore::CS3::inner": *defect_efflore_materials
+    "defect::efflore::CS3::outer": [
+      "imperfection_0006_color_2k",
+      "decals_0001_color_2k",
+      "SurfaceImperfections011_2K-PNG",
+      "GrungeWall01_2K",
+      "GrungeWall02_2K",
+      "GrungeWall03_2K",
+      "Leaking001_2K-PNG",
+      "Leaking002_2K-PNG",
+      "Leaking003_2K-PNG",
+      "Leaking004_2K-PNG",
+      "Leaking005_2K-PNG",
+      "Leaking006_2K-PNG",
+      "Leaking007_2K-PNG",
+      "Leaking008_2K-PNG",
+      "Leaking009_2K-PNG"
+    ]
     "defect::spalling::CS2": &defect_spalling_materials [
       "Conc dark gray",
       "Concrete dark",
@@ -327,6 +344,8 @@ preparation:
     "defect::crack::CS3": OrangeRed
     "defect::efflore::CS2": LightSkyBlue
     "defect::efflore::CS3": DeepSkyBlue
+    "defect::efflore::CS3::inner": LightSkyBlue
+    "defect::efflore::CS3::outer": DeepSkyBlue
     "defect::spalling::CS2": Gold
     "defect::spalling::CS3": DarkOrange
     "defect::exposed_rebar::CS2": Silver

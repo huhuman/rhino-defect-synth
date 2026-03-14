@@ -263,6 +263,16 @@ def _resolve_polygon_path_from_row(row):
     return _resolve_path_with_base(polygon_path, base_dir=base_dir)
 
 
+def _resolve_expand_polygon_path_from_row(row):
+    polygon_path = _resolve_polygon_path_from_row(row)
+    if not polygon_path:
+        return None
+    root, ext = os.path.splitext(str(polygon_path))
+    if root.endswith("_expand"):
+        return os.path.abspath(root + ext)
+    return os.path.abspath(root + "_expand.json")
+
+
 def _polygon_area(points):
     pts = [tuple(point) for point in points or []]
     if len(pts) < 3:
@@ -339,6 +349,36 @@ def _polygon_centroid(points):
         cx += (x0 + x1) * cross
         cy += (y0 + y1) * cross
     return cx * factor, cy * factor
+
+
+def _scale_payload_polygons(payload, metric_scale):
+    polygons = []
+    for poly in (payload or {}).get("polygons") or []:
+        centered = _center_polygon(poly, payload["width_px"], payload["height_px"])
+        scaled = _scale_polygon(centered, metric_scale)
+        if len(scaled) >= 3:
+            polygons.append(scaled)
+    polygons.sort(key=lambda pts: abs(_polygon_area(pts)), reverse=True)
+    return polygons
+
+
+def _resolve_efflore_polygons(polygons, expand_polygons=None):
+    candidates = [list(poly) for poly in (polygons or []) if len(poly) >= 3]
+    if not candidates:
+        return [], None
+
+    candidates.sort(key=lambda pts: abs(_polygon_area(pts)), reverse=True)
+    inner_poly = list(candidates[0])
+
+    expand_candidates = [list(poly) for poly in (expand_polygons or []) if len(poly) >= 3]
+    if not expand_candidates:
+        return inner_poly, None
+
+    expand_candidates.sort(key=lambda pts: abs(_polygon_area(pts)), reverse=True)
+    outer_poly = list(expand_candidates[0])
+    if not outer_poly:
+        return inner_poly, None
+    return inner_poly, outer_poly
 
 
 def _shape_radius_from_polygons(polygons):
@@ -638,16 +678,10 @@ def _build_shape_from_overview_row(defect_type, row, defect_cfg, rng, target_pro
     target_metric_cm = max(1e-6, _to_float(target_profile.get("target_metric_cm"), 1.0))
     metric_scale = target_metric_cm / metric_px
 
-    centered_polygons = []
-    for poly in payload["polygons"]:
-        centered = _center_polygon(poly, payload["width_px"], payload["height_px"])
-        scaled = _scale_polygon(centered, metric_scale)
-        if len(scaled) >= 3:
-            centered_polygons.append(scaled)
+    centered_polygons = _scale_payload_polygons(payload, metric_scale)
     if not centered_polygons:
         return None
 
-    centered_polygons.sort(key=lambda pts: abs(_polygon_area(pts)), reverse=True)
     primary = centered_polygons[0]
     secondary = centered_polygons[1] if len(centered_polygons) > 1 else None
 
@@ -697,18 +731,31 @@ def _build_shape_from_overview_row(defect_type, row, defect_cfg, rng, target_pro
             }
         )
     elif defect_type == "efflore":
-        inner_poly = list(secondary) if secondary else list(primary)
-        outer_poly = list(primary) if secondary else None
+        outer_payload = None
+        outer_polygons = []
+        sampled_cs = _normalize_condition_state(target_profile.get("condition_state"), default="CS2")
+        if sampled_cs == "CS3":
+            outer_payload = _load_polygon_payload(_resolve_expand_polygon_path_from_row(row))
+            if outer_payload is not None:
+                outer_polygons = _scale_payload_polygons(outer_payload, metric_scale)
+        inner_poly, outer_poly = _resolve_efflore_polygons(centered_polygons, expand_polygons=outer_polygons)
+        secondary_poly = list(outer_poly) if outer_poly else None
         shape.update(
             {
                 "offset_poly": list(inner_poly),
                 "base_poly": list(inner_poly),
                 "efflore_inner_poly": inner_poly,
                 "efflore_outer_poly": outer_poly,
+                "efflore_outer_polygons": [list(poly) for poly in outer_polygons],
+                "efflore_outer_source_file": (outer_payload or {}).get("path"),
+                "secondary_poly": secondary_poly,
             }
         )
 
-    shape["shape_radius"] = _shape_radius_from_polygons(centered_polygons)
+    shape_radius_polygons = list(centered_polygons)
+    if defect_type == "efflore":
+        shape_radius_polygons.extend(shape.get("efflore_outer_polygons") or [])
+    shape["shape_radius"] = _shape_radius_from_polygons(shape_radius_polygons)
     return shape
 
 
@@ -2037,11 +2084,6 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
 
     inner_2d = shape.get("efflore_inner_poly") or shape.get("offset_poly") or shape.get("base_poly") or []
     outer_2d = shape.get("efflore_outer_poly")
-    if not outer_2d:
-        polys = list(shape.get("polygons") or [])
-        if len(polys) >= 2:
-            outer_2d = polys[0]
-            inner_2d = polys[1]
     if not inner_2d:
         return None
 
@@ -2049,22 +2091,22 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
         offset = float(distance)
         return [_add(_vec3(pt), _scale(outward_normal, offset)) for pt in (polygon_points or [])]
 
-    def _extrude_polygon_through_surface(polygon_points, thickness):
+    def _create_extrusion_volume(polygon_points, thickness):
         curve_id = _add_polyline(polygon_points)
         if not curve_id:
-            return {"all": [], "top": [], "side": [], "bottom": []}
+            return []
         try:
             depth = max(1e-4, float(thickness))
             start = rs.CurveStartPoint(curve_id)
             if not start:
-                return {"all": [], "top": [], "side": [], "bottom": []}
+                return []
             start_pt = _vec3(start)
             # Extrude along -normal so the volume intersects host surface and avoids visible seams.
             end_pt = _add(start_pt, _scale(outward_normal, -3.0 * depth))
             extrusion = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
             extrusion_ids = _coerce_ids([extrusion])
             if not extrusion_ids:
-                return {"all": [], "top": [], "side": [], "bottom": []}
+                return []
 
             # Prefer capping in-place so the returned geometry keeps the original polygon face.
             capped = False
@@ -2090,11 +2132,40 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
                     if end_curve_id and rs.IsObject(end_curve_id):
                         rs.DeleteObject(end_curve_id)
 
-            face_ids = _explode_to_surface_faces(geometry_ids)
-            return _split_surfaces_by_normal(face_ids, outward_normal)
+                try:
+                    joined_ids = _coerce_ids(rs.JoinSurfaces(geometry_ids, delete_input=True) or [])
+                except Exception:
+                    joined_ids = []
+                if joined_ids:
+                    geometry_ids = joined_ids
+
+            return _coerce_ids(geometry_ids)
         finally:
             if rs.IsObject(curve_id):
                 rs.DeleteObject(curve_id)
+
+    def _split_extrusion_volume(volume_ids):
+        face_ids = _explode_to_surface_faces(volume_ids)
+        return _split_surfaces_by_normal(face_ids, outward_normal)
+
+    def _subtract_extrusion_volume(target_ids, cutter_ids):
+        target_ids = _coerce_ids(target_ids)
+        cutter_ids = _coerce_ids(cutter_ids)
+        if not target_ids:
+            return [], False
+        if not cutter_ids:
+            return target_ids, False
+
+        try:
+            diff_ids = _coerce_ids(rs.BooleanDifference(target_ids, cutter_ids, delete_input=False) or [])
+        except Exception:
+            diff_ids = []
+        if diff_ids:
+            _delete_objects(target_ids + cutter_ids)
+            return diff_ids, True
+
+        _delete_objects(cutter_ids)
+        return target_ids, False
 
     inner_polygon = _project_points_to_surface(
         inner_2d,
@@ -2128,29 +2199,31 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
     cs_level = sampled_cs
 
     inner_lifted_polygon = _offset_polygon_along_normal(inner_polygon, thickness)
-    inner_split = _extrude_polygon_through_surface(inner_lifted_polygon, thickness)
+    inner_split = _split_extrusion_volume(_create_extrusion_volume(inner_lifted_polygon, thickness))
     inner_geometry = _coerce_ids(inner_split.get("all") or [])
     inner_top_geometry = _coerce_ids(inner_split.get("top") or [])
     inner_side_geometry = _coerce_ids((inner_split.get("side") or []) + (inner_split.get("bottom") or []))
     _orient_surfaces_to_normal(inner_geometry, outward_normal)
 
-    inner_top_layer = _geometry_layer_for_condition(layer_map, "efflore", cs_level, part="top")
-    inner_side_layer = _geometry_layer_for_condition(layer_map, "efflore", cs_level, part="side")
-    _assign_layer(inner_top_geometry, inner_top_layer)
-    _assign_layer(inner_side_geometry, inner_side_layer)
+    inner_layer = _geometry_layer_for_condition(layer_map, "efflore", cs_level, part="inner")
+    _assign_layer(inner_geometry, inner_layer)
 
     outer_geometry = []
     outer_top_geometry = []
     outer_side_geometry = []
+    outer_cut_applied = False
     if has_outer:
         outer_lifted_polygon = _offset_polygon_along_normal(outer_polygon, thickness)
-        outer_split = _extrude_polygon_through_surface(outer_lifted_polygon, thickness)
+        outer_volume = _create_extrusion_volume(outer_lifted_polygon, thickness)
+        outer_cutter = _create_extrusion_volume(inner_lifted_polygon, thickness)
+        outer_ring_volume, outer_cut_applied = _subtract_extrusion_volume(outer_volume, outer_cutter)
+        outer_split = _split_extrusion_volume(outer_ring_volume)
         outer_geometry = _coerce_ids(outer_split.get("all") or [])
         outer_top_geometry = _coerce_ids(outer_split.get("top") or [])
         outer_side_geometry = _coerce_ids((outer_split.get("side") or []) + (outer_split.get("bottom") or []))
         _orient_surfaces_to_normal(outer_geometry, outward_normal)
-        _assign_layer(outer_top_geometry, inner_top_layer)
-        _assign_layer(outer_side_geometry, inner_side_layer)
+        outer_layer = _geometry_layer_for_condition(layer_map, "efflore", cs_level, part="outer")
+        _assign_layer(outer_geometry, outer_layer)
 
     geometry_ids = _coerce_ids(inner_geometry + outer_geometry)
     if not geometry_ids:
@@ -2179,7 +2252,9 @@ def _model_efflore_instance(candidate, shape, transform, cfg, layer_map, rng, de
         "side_face_count": int(len(inner_side_geometry) + len(outer_side_geometry)),
         "mask_uses_outer": False,
         "uses_expand_polygon": bool(uses_expand_polygon),
+        "outer_cut_inner": bool(outer_cut_applied),
     }
+    record["efflore_outer_source_file"] = shape.get("efflore_outer_source_file")
     _attach_normal_debug(record, "efflore", candidate, debug_cfg)
     return record
 

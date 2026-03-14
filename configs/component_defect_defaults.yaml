@@ -43,6 +43,8 @@ modeling:
         crack_cs3: "defect::crack::CS3"
         efflore_cs2: "defect::efflore::CS2"
         efflore_cs3: "defect::efflore::CS3"
+        efflore_cs3_inner: "defect::efflore::CS3::inner"
+        efflore_cs3_outer: "defect::efflore::CS3::outer"
         spall_cs2: "defect::spalling::CS2"
         spall_cs3: "defect::spalling::CS3"
         exposed_rebar_cs2: "defect::exposed_rebar::CS2"
