@@ -7,18 +7,20 @@ from datetime import datetime
 import rhinoscriptsyntax as rs
 
 from utils_loc.crack_modeling import create_crack
-from utils_loc.materials import choose_and_import_layer_materials
+from utils_loc.materials import choose_and_import_layer_materials_with_metadata
 from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
 from utils_loc.component_modeling import create_bridge_component
 from utils_loc.defect_placement import apply_defect_pipeline, get_active_defect_requests
 from utils_loc.plugin_autoload import ensure_plugin_commands
+from utils_loc.texture_mapping import apply_component_texture_mapping
 
 import importlib
 render = importlib.import_module("utils_loc.render")
 render_demo = importlib.import_module("utils_loc.render_demo")
 
 _LAST_MODEL_RESULT = None
+_LAST_PREPARATION_LAYER_METADATA = {}
 
 
 def _normalize_optional_path(path):
@@ -145,6 +147,8 @@ def prepare(params=None):
     """
     params = dict(params or {})
     import_materials = bool(params.pop("_import_materials", True))
+    global _LAST_PREPARATION_LAYER_METADATA
+    _LAST_PREPARATION_LAYER_METADATA = {}
     plugin_autoload_cfg = params.get("plugin_autoload")
     print("Preparation plugin autoload: checking configuration...")
     ensure_plugin_commands(plugin_autoload_cfg)
@@ -156,9 +160,10 @@ def prepare(params=None):
     builtin_cfg = params.get("builtin_material_library", {}) or {}
 
     selected_materials = {}
+    selected_material_metadata = {}
     if import_materials:
         # Materials: pick one available option per layer, then import only selected ones.
-        selected_materials = choose_and_import_layer_materials(
+        selected_materials, selected_material_metadata = choose_and_import_layer_materials_with_metadata(
             layer_material_choices=material_choices,
             rng_seed=params.get("seed"),
             texture_root_dir=texture_materials.get("texture_root_dir"),
@@ -178,6 +183,8 @@ def prepare(params=None):
             )
     else:
         print("Preparation layer materials: skipped import for modeling-only pass.")
+
+    _LAST_PREPARATION_LAYER_METADATA = dict(selected_material_metadata or {})
 
     # Layers
     create_layers(
@@ -264,6 +271,21 @@ def create_model(params):
                     summary.get("efflore", 0),
                     summary.get("spalling", 0),
                     summary.get("exposed_rebar", 0),
+                )
+            )
+        texture_mapping_result = apply_component_texture_mapping(
+            component_cfg=component_cfg,
+            layer_material_metadata=_LAST_PREPARATION_LAYER_METADATA,
+        )
+        result["texture_mapping"] = texture_mapping_result
+        if texture_mapping_result.get("enabled"):
+            print(
+                "-------- Component Texture Mapping ------- "
+                "(applied: {}, surfaces: {}, solids: {}, skipped: {})".format(
+                    texture_mapping_result.get("applied", 0),
+                    texture_mapping_result.get("surface_objects", 0),
+                    texture_mapping_result.get("solid_objects", 0),
+                    texture_mapping_result.get("skipped", 0),
                 )
             )
         print(

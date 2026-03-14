@@ -1,5 +1,6 @@
 #! python3
 import Rhino
+import System
 import scriptcontext as sc
 import rhinoscriptsyntax as rs
 import os
@@ -682,7 +683,30 @@ def ensure_selected_layer_materials(layer_material_selection):
     return resolved
 
 
-def choose_and_import_layer_materials(
+def _get_image_dimensions(image_path):
+    path = os.path.abspath(os.path.expanduser(str(image_path or "")))
+    if not path or not os.path.isfile(path):
+        return None, None
+
+    image = None
+    try:
+        image = System.Drawing.Image.FromFile(path)
+        width = int(getattr(image, "Width", 0) or 0)
+        height = int(getattr(image, "Height", 0) or 0)
+        if width > 0 and height > 0:
+            return width, height
+    except Exception:
+        pass
+    finally:
+        if image is not None:
+            try:
+                image.Dispose()
+            except Exception:
+                pass
+    return None, None
+
+
+def choose_and_import_layer_materials_with_metadata(
     layer_material_choices,
     rng_seed=None,
     texture_root_dir=None,
@@ -702,7 +726,48 @@ def choose_and_import_layer_materials(
         builtin_subcategory2=builtin_subcategory2,
         material_search_paths=material_search_paths,
     )
-    return ensure_selected_layer_materials(selected)
+
+    resolved = ensure_selected_layer_materials(selected)
+    metadata = {}
+    for layer_name, selection in selected.items():
+        item = dict(selection or {})
+        resolved_name = resolved.get(layer_name)
+        if resolved_name:
+            item["resolved_material_name"] = resolved_name
+
+        if item.get("source") == "texture_seed":
+            width, height = _get_image_dimensions(item.get("path"))
+            if width and height:
+                item["texture_width"] = width
+                item["texture_height"] = height
+                item["texture_aspect_ratio"] = float(width) / float(height)
+
+        metadata[str(layer_name)] = item
+
+    return resolved, metadata
+
+
+def choose_and_import_layer_materials(
+    layer_material_choices,
+    rng_seed=None,
+    texture_root_dir=None,
+    texture_recursive=True,
+    builtin_category=_DEFAULT_BUILTIN_CATEGORY,
+    builtin_subcategory1=_DEFAULT_BUILTIN_SUBCATEGORY1,
+    builtin_subcategory2=_DEFAULT_BUILTIN_SUBCATEGORY2,
+    material_search_paths=None,
+):
+    resolved, _ = choose_and_import_layer_materials_with_metadata(
+        layer_material_choices=layer_material_choices,
+        rng_seed=rng_seed,
+        texture_root_dir=texture_root_dir,
+        texture_recursive=texture_recursive,
+        builtin_category=builtin_category,
+        builtin_subcategory1=builtin_subcategory1,
+        builtin_subcategory2=builtin_subcategory2,
+        material_search_paths=material_search_paths,
+    )
+    return resolved
 
 
 def _build_image_index(texture_dir):

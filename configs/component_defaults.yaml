@@ -5,6 +5,14 @@ modeling:
     delete_centerline_curve: true
     convert_polygons_to_surfaces: true
     keep_polygon_curves: false
+    texture_mapping:
+      enabled: true
+      preserve_aspect_ratio: true
+      world_size_v: 100.0
+      world_size_z: 100.0
+      world_size_u: null
+      aspect_ratio_fallback: 1.0
+      texture_channel: 1
     centerline:
       span: 2133.6
       num_base_pts: 3
