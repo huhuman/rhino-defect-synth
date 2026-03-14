@@ -522,7 +522,7 @@ def _sample_crack_profile(defect_cfg, rng):
     elif cs_level == "CS2":
         width_cm = _uniform_sample(rng, t1, t2)
     else:
-        width_cm = _uniform_sample(rng, t2, 5.0 * t2)
+        width_cm = _uniform_sample(rng, t2, 20.0 * t2)
     return {
         "condition_state": cs_level,
         "target_metric_cm": max(1e-6, float(width_cm)),
@@ -1516,17 +1516,119 @@ def _select_crack_surface_cut_points(shape, crack_polys, default_points=None):
         return list(diff_candidates[0])
 
     base_poly = shape.get("base_poly") or []
-    offset_poly = shape.get("offset_poly") or []
-    if len(base_poly) >= 3 and len(offset_poly) >= 3:
-        base_key = (abs(_polygon_area(base_poly)), _polygon_perimeter(base_poly))
-        offset_key = (abs(_polygon_area(offset_poly)), _polygon_perimeter(offset_poly))
-        return list(base_poly if base_key <= offset_key else offset_poly)
     if len(base_poly) >= 3:
         return list(base_poly)
+
+    offset_poly = shape.get("offset_poly") or []
     if len(offset_poly) >= 3:
         return list(offset_poly)
 
     return list(default_points or [])
+
+
+def _resolve_record_surface_cut_polygons(record):
+    polygons = []
+    for polygon in (record or {}).get("surface_cut_polygons") or []:
+        pts = [list(_vec3(pt)) for pt in _ensure_closed(polygon or [])]
+        if len(pts) >= 4:
+            polygons.append(pts)
+    if polygons:
+        return polygons
+
+    polygon = (record or {}).get("surface_cut_polygon") or []
+    pts = [list(_vec3(pt)) for pt in _ensure_closed(polygon)]
+    if len(pts) >= 4:
+        return [pts]
+    return []
+
+
+def _object_key(value):
+    text = str(value or "").strip()
+    return text.lower() if text else ""
+
+
+def _surface_point_distance(surface_id, point):
+    if not surface_id or not rs.IsObject(surface_id) or not rs.IsSurface(surface_id):
+        return None
+    point_3d = _try_vec3(point)
+    if point_3d is None:
+        return None
+    try:
+        uv = rs.SurfaceClosestPoint(surface_id, point_3d)
+    except Exception:
+        uv = None
+    if not uv:
+        return None
+    try:
+        surface_point = rs.EvaluateSurface(surface_id, uv[0], uv[1])
+    except Exception:
+        surface_point = None
+    if surface_point is None:
+        return None
+    return _distance(surface_point, point_3d)
+
+
+def _surface_normal_alignment(surface_id, point, normal):
+    if not surface_id or not rs.IsObject(surface_id) or not rs.IsSurface(surface_id):
+        return 0.0
+    point_3d = _try_vec3(point)
+    normal_3d = _try_vec3(normal)
+    if point_3d is None or normal_3d is None:
+        return 0.0
+    try:
+        uv = rs.SurfaceClosestPoint(surface_id, point_3d)
+    except Exception:
+        uv = None
+    if not uv:
+        return 0.0
+    try:
+        surface_normal = rs.SurfaceNormal(surface_id, uv)
+    except Exception:
+        surface_normal = None
+    if surface_normal is None:
+        return 0.0
+    return abs(_dot(_unit(surface_normal, fallback=normal_3d), _unit(normal_3d, fallback=surface_normal)))
+
+
+def _resolve_surface_subtraction_target(record, target_by_key, by_layer_surfaces):
+    target_id = target_by_key.get(_object_key(record.get("surface_id")))
+    if target_id and rs.IsObject(target_id):
+        return target_id
+
+    layer_name = str(record.get("surface_layer") or "")
+    candidates = [sid for sid in by_layer_surfaces.get(layer_name, []) if rs.IsObject(sid)]
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    point = _try_vec3(record.get("point"))
+    if point is None:
+        return candidates[0]
+
+    normal = _try_vec3(record.get("normal")) or (0.0, 0.0, 1.0)
+    best_id = None
+    best_score = None
+    for sid in candidates:
+        on_surface = False
+        try:
+            on_surface = bool(rs.IsPointOnSurface(sid, point))
+        except Exception:
+            on_surface = False
+        distance = _surface_point_distance(sid, point)
+        if distance is None:
+            distance = float("inf")
+        alignment = _surface_normal_alignment(sid, point, normal)
+        score = (
+            1 if on_surface else 0,
+            alignment,
+            -distance,
+        )
+        if best_score is None or score > best_score:
+            best_id = sid
+            best_score = score
+
+    return best_id
 
 
 def _create_seed_marker(candidate, layer_name, radius_coef=0.04375, min_radius=0.625, axis_scale=1.6):
@@ -1817,6 +1919,11 @@ def _split_surfaces_by_normal(surface_ids, normal, min_parallel_dot=0.93):
 def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debug_cfg=None):
     offset_2d, base_2d, crack_2d, inside_2d, diff_2d = _pick_shape_points(shape)
     cut_2d = _select_crack_surface_cut_points(shape, crack_2d, default_points=base_2d or offset_2d)
+    surface_cut_polygons = [
+        _project_points_to_surface(points, candidate, transform["angle_deg"], normal_offset=0.0)
+        for points in crack_2d
+        if len(points) >= 3
+    ]
     offset_3d = _project_points_to_surface(offset_2d, candidate, transform["angle_deg"], transform["normal_offset"])
     base_3d = _project_points_to_surface(base_2d, candidate, transform["angle_deg"], transform["normal_offset"])
     surface_cut_polygon = _project_points_to_surface(
@@ -1906,6 +2013,11 @@ def _model_crack_instance(candidate, shape, transform, cfg, layer_map, rng, debu
     record["geometry_ids"] = _as_strings(crack_geometry)
     record["mask_ids"] = []
     record["surface_cut_polygon"] = [list(_vec3(pt)) for pt in _ensure_closed(surface_cut_polygon)]
+    record["surface_cut_polygons"] = [
+        [list(_vec3(pt)) for pt in _ensure_closed(polygon)]
+        for polygon in surface_cut_polygons
+        if len(polygon) >= 4
+    ]
     record["crack_metrics"] = {
         "d1": crack_created.get("d1"),
         "d2": crack_created.get("d2"),
@@ -2783,6 +2895,7 @@ def _json_ready_records(records):
     for idx, record in enumerate(records):
         item = dict(record)
         item.pop("surface_cut_polygon", None)
+        item.pop("surface_cut_polygons", None)
         item["instance_index"] = idx
         ready.append(item)
     return ready
@@ -2791,11 +2904,11 @@ def _json_ready_records(records):
 def _apply_surface_group_subtractions(records, cfg, model_result):
     records = list(records or [])
     if not records:
-        return {"groups": 0, "cutters": 0, "targets": 0}
+        return {"groups": 0, "cutters": 0, "targets": 0, "resolved_records": 0, "skipped_records": 0}
 
     source_ids = _collect_object_ids(model_result)
     if not source_ids:
-        return {"groups": 0, "cutters": 0, "targets": 0}
+        return {"groups": 0, "cutters": 0, "targets": 0, "resolved_records": 0, "skipped_records": 0}
 
     target_surfaces = get_surfaces(
         object_ids=source_ids,
@@ -2804,10 +2917,12 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
         explode_polysurfaces=False,
         keep_input=True,
     )
+    target_by_key = {}
     by_layer_surfaces = {}
     for sid in target_surfaces:
         if not sid or not rs.IsObject(sid):
             continue
+        target_by_key[_object_key(sid)] = sid
         lname = rs.ObjectLayer(sid) or ""
         by_layer_surfaces.setdefault(lname, []).append(sid)
 
@@ -2820,47 +2935,76 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
         ),
     )
 
-    by_layer_records = {}
+    by_target_records = {}
+    skipped_records = 0
     for record in records:
         if record.get("type") not in ("crack", "spalling", "exposed_rebar"):
             continue
-        polygon = record.get("surface_cut_polygon") or []
-        if len(polygon) < 4:
+        polygons = _resolve_record_surface_cut_polygons(record)
+        if not polygons:
             continue
-        layer_name = str(record.get("surface_layer") or "")
-        by_layer_records.setdefault(layer_name, []).append(record)
+        target_id = _resolve_surface_subtraction_target(record, target_by_key, by_layer_surfaces)
+        if not target_id:
+            skipped_records += 1
+            continue
+        target_key = _object_key(target_id)
+        group = by_target_records.get(target_key)
+        if group is None:
+            group = {
+                "target_id": target_id,
+                "layer_name": str(rs.ObjectLayer(target_id) or record.get("surface_layer") or ""),
+                "records": [],
+            }
+            by_target_records[target_key] = group
+        group["records"].append(record)
 
     groups = 0
     cutters = 0
     targets = 0
-    for layer_name, layer_records in by_layer_records.items():
-        target_ids = [sid for sid in by_layer_surfaces.get(layer_name, []) if rs.IsObject(sid)]
+    resolved_records = 0
+    for group in by_target_records.values():
+        target_ids = [group.get("target_id")] if rs.IsObject(group.get("target_id")) else []
         if not target_ids:
             continue
+        layer_name = str(group.get("layer_name") or "")
+        layer_records = list(group.get("records") or [])
+        resolved_records += len(layer_records)
 
         cutter_ids = []
         helper_ids = []
         try:
             for record in layer_records:
-                polygon = record.get("surface_cut_polygon") or []
-                curve_id = _add_polyline(polygon)
-                if not curve_id:
+                polygons = _resolve_record_surface_cut_polygons(record)
+                if not polygons:
                     continue
-                helper_ids.append(curve_id)
-                if normal_extrude_distance > 0.0:
-                    normal_vec = _unit(record.get("normal") or (0.0, 0.0, 1.0), fallback=(0.0, 0.0, 1.0))
-                    offset_span = abs(_to_float(record.get("normal_offset"), 0.0))
-                    extrude_distance = max(normal_extrude_distance, normal_extrude_distance + offset_span)
-                    anchor = _vec3(polygon[0])
-                    start_pt = _add(anchor, _scale(normal_vec, -extrude_distance))
-                    end_pt = _add(anchor, _scale(normal_vec, extrude_distance))
-                    extruded = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
-                    if extruded and rs.IsObject(extruded):
-                        cutter_ids.append(extruded)
+                normal_vec = _unit(record.get("normal") or (0.0, 0.0, 1.0), fallback=(0.0, 0.0, 1.0))
+                offset_span = abs(_to_float(record.get("normal_offset"), 0.0))
+                extrude_distance = max(normal_extrude_distance, normal_extrude_distance + offset_span)
+                for polygon in polygons:
+                    curve_id = _add_polyline(polygon)
+                    if not curve_id:
+                        continue
+                    helper_ids.append(curve_id)
+                    if normal_extrude_distance > 0.0:
+                        anchor = _vec3(polygon[0])
+                        start_pt = _add(anchor, _scale(normal_vec, -extrude_distance))
+                        end_pt = _add(anchor, _scale(normal_vec, extrude_distance))
+                        extruded = rs.ExtrudeCurveStraight(curve_id, start_pt, end_pt)
+                        if extruded and rs.IsObject(extruded):
+                            cutter_obj = extruded
+                            try:
+                                capped = rs.CapPlanarHoles(extruded)
+                            except Exception:
+                                capped = None
+                            if capped and not isinstance(capped, bool) and rs.IsObject(capped):
+                                cutter_obj = capped
+                                if extruded != capped and rs.IsObject(extruded):
+                                    rs.DeleteObject(extruded)
+                            cutter_ids.append(cutter_obj)
+                        else:
+                            cutter_ids.append(curve_id)
                     else:
                         cutter_ids.append(curve_id)
-                else:
-                    cutter_ids.append(curve_id)
             if not cutter_ids:
                 continue
 
@@ -2873,7 +3017,13 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
             _delete_objects(helper_ids)
             _delete_objects(cutter_ids)
 
-    return {"groups": groups, "cutters": cutters, "targets": targets}
+    return {
+        "groups": groups,
+        "cutters": cutters,
+        "targets": targets,
+        "resolved_records": resolved_records,
+        "skipped_records": skipped_records,
+    }
 
 
 def _extract_camera_defects(records):

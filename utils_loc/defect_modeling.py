@@ -5,6 +5,8 @@ import json
 import math
 import os
 
+import Rhino
+import scriptcontext as sc
 import rhinoscriptsyntax as rs
 from utils_loc.defect_shapes import extract_point_sets
 
@@ -95,6 +97,130 @@ def _curve_to_surface_ids(curve_id):
         if srf_id:
             return [srf_id]
     return []
+
+
+def _surface_like_area(obj_id):
+    if not obj_id or not rs.IsObject(obj_id):
+        return 0.0
+
+    try:
+        area_data = rs.SurfaceArea(obj_id)
+    except Exception:
+        area_data = None
+
+    if isinstance(area_data, (list, tuple)) and area_data:
+        try:
+            area = float(area_data[0])
+        except (TypeError, ValueError):
+            area = 0.0
+        if area > 0.0:
+            return area
+    elif isinstance(area_data, (int, float)):
+        area = float(area_data)
+        if area > 0.0:
+            return area
+
+    bbox = rs.BoundingBox(obj_id)
+    if not bbox:
+        return 0.0
+
+    xs = [pt.X for pt in bbox]
+    ys = [pt.Y for pt in bbox]
+    zs = [pt.Z for pt in bbox]
+    lengths = sorted(
+        [
+            max(xs) - min(xs),
+            max(ys) - min(ys),
+            max(zs) - min(zs),
+        ],
+        reverse=True,
+    )
+    if len(lengths) >= 2:
+        return max(0.0, float(lengths[0]) * float(lengths[1]))
+    if lengths:
+        return max(0.0, float(lengths[0]))
+    return 0.0
+
+
+def _keep_largest_piece(piece_ids):
+    valid_ids = [obj_id for obj_id in _dedupe_ids(_as_list(piece_ids)) if obj_id and rs.IsObject(obj_id)]
+    if not valid_ids:
+        return None
+
+    best_id = valid_ids[0]
+    best_area = _surface_like_area(best_id)
+    for obj_id in valid_ids[1:]:
+        area = _surface_like_area(obj_id)
+        if area > best_area:
+            best_id = obj_id
+            best_area = area
+    return best_id
+
+
+def _split_surface_keep_outer(target_id, cutter_ids, delete_input=False):
+    if not target_id or not rs.IsObject(target_id) or not rs.IsSurface(target_id):
+        return None
+
+    cutter_ids = [cid for cid in _dedupe_ids(_as_list(cutter_ids)) if cid and rs.IsObject(cid)]
+    if not cutter_ids:
+        return None
+
+    target_brep = rs.coercebrep(target_id)
+    if not target_brep:
+        return None
+
+    cutter_breps = []
+    for cutter_id in cutter_ids:
+        cutter_brep = rs.coercebrep(cutter_id)
+        if cutter_brep:
+            cutter_breps.append(cutter_brep)
+    if not cutter_breps:
+        return None
+
+    tolerance = getattr(sc.doc, "ModelAbsoluteTolerance", None)
+    if tolerance is None:
+        tolerance = 0.01
+
+    try:
+        split_breps = target_brep.Split(cutter_breps, float(tolerance))
+    except Exception:
+        split_breps = None
+    if not split_breps:
+        return None
+
+    best_brep = None
+    best_area = None
+    for brep in split_breps:
+        amp = None
+        try:
+            amp = Rhino.Geometry.AreaMassProperties.Compute(brep)
+            area = amp.Area if amp else 0.0
+        except Exception:
+            area = 0.0
+        finally:
+            if amp:
+                dispose = getattr(amp, "Dispose", None)
+                if dispose:
+                    dispose()
+        if best_area is None or area > best_area:
+            best_brep = brep
+            best_area = area
+
+    if best_brep is None:
+        return None
+
+    new_id = sc.doc.Objects.AddBrep(best_brep)
+    if not new_id:
+        return None
+
+    layer_name = rs.ObjectLayer(target_id)
+    if layer_name and rs.IsLayer(layer_name):
+        rs.ObjectLayer(new_id, layer_name)
+
+    if delete_input and rs.IsObject(target_id):
+        rs.DeleteObject(target_id)
+
+    return [new_id]
 
 
 def _sample_domain(domain, sample_count, margin):
@@ -622,6 +748,16 @@ def subtract_surface(curves, target_surfaces=None, delete_inputs=False):
         if not rs.IsObject(target):
             continue
 
+        if rs.IsSurface(target):
+            split_result = _split_surface_keep_outer(
+                target,
+                cutter_ids,
+                delete_input=bool(delete_inputs),
+            )
+            if split_result:
+                output_ids.extend(_as_list(split_result))
+                continue
+
         try:
             diff = rs.BooleanDifference(target, cutter_ids, delete_input=False)
         except Exception:
@@ -645,7 +781,21 @@ def subtract_surface(curves, target_surfaces=None, delete_inputs=False):
                 except Exception:
                     split = None
                 if split:
-                    next_pieces.extend(_as_list(split))
+                    split_ids = [sid for sid in _as_list(split) if sid and rs.IsObject(sid)]
+                    if not split_ids:
+                        if rs.IsObject(piece_id):
+                            next_pieces.append(piece_id)
+                        continue
+                    if len(split_ids) <= 1:
+                        next_pieces.extend(split_ids)
+                        continue
+
+                    keep_id = _keep_largest_piece(split_ids)
+                    discard_ids = [sid for sid in split_ids if sid != keep_id and rs.IsObject(sid)]
+                    if delete_inputs and discard_ids:
+                        rs.DeleteObjects(discard_ids)
+                    if keep_id and rs.IsObject(keep_id):
+                        next_pieces.append(keep_id)
                 else:
                     next_pieces.append(piece_id)
             pieces = _dedupe_ids(next_pieces)
