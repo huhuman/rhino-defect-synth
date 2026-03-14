@@ -109,6 +109,13 @@
 | `delete_centerline_curve` | `bool` | 建模後刪除輔助中心線。 | `component_defaults.yaml` | 幾何清理開關。 |
 | `convert_polygons_to_surfaces` | `bool` | 將 polygon 轉 surface。 | `component_defaults.yaml` | 影響輸出物件型別。 |
 | `keep_polygon_curves` | `bool` | 建 surface 後仍保留曲線。 | `component_defaults.yaml` | 偵錯常用。 |
+| `texture_mapping.enabled` | `bool` | 在 component 建模完成後對物件套 Rhino texture mapping。 | `component_defaults.yaml` | 保留 layer 控材質，但避免每個面用預設 UV 硬撐貼圖。 |
+| `texture_mapping.preserve_aspect_ratio` | `bool` | 用被選中的貼圖 bitmap 寬高比推回 `world_size_u`。 | `component_defaults.yaml` | 若拿不到材質圖尺寸，改用 `aspect_ratio_fallback`。 |
+| `texture_mapping.world_size_v` | `float` | planar surface mapping 的世界座標貼圖高度。 | `component_defaults.yaml` | 除非明確指定 `world_size_u`，否則會依比例自動算寬度。 |
+| `texture_mapping.world_size_z` | `float` | 建立 Rhino mapping primitive 時使用的深度區間。 | `component_defaults.yaml` | 通常維持接近 `world_size_v` 即可。 |
+| `texture_mapping.world_size_u` | `float | null` | 可選的世界座標貼圖寬度覆蓋值。 | `component_defaults.yaml` | `null` 代表用 `world_size_v * aspect_ratio` 推算。 |
+| `texture_mapping.aspect_ratio_fallback` | `float` | 無法取得材質貼圖 seed 圖檔尺寸時的寬高比 fallback。 | `component_defaults.yaml` | `1.0` 代表正方形 tile。 |
+| `texture_mapping.texture_channel` | `int` | 寫入物件的 Rhino texture mapping channel。 | `component_defaults.yaml` | 預設 `1`，對應 Rhino 標準 bitmap channel。 |
 | `centerline.*` | mixed | 控制中心線與 station 生成。 | `component_defaults.yaml` | 含 `span/num_base_pts/theta*`。 |
 | `slab.*` | mixed | 控制 slab 尺寸與橫坡。 | `component_defaults.yaml` | |
 | `parapet.*` | mixed | 控制 parapet 是否啟用與剖面尺寸。 | `component_defaults.yaml` | |
@@ -186,6 +193,12 @@
 | `output_basename_prefix` | `string | null` | 命名前綴 fallback。 | 無 | pattern 未設時使用。 |
 | `output_index_offset` | `int` | 輸出索引位移。 | `0` | 批次接續常用。 |
 | `model_iter`, `render_iter` | any | basename pattern 的格式化輸入。 | 無 | 可選。 |
+| `channel.color` | `bool` | 是否輸出 color PNG。 | `true` | `false` 時跳過該 capture。 |
+| `channel.depth` | `bool` | 是否輸出 depth PNG。 | `true` | `false` 時跳過該 capture。 |
+| `channel.normal` | `bool` | 是否輸出 normal PNG。 | `true` | `false` 時跳過該 capture。 |
+| `channel.depth_buffer` | `bool` | 是否輸出 linear depth PFM。 | `true` | `false` 時跳過該 capture。 |
+| `channel.normal_buffer` | `bool` | 是否輸出 linear normal PFM。 | `true` | `false` 時跳過該 capture。 |
+| `channel.mask` | `bool` | 是否輸出 mask PNG。 | `true` | `false` 時跳過該 capture。 |
 | `outputs.scene.only_layers` | `string | list[string]` | color/depth/normal 的 scene 可見白名單。 | 無 | 支援階層匹配。 |
 | `outputs.scene.hide_layers` | `string | list[string]` | color/depth/normal 的 scene 隱藏清單。 | 無 | 在白名單/預設後套用。 |
 | `outputs.mask.only_layers` | `string | list[string]` | mask pass 可見白名單。 | 無 | 設定後只顯示這些層。 |

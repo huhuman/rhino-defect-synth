@@ -110,6 +110,13 @@ Batch runtime flow in `main_cube_batch.py`:
 | `delete_centerline_curve` | `bool` | Deletes helper centerline object after build. | `component_defaults.yaml` | Geometry cleanup toggle. |
 | `convert_polygons_to_surfaces` | `bool` | Converts generated polygons to surfaces. | `component_defaults.yaml` | Affects result object types. |
 | `keep_polygon_curves` | `bool` | Keeps source polyline curves when surfaces are created. | `component_defaults.yaml` | Useful for debug. |
+| `texture_mapping.enabled` | `bool` | Applies Rhino object texture mapping after component modeling. | `component_defaults.yaml` | Keeps layer-driven materials but stops per-face UV fit/stretch. |
+| `texture_mapping.preserve_aspect_ratio` | `bool` | Uses selected texture bitmap width:height to derive `world_size_u`. | `component_defaults.yaml` | When material metadata is unavailable, falls back to `aspect_ratio_fallback`. |
+| `texture_mapping.world_size_v` | `float` | Base world-space tile height for planar surface mapping. | `component_defaults.yaml` | `world_size_u` auto-scales by aspect ratio unless explicitly set. |
+| `texture_mapping.world_size_z` | `float` | Depth interval used when creating Rhino mapping primitives. | `component_defaults.yaml` | Leave near `world_size_v` unless you need a thicker mapping volume. |
+| `texture_mapping.world_size_u` | `float | null` | Optional explicit world-space tile width override. | `component_defaults.yaml` | `null` means derive from `world_size_v * aspect_ratio`. |
+| `texture_mapping.aspect_ratio_fallback` | `float` | Fallback width:height ratio when the selected material has no discoverable texture seed image. | `component_defaults.yaml` | `1.0` keeps square tiling. |
+| `texture_mapping.texture_channel` | `int` | Rhino texture mapping channel written to each object. | `component_defaults.yaml` | Default `1`, matching Rhino's standard bitmap channel. |
 | `centerline.*` | mixed | Controls centerline shape and station generation. | `component_defaults.yaml` | Includes `span`, `num_base_pts`, `theta*`, etc. |
 | `slab.*` | mixed | Controls slab dimensions/slope. | `component_defaults.yaml` | Width/thickness/cross-slope. |
 | `parapet.*` | mixed | Enables and sizes parapet profile. | `component_defaults.yaml` | `enabled` gate + profile dimensions. |
@@ -187,6 +194,12 @@ Batch runtime flow in `main_cube_batch.py`:
 | `output_basename_prefix` | `string | null` | Prefix naming fallback. | none | Used when pattern is unset. |
 | `output_index_offset` | `int` | Adds offset to frame index. | `0` | Useful in batched runs. |
 | `model_iter`, `render_iter` | any | Metadata for basename pattern substitution. | none | Optional. |
+| `channel.color` | `bool` | Enables color PNG capture. | `true` | `false` skips the pass. |
+| `channel.depth` | `bool` | Enables depth PNG capture. | `true` | `false` skips the pass. |
+| `channel.normal` | `bool` | Enables normal PNG capture. | `true` | `false` skips the pass. |
+| `channel.depth_buffer` | `bool` | Enables linear depth PFM capture. | `true` | `false` skips the pass. |
+| `channel.normal_buffer` | `bool` | Enables linear normal PFM capture. | `true` | `false` skips the pass. |
+| `channel.mask` | `bool` | Enables mask PNG capture. | `true` | `false` skips the pass. |
 | `outputs.scene.only_layers` | `string | list[string]` | Scene visibility whitelist for color/depth/normal capture. | none | Hierarchical match supported. |
 | `outputs.scene.hide_layers` | `string | list[string]` | Scene visibility blacklist for color/depth/normal capture. | none | Applied after whitelist/default pass. |
 | `outputs.mask.only_layers` | `string | list[string]` | Mask visibility whitelist. | none | If set, only these layers are visible in mask pass. |
