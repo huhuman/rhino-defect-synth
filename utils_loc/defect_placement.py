@@ -792,6 +792,17 @@ def _coerce_ids(items):
     return ids
 
 
+def _dedupe_ids(items):
+    ordered = []
+    seen = set()
+    for obj_id in _coerce_ids(items):
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+        ordered.append(obj_id)
+    return ordered
+
+
 def _as_strings(ids):
     return [str(obj_id) for obj_id in _coerce_ids(ids)]
 
@@ -1024,6 +1035,215 @@ def _normal_elevation_from_xy_deg(normal):
     return defect_placement_reference.normal_elevation_from_xy_deg(sys.modules[__name__], normal)
 
 
+def _resolve_boundary_limit_for_candidate(defect_cfg, random_cfg, candidate):
+    boundary_margin = _to_float(_resolve_random_value(defect_cfg, random_cfg, "boundary_margin", 0.9), 0.9)
+    boundary_margin = _clamp(boundary_margin, 0.0, 1.0)
+    boundary_dist = _to_optional_float((candidate or {}).get("boundary_dist"))
+    if boundary_dist is None:
+        return None
+    return max(0.0, float(boundary_dist) * float(boundary_margin))
+
+
+def _scale_polygon_2d(points, scale):
+    factor = float(scale)
+    scaled = []
+    for point in points or []:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        scaled.append((float(point[0]) * factor, float(point[1]) * factor))
+    return scaled
+
+
+def _scale_shape_geometry(shape, scale):
+    if not isinstance(shape, dict):
+        return
+    factor = float(scale)
+    if abs(factor - 1.0) <= 1e-12:
+        return
+
+    polygon_keys = (
+        "primary_poly",
+        "secondary_poly",
+        "offset_poly",
+        "base_poly",
+        "spall_poly",
+        "efflore_inner_poly",
+        "efflore_outer_poly",
+    )
+    polygon_list_keys = (
+        "polygons",
+        "crack_polys",
+        "inside_polys",
+        "diff_polys",
+        "efflore_outer_polygons",
+    )
+
+    for key in polygon_keys:
+        value = shape.get(key)
+        if isinstance(value, (list, tuple)) and value and isinstance(value[0], (list, tuple)):
+            shape[key] = _scale_polygon_2d(value, factor)
+
+    for key in polygon_list_keys:
+        value = shape.get(key)
+        if not isinstance(value, (list, tuple)):
+            continue
+        scaled_list = []
+        for polygon in value:
+            if not isinstance(polygon, (list, tuple)):
+                continue
+            scaled_list.append(_scale_polygon_2d(polygon, factor))
+        shape[key] = scaled_list
+
+    radius = _to_optional_float(shape.get("shape_radius"))
+    if radius is not None:
+        shape["shape_radius"] = float(radius) * factor
+
+
+def _resolve_crack_width_thresholds_local(crack_cfg):
+    crack_cfg = crack_cfg or {}
+    t1 = _to_optional_float(crack_cfg.get("t1"))
+    t2 = _to_optional_float(crack_cfg.get("t2"))
+    if t1 is None:
+        t1 = _to_optional_float(crack_cfg.get("cs2_width_cm_threshold"))
+    if t2 is None:
+        t2 = _to_optional_float(crack_cfg.get("cs3_width_cm_threshold"))
+    if t1 is None:
+        t1 = 0.1
+    if t2 is None:
+        t2 = 0.2
+    t1 = max(0.0, float(t1))
+    t2 = max(0.0, float(t2))
+    if t1 > t2:
+        t1, t2 = t2, t1
+    return t1, t2
+
+
+def _sample_crack_profile_for_boundary(defect_cfg, initial_state, max_width_cm, rng):
+    t1, t2 = _resolve_crack_width_thresholds_local(defect_cfg)
+    width_cap = max(0.0, float(max_width_cm))
+    if width_cap <= 1e-9:
+        return None
+
+    ranges = {
+        "CS1": (max(1e-6, 0.5 * t1), max(1e-6, t1)),
+        "CS2": (max(1e-6, t1), max(1e-6, t2)),
+        "CS3": (max(1e-6, t2), max(1e-6, 20.0 * t2)),
+    }
+    state = _normalize_condition_state(initial_state, default="CS3")
+    max_level = {"CS1": 1, "CS2": 2, "CS3": 3}.get(state, 3)
+    for level in range(max_level, 0, -1):
+        cs_level = "CS{}".format(level)
+        lo, hi = ranges[cs_level]
+        hi = min(hi, width_cap)
+        if hi + 1e-9 < lo:
+            continue
+        width_cm = _uniform_sample(rng, lo, hi)
+        return {
+            "condition_state": cs_level,
+            "target_metric_cm": max(1e-6, float(width_cm)),
+            "severity_t1_cm": float(t1),
+            "severity_t2_cm": float(t2),
+        }
+    return None
+
+
+def _sample_spalling_profile_for_boundary(defect_cfg, initial_state, max_diameter_cm, rng):
+    depth_threshold, diameter_threshold = _resolve_spalling_thresholds(defect_cfg)
+    diameter_cap = max(0.0, float(max_diameter_cm))
+    if diameter_cap <= 1e-9:
+        return None
+
+    state = _normalize_condition_state(initial_state, default="CS3")
+    cs_order = ["CS3", "CS2"] if state == "CS3" else ["CS2"]
+    for cs_level in cs_order:
+        if cs_level == "CS2":
+            depth_lo, depth_hi = 0.5 * depth_threshold, depth_threshold
+            dia_lo, dia_hi = 0.5 * diameter_threshold, diameter_threshold
+        else:
+            depth_lo, depth_hi = depth_threshold, 2.0 * depth_threshold
+            dia_lo, dia_hi = diameter_threshold, 2.0 * diameter_threshold
+        dia_hi = min(dia_hi, diameter_cap)
+        if dia_hi + 1e-9 < dia_lo:
+            continue
+        return {
+            "condition_state": cs_level,
+            "target_metric_cm": max(1e-6, float(_uniform_sample(rng, dia_lo, dia_hi))),
+            "target_spall_depth_cm": max(1e-4, float(_uniform_sample(rng, depth_lo, depth_hi))),
+            "depth_threshold": float(depth_threshold),
+            "diameter_threshold": float(diameter_threshold),
+        }
+    return None
+
+
+def _fit_shape_profile_to_candidate(defect_type, shape, defect_cfg, random_cfg, candidate, rng):
+    if not isinstance(shape, dict):
+        return None
+    adapted = copy.deepcopy(shape)
+
+    boundary_limit = _resolve_boundary_limit_for_candidate(defect_cfg, random_cfg, candidate)
+    if boundary_limit is None:
+        return adapted
+
+    shape_radius = _to_optional_float(adapted.get("shape_radius"))
+    if shape_radius is None or shape_radius <= 1e-9:
+        return adapted
+    if boundary_limit <= 1e-9:
+        return None
+    if float(shape_radius) <= float(boundary_limit) + 1e-9:
+        return adapted
+
+    target_metric_cm = _to_optional_float(adapted.get("target_metric_cm"))
+    scale_cap = float(boundary_limit) / float(shape_radius)
+    if scale_cap <= 1e-9:
+        return None
+
+    if target_metric_cm is None or target_metric_cm <= 1e-9:
+        _scale_shape_geometry(adapted, scale_cap)
+        metric_scale = _to_optional_float(adapted.get("metric_scale"))
+        if metric_scale is not None:
+            adapted["metric_scale"] = float(metric_scale) * float(scale_cap)
+        return adapted
+
+    metric_cap = float(target_metric_cm) * float(scale_cap)
+    defect_key = str(defect_type or "").strip().lower()
+    if defect_key == "crack":
+        profile = _sample_crack_profile_for_boundary(defect_cfg, adapted.get("condition_state"), metric_cap, rng)
+    elif defect_key == "spalling":
+        profile = _sample_spalling_profile_for_boundary(defect_cfg, adapted.get("condition_state"), metric_cap, rng)
+    else:
+        profile = {
+            "condition_state": adapted.get("condition_state"),
+            "target_metric_cm": min(float(target_metric_cm), float(metric_cap)),
+        }
+
+    if not isinstance(profile, dict):
+        return None
+    new_metric = _to_optional_float(profile.get("target_metric_cm"))
+    if new_metric is None or new_metric <= 1e-9:
+        return None
+    metric_scale_factor = float(new_metric) / float(target_metric_cm)
+    if metric_scale_factor <= 1e-9:
+        return None
+
+    _scale_shape_geometry(adapted, metric_scale_factor)
+    metric_scale = _to_optional_float(adapted.get("metric_scale"))
+    if metric_scale is not None:
+        adapted["metric_scale"] = float(metric_scale) * float(metric_scale_factor)
+    adapted["target_metric_cm"] = float(new_metric)
+
+    for key in (
+        "condition_state",
+        "target_spall_depth_cm",
+        "depth_threshold",
+        "diameter_threshold",
+        "severity_t1_cm",
+        "severity_t2_cm",
+    ):
+        if key in profile:
+            adapted[key] = profile.get(key)
+    return adapted
+
+
 def _sample_transform(defect_type, defect_cfg, random_cfg, candidate, shape, rng):
     angle_min = _to_float(_resolve_random_value(defect_cfg, random_cfg, "orientation_min_deg", 0.0), 0.0)
     angle_max = _to_float(_resolve_random_value(defect_cfg, random_cfg, "orientation_max_deg", 360.0), 360.0)
@@ -1116,14 +1336,25 @@ def _surface_subtraction_record_priority(record):
 
 
 def _surface_subtraction_discard_points(record, polygons):
-    if _surface_subtraction_strategy(record) != "cavity":
+    if _surface_subtraction_strategy(record) not in ("cavity", "strip"):
         return []
     discard_points = []
+    seed_point = _try_vec3((record or {}).get("point"))
+    if seed_point is not None:
+        discard_points.append(seed_point)
     for polygon in polygons or []:
         sample_point = _polygon_sample_point_3d(polygon)
         if sample_point is not None:
             discard_points.append(sample_point)
-    return discard_points
+    deduped = []
+    seen = set()
+    for point in discard_points:
+        key = _point_key(point, precision=6)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(point)
+    return deduped
 
 
 def _object_key(value):
@@ -1416,12 +1647,11 @@ def _build_instance_records_for_type(
     seed_radius_coef = max(0.0, _to_float(seed_cfg.get("radius_coef"), 0.04375))
     seed_min_radius = max(0.0, _to_float(seed_cfg.get("min_radius"), 0.625))
     seed_axis_scale = max(0.0, _to_float(seed_cfg.get("axis_scale"), 1.6))
-    max_attempts = max(1, _to_int(cfg.get("max_attempts_per_instance"), 40))
     records = []
     used_candidate_keys = used_candidate_keys if used_candidate_keys is not None else set()
 
     for instance_idx in range(count):
-        shape = shapes[instance_idx % len(shapes)]
+        shape_template = shapes[instance_idx % len(shapes)]
         placed = None
         available = [
             candidate for candidate in candidates
@@ -1432,7 +1662,17 @@ def _build_instance_records_for_type(
             break
 
         rng.shuffle(available)
-        for candidate in available[:max_attempts]:
+        for candidate in available:
+            shape = _fit_shape_profile_to_candidate(
+                defect_type,
+                shape_template,
+                defect_cfg,
+                random_cfg,
+                candidate,
+                rng=rng,
+            )
+            if shape is None:
+                continue
             transform = _sample_transform(defect_type, defect_cfg, random_cfg, candidate, shape, rng=rng)
             if transform is None:
                 continue
@@ -1483,7 +1723,7 @@ def _build_instance_records_for_type(
             records.append(placed)
             break
         if placed is None:
-            print("Defect {}: failed to place one instance within attempt budget.".format(defect_type))
+            print("Defect {}: failed to place one instance after evaluating all candidate points.".format(defect_type))
     return records
 
 
@@ -1791,7 +2031,10 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
         "crack": sum(1 for item in json_ready if item.get("type") == "crack"),
         "efflore": sum(1 for item in json_ready if item.get("type") == "efflore"),
         "spalling": sum(1 for item in json_ready if item.get("type") == "spalling"),
-        "exposed_rebar": sum(1 for item in json_ready if item.get("type") == "exposed_rebar"),
+        "exposed_rebar": sum(
+            1 for item in json_ready
+            if item.get("type") == "exposed_rebar" or bool(item.get("rebar_geometry_ids"))
+        ),
     }
 
     payload = {

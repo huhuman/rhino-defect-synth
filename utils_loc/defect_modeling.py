@@ -928,8 +928,12 @@ def subtract_surface(curves, target_surfaces=None, delete_inputs=False, discard_
             continue
         if rs.IsCurve(cid) and rs.IsCurveClosed(cid):
             surfaces = _curve_to_surface_ids(cid)
-            cutter_ids.extend(surfaces)
-            generated_cutters.extend(surfaces)
+            if surfaces:
+                cutter_ids.extend(surfaces)
+                generated_cutters.extend(surfaces)
+            else:
+                # Keep non-planar closed curves as fallback cutters for SplitBrep.
+                cutter_ids.append(cid)
 
     cutter_ids = _dedupe_ids(cutter_ids)
     if not cutter_ids:
