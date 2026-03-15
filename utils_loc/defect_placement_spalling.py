@@ -477,15 +477,7 @@ def model_spalling_instance(runtime, candidate, shape, transform, cfg, layer_map
             rng=rng,
         )
 
-    defect_type = "exposed_rebar" if rebar_ids else "spalling"
-    if rebar_ids:
-        exposed_spall_layer_name = runtime._geometry_layer_for_condition(
-            layer_map,
-            "exposed_rebar",
-            condition_state,
-            part="spalling",
-        )
-        runtime._assign_layer(spall_ids, exposed_spall_layer_name)
+    defect_type = "spalling"
     geometry_ids = runtime._coerce_ids(spall_ids + rebar_ids)
     if not geometry_ids:
         runtime._delete_objects(spall_ids + rebar_ids)
@@ -508,6 +500,7 @@ def model_spalling_instance(runtime, candidate, shape, transform, cfg, layer_map
     if rebar_metrics:
         record["rebar_metrics"] = rebar_metrics
     if rebar_ids:
+        record["has_exposed_rebar"] = True
         record["exposed_rebar_geometry_ids"] = {
             "spalling": runtime._as_strings(spall_ids),
             "rebar": runtime._as_strings(rebar_ids),
