@@ -192,19 +192,21 @@ main_cube_batch.run(
 #### 相機策略：`component`
 - 可直接提供 seed：
   - `camera.component.defects: [{point: [x,y,z], normal: [nx,ny,nz]}, ...]`
-- 或由損害紀錄載入：
-  - `camera.component.defect_record_path`
+- 或自動讀 Rhino 文件 metadata：
   - 可選 `camera.component.defect_types`
 - 抽樣參數：
   - `cameras_per_defect`
-  - `distance_min` / `distance_max`
-  - `normal_jitter_degrees`
-  - `tangent_jitter`
+  - `radius_min` / `radius_max`
+  - 舊版別名：`distance_min` / `distance_max`
   - `target_jitter`
   - 最後額外 jitter：`direction_jitter_degrees`、`position_jitter`、`position_jitter_scale`
+- 打燈參數：
+  - `lighting.defect_lights.enabled`
+  - `lighting.defect_lights.light_type`
+  - `lighting.defect_lights.intensity`
 
 流程行為：
-- 若 `camera.strategy=component` 且 config 未提供 defects/record path，`pipeline.run_render()` 會嘗試自動使用本次 `modeling.defect` 產生的缺陷點。
+- 若 `camera.strategy=component` 且 config 未提供 inline `defects`，render 會直接讀 Rhino 文件 metadata 中快取的缺陷點。
 
 #### Mask 圖層控制
 `rendering.outputs.mask` 支援：

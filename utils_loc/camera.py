@@ -92,6 +92,14 @@ def _random_unit_vector() -> Vec3:
             return _normalize(vec)
 
 
+def _random_hemisphere_direction(normal: Sequence[float]) -> Vec3:
+    """Generate a uniformly random unit vector on the hemisphere facing `normal`."""
+    direction = _random_unit_vector()
+    if _dot(direction, normal) < 0.0:
+        direction = tuple(-float(v) for v in direction)
+    return _normalize(direction)
+
+
 def _jitter_unit_vector(direction: Sequence[float], max_angle_degrees: float) -> Vec3:
     """Perturb a unit direction vector by up to a given angle."""
     base = _normalize(direction)
@@ -272,48 +280,36 @@ def generate_box_camera_spherical(
 def generate_defect_camera_poses(
     defects: Iterable[Mapping[str, Sequence[float]]],
     cameras_per_defect: int = 1,
-    distance_min: float = 1.0,
-    distance_max: float = 2.0,
-    normal_jitter_degrees: float = 10.0,
-    tangent_jitter: float = 0.0,
+    radius_min: float = 1.0,
+    radius_max: float = 2.0,
     target_jitter: float = 0.0,
 ) -> List[Mapping[str, Vec3]]:
     """
-    Generate camera poses around defect points using outward normals.
+    Generate camera poses on the outward-facing hemisphere around each defect.
 
     Args:
         defects: iterable of mappings with `point` and `normal` 3D vectors.
         cameras_per_defect: number of camera samples generated per defect.
-        distance_min: minimum camera distance from defect point along normal.
-        distance_max: maximum camera distance from defect point along normal.
-        normal_jitter_degrees: max angular variation from outward normal.
-        tangent_jitter: max random tangential offset in the surface plane.
+        radius_min: minimum camera radius from the defect center.
+        radius_max: maximum camera radius from the defect center.
         target_jitter: max random target offset around the defect point.
     """
     count_per_defect = max(1, int(cameras_per_defect))
-    d_min = float(distance_min)
-    d_max = float(distance_max)
-    if d_min > d_max:
-        d_min, d_max = d_max, d_min
-    tan_j = max(0.0, float(tangent_jitter))
+    r_min = float(radius_min)
+    r_max = float(radius_max)
+    if r_min > r_max:
+        r_min, r_max = r_max, r_min
     tgt_j = max(0.0, float(target_jitter))
 
     poses = []
-    for defect in defects:
+    for defect_idx, defect in enumerate(defects):
         point = tuple(float(v) for v in defect["point"])
         normal = _normalize(defect["normal"])
-        tangent_u, tangent_v = _orthonormal_basis(normal)
 
         for _ in range(count_per_defect):
-            out_dir = _jitter_unit_vector(normal, normal_jitter_degrees)
-            dist = random.uniform(d_min, d_max)
-            pos = tuple(point[i] + out_dir[i] * dist for i in range(3))
-
-            if tan_j > 0.0:
-                angle = random.uniform(0.0, math.tau)
-                mag = random.uniform(0.0, tan_j)
-                tan_dir = tuple(math.cos(angle) * tangent_u[i] + math.sin(angle) * tangent_v[i] for i in range(3))
-                pos = tuple(pos[i] + tan_dir[i] * mag for i in range(3))
+            out_dir = _random_hemisphere_direction(normal)
+            radius = random.uniform(r_min, r_max)
+            pos = tuple(point[i] + out_dir[i] * radius for i in range(3))
 
             target = point
             if tgt_j > 0.0:
@@ -322,7 +318,18 @@ def generate_defect_camera_poses(
                 target = tuple(point[i] + jitter_dir[i] * jitter_mag for i in range(3))
 
             dir_vec = _normalize(target[i] - pos[i] for i in range(3))
-            poses.append({"position": pos, "target": target, "direction": dir_vec})
+            poses.append(
+                {
+                    "position": pos,
+                    "target": target,
+                    "direction": dir_vec,
+                    "defect_index": defect_idx,
+                    "defect_point": point,
+                    "defect_normal": normal,
+                    "defect_type": defect.get("defect_type"),
+                    "instance_index": defect.get("instance_index"),
+                }
+            )
 
     return poses
 
@@ -356,15 +363,26 @@ def jitter_camera_poses(poses: List[Mapping[str, Vec3]], position_jitter=0.0, di
     for pose in poses:
         pos = pose["position"]
         dir_vec = pose["direction"]
+        target = pose.get("target")
         jittered_pos = tuple(
             float(pos[i]) + (random.uniform(-pos_j, pos_j) if pos_j > 0 else 0.0)
             for i in range(3)
         )
         jittered_dir = jitter_dir(dir_vec)
+        jittered_target = target
+        if target is not None and dir_j > 0:
+            target_distance = math.sqrt(
+                sum((float(target[i]) - float(pos[i])) ** 2 for i in range(3))
+            )
+            target_distance = max(target_distance, 1e-6)
+            jittered_target = tuple(
+                jittered_pos[i] + jittered_dir[i] * target_distance
+                for i in range(3)
+            )
         jittered.append(
             {
                 "position": jittered_pos,
-                "target": pose.get("target"),
+                "target": jittered_target,
                 "direction": jittered_dir,
             }
         )

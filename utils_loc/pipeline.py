@@ -1,8 +1,6 @@
 """Simple entry point orchestrating material, modeling, and rendering steps."""
 
 import json
-import os
-from datetime import datetime
 
 import rhinoscriptsyntax as rs
 
@@ -22,66 +20,6 @@ render_demo = importlib.import_module("utils_loc.render_demo")
 
 _LAST_MODEL_RESULT = None
 _LAST_PREPARATION_LAYER_METADATA = {}
-
-
-def _normalize_optional_path(path):
-    text = str(path or "").strip()
-    if not text or text.lower() in ("none", "null"):
-        return None
-    return os.path.abspath(os.path.expanduser(text))
-
-
-def _resolve_record_output_path(path):
-    target_path = _normalize_optional_path(path)
-    if not target_path:
-        return None
-
-    if os.path.isdir(target_path):
-        output_dir = target_path
-        prefix = "defect_records"
-    else:
-        root, ext = os.path.splitext(target_path)
-        if ext.lower() == ".json":
-            output_dir = os.path.dirname(target_path) or os.getcwd()
-            stem = os.path.basename(root).strip()
-            prefix = stem or "defect_records"
-        else:
-            output_dir = target_path
-            prefix = "defect_records"
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    candidate = os.path.join(output_dir, "{}_{}.json".format(prefix, stamp))
-    suffix = 1
-    while os.path.exists(candidate):
-        candidate = os.path.join(output_dir, "{}_{}_{:02d}.json".format(prefix, stamp, suffix))
-        suffix += 1
-    return candidate
-
-
-def _write_json_atomic(path, payload):
-    if not path:
-        return
-
-    target_path = os.path.abspath(os.path.expanduser(str(path)))
-    if not target_path:
-        return
-
-    parent_dir = os.path.dirname(target_path)
-    if parent_dir:
-        os.makedirs(parent_dir, exist_ok=True)
-
-    tmp_path = target_path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        try:
-            os.fsync(handle.fileno())
-        except Exception:
-            pass
-    os.replace(tmp_path, target_path)
 
 
 def _log_defect_records(defect_result):
@@ -107,18 +45,6 @@ def _log_defect_records(defect_result):
         except Exception:
             record_text = str(record)
         print("Defect record[{}]: {}".format(idx, record_text))
-
-
-def _save_defect_records_if_requested(defect_result, debug_cfg=None):
-    debug_cfg = debug_cfg if isinstance(debug_cfg, dict) else {}
-    save_path = _resolve_record_output_path(debug_cfg.get("save_record_path"))
-    if not save_path:
-        return None
-
-    payload = defect_result if isinstance(defect_result, dict) else {}
-    _write_json_atomic(save_path, payload)
-    print("Defect records saved to '{}'".format(save_path))
-    return save_path
 
 
 def _cache_defect_records_in_document(defect_result):
@@ -273,7 +199,6 @@ def create_model(params):
             result["defect"] = defect_result
             _log_defect_records(defect_result)
             _cache_defect_records_in_document(defect_result)
-            _save_defect_records_if_requested(defect_result, debug_cfg=debug_cfg)
             summary = defect_result.get("summary", {})
             print(
                 "-------- Defect Placement Complete ------- "
@@ -317,20 +242,6 @@ def create_model(params):
 def run_render(params, show_cameras=False):
     """Pipeline render stage."""
     params = dict(params or {})
-    camera_cfg = dict(params.get("camera") or {})
-    if camera_cfg.get("strategy") == "component":
-        component_cfg = dict(camera_cfg.get("component") or {})
-        has_record = bool(component_cfg.get("defect_record_path") or params.get("defect_record_path"))
-        last_defect = (_LAST_MODEL_RESULT or {}).get("defect") or {}
-        if not has_record and last_defect.get("camera_defects"):
-            component_cfg["defects"] = last_defect["camera_defects"]
-            camera_cfg["component"] = component_cfg
-            params["camera"] = camera_cfg
-            print(
-                "Component render: using {} defect seeds from latest modeling result.".format(
-                    len(last_defect.get("camera_defects") or []),
-                )
-            )
 
     render.setup_render_environment(params)
     context = render.build_render_context(params)

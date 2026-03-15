@@ -1,6 +1,5 @@
 modeling:
   debug:
-    save_record_path: none
     defect_normals:
       enabled: false
       layer: "debug::normal"

@@ -192,19 +192,21 @@ Common keys:
 #### Camera strategy: `component`
 - direct seed list:
   - `camera.component.defects: [{point: [x,y,z], normal: [nx,ny,nz]}, ...]`
-- or load from defect records:
-  - `camera.component.defect_record_path`
+- or auto-load from Rhino document metadata:
   - optional `camera.component.defect_types`
 - sampling controls:
   - `cameras_per_defect`
-  - `distance_min` / `distance_max`
-  - `normal_jitter_degrees`
-  - `tangent_jitter`
+  - `radius_min` / `radius_max`
+  - legacy alias: `distance_min` / `distance_max`
   - `target_jitter`
   - optional final jitter: `direction_jitter_degrees`, `position_jitter`, `position_jitter_scale`
+- lighting controls:
+  - `lighting.defect_lights.enabled`
+  - `lighting.defect_lights.light_type`
+  - `lighting.defect_lights.intensity`
 
 Pipeline behavior:
-- If `camera.strategy=component` and config does not provide defects or record path, `pipeline.run_render()` can auto-use defects from the most recent `modeling.defect` result in-memory.
+- If `camera.strategy=component` and config does not provide inline `defects`, rendering reads cached defect seeds from Rhino document metadata.
 
 #### Mask layer controls
 `rendering.outputs.mask` supports:

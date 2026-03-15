@@ -15,17 +15,27 @@ from utils_loc.camera import (
     set_camera,
     sort_poses_topdown_circular,
 )
-from utils_loc.lighting import set_random_wallpaper, set_skylight, setup_sun
-from utils_loc.defect_placement import defects_from_record_payload, load_defect_records
+from utils_loc.lighting import (
+    create_targeted_light,
+    delete_named_lights,
+    random_natural_light_color,
+    set_random_wallpaper,
+    set_skylight,
+    setup_sun,
+)
+from utils_loc.defect_placement import defects_from_record_payload
 from utils_loc.defect_record_store import load_defect_record_payload_from_document
 from utils_loc.outputs import render_all_outputs
 
 CAMERA_GIZMO_LAYER_DEFAULT = "demo_camera_gizmos"
 _COMPONENT_RENDER_LAYER_PREFIXES = ("component", "defect")
+_HELPER_LIGHT_PREFIXES = ("face_light", "defect_light")
 
 
 def _setup_render_environment(params):
     """Set wallpaper and lighting before generating renders."""
+    delete_named_lights(_HELPER_LIGHT_PREFIXES)
+
     if params.get("background_wallpaper_dir"):
         set_random_wallpaper(params["background_wallpaper_dir"])
 
@@ -153,13 +163,6 @@ def _normalize_component_camera_cfg(camera_cfg):
     return dict(component_cfg)
 
 
-def _load_defects_from_record_path(record_path, include_defect_types=None):
-    if not record_path:
-        return []
-    payload = load_defect_records(record_path)
-    return defects_from_record_payload(payload, include_defect_types=include_defect_types)
-
-
 def _load_defects_from_document(include_defect_types=None):
     payload = load_defect_record_payload_from_document()
     if not payload:
@@ -187,43 +190,67 @@ def _normalize_defects(raw_defects):
                 f"Defect entry #{idx} must include both 'point' and 'normal'."
             )
 
-        defects.append(
-            {
-                "point": _coerce_vec3(point_raw, f"defects[{idx}].point"),
-                "normal": _coerce_vec3(normal_raw, f"defects[{idx}].normal"),
-            }
-        )
+        normalized = {
+            "point": _coerce_vec3(point_raw, f"defects[{idx}].point"),
+            "normal": _coerce_vec3(normal_raw, f"defects[{idx}].normal"),
+        }
+        for key, value in defect.items():
+            if key not in ("point", "normal"):
+                normalized[key] = value
+        defects.append(normalized)
 
     return defects
 
 
-def _resolve_component_defects(component_camera_cfg, params):
-    record_path = (
-        component_camera_cfg.get("defect_record_path")
-        or params.get("defect_record_path")
-    )
-    include_defect_types = component_camera_cfg.get("defect_types")
+def _normalize_component_defect_light_cfg(lighting_cfg):
+    cfg_raw = (lighting_cfg or {}).get("defect_lights")
+    if not isinstance(cfg_raw, dict):
+        return {"enabled": False}
+    cfg = dict(cfg_raw)
+    return {
+        "enabled": bool(cfg.get("enabled", True)),
+        "light_type": str(cfg.get("light_type") or "point").strip().lower() or "point",
+        "intensity": float(cfg.get("intensity", 0.5)),
+        "spot_hotspot": float(cfg.get("spot_hotspot", 0.6)),
+        "spot_falloff": float(cfg.get("spot_falloff", 55.0)),
+    }
 
-    if record_path:
-        defects = _normalize_defects(
-            _load_defects_from_record_path(
-                record_path,
-                include_defect_types=include_defect_types,
-            )
-        )
-        if defects:
-            print(
-                "Component render: loaded {} defect seeds from record '{}'.".format(
-                    len(defects),
-                    os.path.abspath(os.path.expanduser(str(record_path))),
-                )
-            )
-            return defects
-        print(
-            "Component render: record '{}' contained no usable defect seeds; falling back to inline config.".format(
-                os.path.abspath(os.path.expanduser(str(record_path))),
-            )
-            )
+
+def _build_component_pose_light(pose, light_cfg):
+    if not light_cfg.get("enabled", False):
+        return None
+    return {
+        "position": tuple(float(v) for v in pose["position"]),
+        "target": tuple(float(v) for v in pose.get("target", pose["position"])),
+        "light_type": light_cfg.get("light_type", "point"),
+        "intensity": float(light_cfg.get("intensity", 0.5)),
+        "color": random_natural_light_color(),
+        "name": "defect_light",
+        "spot_hotspot": float(light_cfg.get("spot_hotspot", 0.6)),
+        "spot_falloff": float(light_cfg.get("spot_falloff", 55.0)),
+    }
+
+
+def _apply_pose_light(pose):
+    light = pose.get("light")
+    if not isinstance(light, dict):
+        return None
+
+    delete_named_lights(light.get("name", "defect_light"))
+    return create_targeted_light(
+        position=light["position"],
+        target=light.get("target"),
+        light_type=light.get("light_type", "point"),
+        intensity=light.get("intensity", 0.5),
+        color=light.get("color"),
+        name=light.get("name"),
+        spot_hotspot=light.get("spot_hotspot", 0.6),
+        spot_falloff=light.get("spot_falloff", 55.0),
+    )
+
+
+def _resolve_component_defects(component_camera_cfg):
+    include_defect_types = component_camera_cfg.get("defect_types")
 
     defects = _normalize_defects(component_camera_cfg.get("defects"))
     if defects:
@@ -270,6 +297,7 @@ def _build_render_context(params):
     mask_cfg = outputs_cfg.get("mask") or {}
     scene_cfg = outputs_cfg.get("scene") or {}
     channel_cfg = params.get("channel") or {}
+    lighting_cfg = params.get("lighting") or {}
     bbox_data = _bbox_center_lengths()
     cube_camera_cfg = {}
     component_camera_cfg = {}
@@ -298,11 +326,11 @@ def _build_render_context(params):
 
     else:
         component_camera_cfg = _normalize_component_camera_cfg(camera_cfg)
-        defects = _resolve_component_defects(component_camera_cfg, params)
+        defects = _resolve_component_defects(component_camera_cfg)
         if not defects:
             raise ValueError(
                 "camera.strategy='component' requires camera.component.defects "
-                "(list of point/normal entries) or camera.component.defect_record_path."
+                "(list of point/normal entries) or cached defect metadata in the Rhino document."
             )
 
         if bbox_data is None:
@@ -350,6 +378,9 @@ def _build_render_context(params):
         "mask_only_layers": mask_only_layers,
         "mask_hide_layers": mask_cfg.get("hide_layers"),
         "channels": dict(channel_cfg) if isinstance(channel_cfg, dict) else {},
+        "defect_light_cfg": _normalize_component_defect_light_cfg(lighting_cfg)
+        if strategy == "component"
+        else {"enabled": False},
     }
 
 
@@ -403,25 +434,32 @@ def _generate_render_poses(context):
 
     component_cfg = context["component_camera_cfg"]
     defects = context["defects"]
-    scene_scale = max(min(lengths), 1e-3)
-    default_distance_min = scene_scale * 0.10
-    default_distance_max = scene_scale * 0.20
-    distance_min = float(component_cfg.get("distance_min", default_distance_min))
-    distance_max = float(component_cfg.get("distance_max", default_distance_max))
-    if distance_min > distance_max:
-        distance_min, distance_max = distance_max, distance_min
+    default_radius_min = 120.0
+    default_radius_max = 220.0
+    radius_min = float(
+        component_cfg.get(
+            "radius_min",
+            component_cfg.get("distance_min", default_radius_min),
+        )
+    )
+    radius_max = float(
+        component_cfg.get(
+            "radius_max",
+            component_cfg.get("distance_max", default_radius_max),
+        )
+    )
+    if radius_min > radius_max:
+        radius_min, radius_max = radius_max, radius_min
 
     poses = generate_defect_camera_poses(
         defects=defects,
         cameras_per_defect=max(1, int(component_cfg.get("cameras_per_defect", 1))),
-        distance_min=distance_min,
-        distance_max=distance_max,
-        normal_jitter_degrees=float(component_cfg.get("normal_jitter_degrees", 10.0)),
-        tangent_jitter=float(component_cfg.get("tangent_jitter", 0.0)),
+        radius_min=radius_min,
+        radius_max=radius_max,
         target_jitter=float(component_cfg.get("target_jitter", 0.0)),
     )
 
-    spacing = max(abs(distance_max - distance_min), 0.5 * (distance_min + distance_max), 1e-3)
+    spacing = max(abs(radius_max - radius_min), 0.5 * (radius_min + radius_max), 1e-3)
     position_jitter = _resolve_position_jitter(
         component_cfg,
         spacing,
@@ -433,6 +471,12 @@ def _generate_render_poses(context):
         position_jitter=position_jitter,
         direction_jitter_degrees=direction_jitter_degrees,
     )
+    light_cfg = context.get("defect_light_cfg") or {}
+    if light_cfg.get("enabled", False):
+        poses = [
+            dict(pose, light=_build_component_pose_light(pose, light_cfg))
+            for pose in poses
+        ]
     return sort_poses_topdown_circular(poses, center=center)
 
 
@@ -575,6 +619,7 @@ def _build_capture_basename(output_idx, context):
 
 
 def _capture_pose(idx, pose, context):
+    _apply_pose_light(pose)
     set_camera(position=pose["position"], target=pose["target"], lens=context["lens"])
     basename = _build_capture_basename(idx, context)
     render_all_outputs(
@@ -597,29 +642,37 @@ def _capture_pose_sequence(poses, context):
     smooth_path = context["smooth_path"]
     transition_frames = context["transition_frames"]
 
-    if smooth_path and transition_frames > 0:
-        frame_idx = 0
-        for i, pose in enumerate(poses[:-1]):
-            next_pose = poses[i + 1]
-            _capture_pose(frame_idx, pose, context)
-            frame_idx += 1
-
-            for step in range(1, transition_frames + 1):
-                t = step / float(transition_frames + 1)
-                interp_pos = (
-                    pose["position"][0] + (next_pose["position"][0] - pose["position"][0]) * t,
-                    pose["position"][1] + (next_pose["position"][1] - pose["position"][1]) * t,
-                    pose["position"][2] + (next_pose["position"][2] - pose["position"][2]) * t,
-                )
-                interp_pose = {"position": interp_pos, "target": pose["target"], "direction": pose.get("direction")}
-                _capture_pose(frame_idx, interp_pose, context)
+    try:
+        if smooth_path and transition_frames > 0:
+            frame_idx = 0
+            for i, pose in enumerate(poses[:-1]):
+                next_pose = poses[i + 1]
+                _capture_pose(frame_idx, pose, context)
                 frame_idx += 1
 
-        _capture_pose(frame_idx, poses[-1], context)
-        return
+                for step in range(1, transition_frames + 1):
+                    t = step / float(transition_frames + 1)
+                    interp_pos = (
+                        pose["position"][0] + (next_pose["position"][0] - pose["position"][0]) * t,
+                        pose["position"][1] + (next_pose["position"][1] - pose["position"][1]) * t,
+                        pose["position"][2] + (next_pose["position"][2] - pose["position"][2]) * t,
+                    )
+                    interp_pose = {
+                        "position": interp_pos,
+                        "target": pose["target"],
+                        "direction": pose.get("direction"),
+                        "light": pose.get("light"),
+                    }
+                    _capture_pose(frame_idx, interp_pose, context)
+                    frame_idx += 1
 
-    for idx, pose in enumerate(poses):
-        _capture_pose(idx, pose, context)
+            _capture_pose(frame_idx, poses[-1], context)
+            return
+
+        for idx, pose in enumerate(poses):
+            _capture_pose(idx, pose, context)
+    finally:
+        delete_named_lights("defect_light")
 
 
 def setup_render_environment(params):

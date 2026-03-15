@@ -139,7 +139,7 @@
 | 參數路徑 | 型別 | 運作機制 | 預設來源 | 備註 |
 |---|---|---|---|---|
 | `surface_normals.*` | mixed | 繪製 component surface 法向箭頭（除錯用）。 | `component_defaults.yaml` | 僅 component 分支使用。 |
-| `save_record_path` | `string | null` | 在 component defect placement 後把 defect payload 存成 JSON。 | `component_defect_defaults.yaml` | 視為輸出資料夾路徑，檔名會自動補時間戳；`none`、`null` 或空字串都會停用存檔；record 細節仍會預設寫入 log。 |
+| 文件 metadata defect cache | 自動 | 在 component defect placement 後把 defect payload 快取到 Rhino 文件 metadata。 | 內建 | 現在 component rendering 自動只走這條持久化路徑。 |
 | `defect_normals.*` | mixed | 在 defect placement 過程繪製 defect 法向箭頭。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::normal`。 |
 | `reference_points` | `bool | dict` | 在 candidate 篩選前只繪製一次 sampled reference/UV 點。 | 無 | `true` 時使用 `debug::reference_points`；若設 dict 可額外控制 `enabled/layer/radius_coef/min_radius/axis_scale`。 |
 | `defect_seeds.*` | mixed | 在放置成功點繪製 defect seed marker。 | `component_defect_defaults.yaml` | 預設圖層為 `debug::seed`，可依 type 分層。 |
@@ -210,6 +210,9 @@
 | `lighting.sun.date/latitude/longitude/timezone/intensity/north` | mixed | 太陽光直通參數。 | runtime default | 可選。 |
 | `lighting.skylight.enabled` | `bool` | 是否開啟 skylight。 | `true` | |
 | `lighting.skylight.intensity` | `float` | skylight 強度。 | `0.25` | |
+| `lighting.defect_lights.enabled` | `bool` | 每張 component render 前重建一盞輔助燈。 | `true` | 僅 component camera 使用。 |
+| `lighting.defect_lights.light_type` | `string` | 輔助燈型別。 | `point` | 預期維持 `point`；spot/directional 也可。 |
+| `lighting.defect_lights.intensity` | `float` | 輔助燈強度。 | `0.5` | 顏色沿用 cube face lights 的暖色隨機盤。 |
 
 ## Rendering Camera：共用
 
@@ -237,13 +240,11 @@
 
 | 參數路徑 | 型別 | 運作機制 | 預設來源 | 備註 |
 |---|---|---|---|---|
-| `defects` | `list[{point,normal}]` | 直接提供缺陷 seed。 | 無 | 需與 record path 二擇一。 |
-| `defect_record_path` | `string | null` | 從 defect record 載入缺陷。 | 無 | 有 `defects` 可不設。 |
-| `defect_types` | `list[str] | str | null` | 載入後按 type 過濾。 | 無 | 只在 record 載入時用。 |
+| `defects` | `list[{point,normal}]` | 直接提供缺陷 seed。 | 無 | 可作手動 override；一般 component render 會直接讀 Rhino 文件 metadata 快取。 |
+| `defect_types` | `list[str] | str | null` | 載入後按 type 過濾。 | 無 | 套用於讀取 Rhino 文件 metadata 快取時。 |
 | `cameras_per_defect` | `int` | 每個缺陷產生相機數。 | `1` | 會至少夾到 1。 |
-| `distance_min/max` | `float` | 缺陷到相機距離範圍。 | scene-scale `0.10 / 0.20` | 若 min>max 會自動交換。 |
-| `normal_jitter_degrees` | `float` | 法向角度抖動。 | `10.0` | |
-| `tangent_jitter` | `float` | 切向位移抖動。 | `0.0` | |
+| `radius_min/max` | `float` | 以 defect 中心為球心的半球殼半徑範圍。 | `120.0 / 220.0` | 只會從 defect normal 指向那半邊取樣。 |
+| `distance_min/max` | `float` | `radius_min/max` 的舊版別名。 | 無 | 保留向後相容。 |
 | `target_jitter` | `float` | target 點位抖動。 | `0.0` | |
 | `direction_jitter_degrees` | `float` | 最終視線方向抖動。 | `0.0` | |
 | `position_jitter` | `float | null` | 絕對位置抖動。 | 無 | null 時改用 scale。 |
@@ -253,7 +254,7 @@
 
 | 情境 | 運作機制 |
 |---|---|
-| component camera 沒提供 `defects`/record path | `pipeline.run_render()` 會嘗試吃最近一次 `modeling.defect.camera_defects`。 |
+| component camera 沒提供 inline `defects` | `pipeline.run_render()` 會讀 Rhino 文件 metadata 中快取的 defect seeds。 |
 | 完全不寫 `modeling.defect` | component 不跑 defect 流程。 |
 | 圖層名稱包含 `::` | 當作階層圖層處理（建立與匹配都支援）。 |
 

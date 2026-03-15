@@ -14,6 +14,104 @@ import scriptcontext as sc
 from System import DateTime, DateTimeKind
 
 
+def delete_named_lights(prefixes):
+    """Delete Rhino lights whose names match any provided prefix."""
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+    normalized = [
+        str(prefix).strip().lower()
+        for prefix in (prefixes or [])
+        if str(prefix).strip()
+    ]
+    if not normalized:
+        return 0
+
+    deleted = 0
+    for idx in range(sc.doc.Lights.Count - 1, -1, -1):
+        light_obj = sc.doc.Lights[idx]
+        name = str(getattr(light_obj, "Name", "") or "").strip().lower()
+        if not name:
+            continue
+        if any(name == prefix or name.startswith(prefix) for prefix in normalized):
+            sc.doc.Lights.Delete(idx, True)
+            deleted += 1
+    return deleted
+
+
+def set_light_intensity(light_id, value):
+    """Set Rhino light intensity for an existing light object."""
+    light_obj = sc.doc.Lights.FindId(light_id)
+    if not light_obj:
+        return False
+
+    geometry = light_obj.DuplicateLightGeometry()
+    geometry.Intensity = float(value)
+    sc.doc.Lights.Modify(light_obj.Id, geometry)
+    return True
+
+
+def random_natural_light_color():
+    """Sample the same warm sunset-biased helper-light colors used by cube lights."""
+    bucket = random.random()
+    if bucket < 0.35:
+        hue_deg = random.uniform(2.0, 15.0)
+    elif bucket < 0.80:
+        hue_deg = random.uniform(15.0, 38.0)
+    else:
+        hue_deg = random.uniform(38.0, 58.0)
+
+    hue = hue_deg / 360.0
+    saturation = random.uniform(0.18, 0.65)
+    value = random.uniform(0.45, 0.90)
+    red, green, blue = colorsys.hsv_to_rgb(hue, saturation, value)
+    return int(red * 255), int(green * 255), int(blue * 255)
+
+
+def create_targeted_light(
+    position,
+    target=None,
+    light_type="directional",
+    intensity=0.5,
+    color=None,
+    name=None,
+    spot_hotspot=0.6,
+    spot_falloff=55.0,
+):
+    """Create a Rhino light at a position, optionally aimed at a target."""
+    pos = tuple(float(v) for v in position)
+    tgt = tuple(float(v) for v in (target or (0.0, 0.0, 0.0)))
+    light_kind = str(light_type or "directional").strip().lower()
+
+    if light_kind == "point":
+        light_id = rs.AddPointLight(pos)
+    elif light_kind == "spot":
+        direction = tuple(tgt[i] - pos[i] for i in range(3))
+        light_id = None
+        for args in (
+            (pos, direction, spot_falloff, spot_hotspot),
+            (pos, direction, spot_hotspot, spot_falloff),
+        ):
+            try:
+                light_id = rs.AddSpotLight(*args)
+                if light_id:
+                    break
+            except Exception:
+                light_id = None
+    else:
+        light_id = rs.AddDirectionalLight(pos, tgt)
+
+    if not light_id and light_kind != "directional":
+        light_id = rs.AddDirectionalLight(pos, tgt)
+    if not light_id:
+        return None
+
+    set_light_intensity(light_id, intensity)
+    rs.LightColor(light_id, color or random_natural_light_color())
+    if name:
+        rs.ObjectName(light_id, str(name))
+    return light_id
+
+
 def _split_time(time_of_day):
     """Split float hours to (hour, minute)."""
     t = max(0.0, min(24.0, float(time_of_day)))
@@ -150,66 +248,8 @@ def setup_face_lights(
         "z": z_len,
     }
 
-    def _clear_existing_face_lights():
-        # Remove any prior face-light objects so names remain unique per render.
-        # Use both rs.ObjectsByName and a direct scan of the light table to be robust.
-        existing_named = rs.ObjectsByName("face_light") or []
-        for existing in existing_named:
-            rs.DeleteObject(existing)
-        for key in normals:
-            for obj in rs.ObjectsByName(f"face_light_{key}") or []:
-                rs.DeleteObject(obj)
-
-        # Scan all lights in the document and delete those whose names start with the prefix.
-        prefix = "face_light"
-        light_indices = []
-        for i in range(sc.doc.Lights.Count):
-            lo = sc.doc.Lights[i]
-            if lo and lo.Name and lo.Name.lower().startswith(prefix):
-                light_indices.append(i)
-        # Delete by index from the end to keep indices valid.
-        for idx in reversed(light_indices):
-            sc.doc.Lights.Delete(idx, True)
-
     if replace_existing:
-        _clear_existing_face_lights()
-
-    def _set_light_intensity(light_id, value):
-        lo = sc.doc.Lights.FindId(light_id)
-        if not lo:
-            print("Light not found")
-        else:
-            lg = lo.DuplicateLightGeometry()
-            lg.Intensity = value
-            sc.doc.Lights.Modify(lo.Id, lg)
-
-    # def _random_natural_light_color():
-    #     # Warm/neutral whites: hue 20–70° (no blue/purple), low saturation.
-    #     h = random.uniform(20.0 / 360.0, 70.0 / 360.0)
-    #     s = random.uniform(0.02, 0.12)
-    #     v = random.uniform(0.92, 1.0)
-    #     r, g, b = colorsys.hsv_to_rgb(h, s, v)
-    #     return int(r * 255), int(g * 255), int(b * 255)
-
-    def _random_natural_light_color():
-        # Sunset-biased warm lights: red/orange/amber, occasionally yellow.
-        r = random.random()
-        if r < 0.35:
-            # Deep red / red-orange
-            h_deg = random.uniform(2.0, 15.0)
-        elif r < 0.80:
-            # Orange / amber (most common)
-            h_deg = random.uniform(15.0, 38.0)
-        else:
-            # Yellow / golden highlights
-            h_deg = random.uniform(38.0, 58.0)
-
-        h = h_deg / 360.0
-        s = random.uniform(0.18, 0.65)   # more color than neutral white
-        v = random.uniform(0.45, 0.90)   # darker overall than current 0.92–1.0
-
-        r, g, b = colorsys.hsv_to_rgb(h, s, v)
-        return int(r * 255), int(g * 255), int(b * 255)
+        delete_named_lights("face_light")
 
     created = {}
     for i, face in enumerate(faces):
@@ -226,39 +266,19 @@ def setup_face_lights(
             center[2] + n[2] * offset,
         )
 
-        if light_type == "point":
-            lid = rs.AddPointLight(pos)
-        elif light_type == "spot":
-            # Use explicit direction to avoid signature ambiguity across Rhino versions.
-            direction = (
-                center[0] - pos[0],
-                center[1] - pos[1],
-                center[2] - pos[2],
-            )
-            lid = None
-            for args in (
-                (pos, direction, spot_falloff, spot_hotspot),  # angle, hotspot
-                (pos, direction, spot_hotspot, spot_falloff),  # hotspot, angle (if reversed)
-            ):
-                try:
-                    lid = rs.AddSpotLight(*args)
-                    if lid:
-                        break
-                except Exception:
-                    lid = None
-        else:
-            # Directional light points from pos toward center.
-            lid = rs.AddDirectionalLight(pos, center)
-
-        if not lid:
-            # Fallback to directional if spot/point creation failed.
-            lid = rs.AddDirectionalLight(pos, center)
+        lid = create_targeted_light(
+            position=pos,
+            target=center,
+            light_type=light_type,
+            intensity=intensities[i],
+            color=random_natural_light_color(),
+            name=f"face_light_{face.lower()}",
+            spot_hotspot=spot_hotspot,
+            spot_falloff=spot_falloff,
+        )
         if not lid:
             continue
 
-        _set_light_intensity(lid, intensities[i])
-        rs.LightColor(lid, _random_natural_light_color())
-        rs.ObjectName(lid, f"face_light_{face.lower()}")
         created[face.lower()] = lid
 
     return created

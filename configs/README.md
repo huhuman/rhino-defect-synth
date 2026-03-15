@@ -140,7 +140,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
 |---|---|---|---|---|
 | `surface_normals.*` | mixed | Draws component surface-normal arrows for debug visualization. | `component_defaults.yaml` | Used in component branch only. |
-| `save_record_path` | `string | null` | Saves the defect placement payload JSON after component defect placement. | `component_defect_defaults.yaml` | Treat this as an output folder path; the filename is auto-generated with a timestamp. `none`, `null`, or empty disables saving; record details are still logged by default. |
+| document metadata defect cache | automatic | Caches the defect placement payload in Rhino document metadata after component defect placement. | built-in | This is now the single automatic persistence path used by component rendering. |
 | `defect_normals.*` | mixed | Draws defect-normal arrows during defect placement. | `component_defect_defaults.yaml` | Layer defaults to `debug::normal`. |
 | `reference_points` | `bool | dict` | Draws sampled reference/UV points once before candidate filtering. | none | `true` uses `debug::reference_points`; dict supports `enabled/layer/radius_coef/min_radius/axis_scale`. |
 | `defect_seeds.*` | mixed | Draws defect seed markers at successful placement points. | `component_defect_defaults.yaml` | Layer defaults to `debug::seed`; supports by-type split. |
@@ -211,6 +211,9 @@ Batch runtime flow in `main_cube_batch.py`:
 | `lighting.sun.date/latitude/longitude/timezone/intensity/north` | mixed | Direct pass-through sun parameters. | runtime defaults | Optional. |
 | `lighting.skylight.enabled` | `bool` | Enables skylight. | `true` | Passed to skylight setup. |
 | `lighting.skylight.intensity` | `float` | Skylight intensity. | `0.25` | |
+| `lighting.defect_lights.enabled` | `bool` | Rebuilds one helper light per captured component pose. | `true` | Component camera only. |
+| `lighting.defect_lights.light_type` | `string` | Helper light type. | `point` | Intended to stay `point`; spot/directional also work. |
+| `lighting.defect_lights.intensity` | `float` | Helper light intensity. | `0.5` | Color uses the same warm random palette as cube face lights. |
 
 ## Rendering Camera: Common
 
@@ -238,13 +241,11 @@ Batch runtime flow in `main_cube_batch.py`:
 
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
 |---|---|---|---|---|
-| `defects` | `list[{point,normal}]` | Direct defect seeds for camera generation. | none | One of `defects` or record path is required. |
-| `defect_record_path` | `string | null` | Loads defects from saved defect record. | none | Optional if `defects` provided. |
-| `defect_types` | `list[str] | str | null` | Filters loaded defects by type. | none | Used with record-path loading. |
+| `defects` | `list[{point,normal}]` | Direct defect seeds for camera generation. | none | Optional manual override; normal component runs read cached Rhino document metadata. |
+| `defect_types` | `list[str] | str | null` | Filters loaded defects by type. | none | Applied when reading cached Rhino document metadata. |
 | `cameras_per_defect` | `int` | Number of poses per defect seed. | `1` | Minimum clamped to 1. |
-| `distance_min/max` | `float` | Camera distance range from defect. | scene-scale `0.10 / 0.20` | Order auto-corrected if min>max. |
-| `normal_jitter_degrees` | `float` | Normal-direction angular jitter. | `10.0` | |
-| `tangent_jitter` | `float` | Tangential offset magnitude. | `0.0` | |
+| `radius_min/max` | `float` | Hemisphere-shell radius range around defect center. | `120.0 / 220.0` | Samples only on the side pointed to by the defect normal. |
+| `distance_min/max` | `float` | Legacy alias for `radius_min/max`. | none | Kept for backward compatibility. |
 | `target_jitter` | `float` | Target point jitter. | `0.0` | |
 | `direction_jitter_degrees` | `float` | Final look-direction jitter. | `0.0` | |
 | `position_jitter` | `float | null` | Absolute pose-position jitter. | none | If null, scale-based jitter is used. |
@@ -254,7 +255,7 @@ Batch runtime flow in `main_cube_batch.py`:
 
 | Scenario | Runtime mechanism |
 |---|---|
-| Component camera has neither `defects` nor record path | `pipeline.run_render()` tries latest `modeling.defect.camera_defects` in memory. |
+| Component camera has no inline `defects` | `pipeline.run_render()` reads cached defect seeds from Rhino document metadata. |
 | `modeling.defect` omitted entirely | Component defect stage does not run. |
 | Layer names with `::` | Treated as hierarchical layers in layer creation and matching logic. |
 
