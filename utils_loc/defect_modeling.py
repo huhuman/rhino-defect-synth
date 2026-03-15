@@ -157,6 +157,79 @@ def _keep_largest_piece(piece_ids):
     return best_id
 
 
+def _brep_representative_point(brep):
+    if brep is None:
+        return None
+
+    amp = None
+    try:
+        amp = Rhino.Geometry.AreaMassProperties.Compute(brep)
+        if amp:
+            return amp.Centroid
+    except Exception:
+        pass
+    finally:
+        if amp:
+            dispose = getattr(amp, "Dispose", None)
+            if dispose:
+                dispose()
+
+    try:
+        bbox = brep.GetBoundingBox(True)
+    except Exception:
+        bbox = None
+    if bbox and bbox.IsValid:
+        return bbox.Center
+    return None
+
+
+def _point_inside_solid_brep(brep, point, tolerance):
+    if brep is None or point is None or not getattr(brep, "IsSolid", False):
+        return False
+    try:
+        return bool(brep.IsPointInside(point, float(tolerance), True))
+    except Exception:
+        return False
+
+
+def _filter_split_breps_keep_outer(split_breps, cutter_breps, tolerance):
+    split_breps = [brep for brep in _as_list(split_breps) if brep is not None]
+    solid_cutters = [brep for brep in _as_list(cutter_breps) if brep is not None and getattr(brep, "IsSolid", False)]
+    if not split_breps:
+        return []
+    if not solid_cutters:
+        return None
+
+    kept = []
+    for brep in split_breps:
+        point = _brep_representative_point(brep)
+        if point is None:
+            kept.append(brep)
+            continue
+        if any(_point_inside_solid_brep(cutter_brep, point, tolerance) for cutter_brep in solid_cutters):
+            continue
+        kept.append(brep)
+    return kept
+
+
+def _filter_split_piece_ids_keep_outer(piece_ids, cutter_id, tolerance):
+    valid_ids = [obj_id for obj_id in _dedupe_ids(_as_list(piece_ids)) if obj_id and rs.IsObject(obj_id)]
+    if not valid_ids:
+        return []
+
+    cutter_brep = rs.coercebrep(cutter_id)
+    if cutter_brep is None or not getattr(cutter_brep, "IsSolid", False):
+        return None
+
+    kept = []
+    for obj_id in valid_ids:
+        piece_brep = rs.coercebrep(obj_id)
+        point = _brep_representative_point(piece_brep)
+        if point is None or not _point_inside_solid_brep(cutter_brep, point, tolerance):
+            kept.append(obj_id)
+    return kept
+
+
 def _split_surface_keep_outer(target_id, cutter_ids, delete_input=False):
     if not target_id or not rs.IsObject(target_id) or not rs.IsSurface(target_id):
         return None
@@ -188,39 +261,44 @@ def _split_surface_keep_outer(target_id, cutter_ids, delete_input=False):
     if not split_breps:
         return None
 
-    best_brep = None
-    best_area = None
-    for brep in split_breps:
-        amp = None
-        try:
-            amp = Rhino.Geometry.AreaMassProperties.Compute(brep)
-            area = amp.Area if amp else 0.0
-        except Exception:
-            area = 0.0
-        finally:
-            if amp:
-                dispose = getattr(amp, "Dispose", None)
-                if dispose:
-                    dispose()
-        if best_area is None or area > best_area:
-            best_brep = brep
-            best_area = area
+    kept_breps = _filter_split_breps_keep_outer(split_breps, cutter_breps, tolerance)
+    if kept_breps is None:
+        best_brep = None
+        best_area = None
+        for brep in split_breps:
+            amp = None
+            try:
+                amp = Rhino.Geometry.AreaMassProperties.Compute(brep)
+                area = amp.Area if amp else 0.0
+            except Exception:
+                area = 0.0
+            finally:
+                if amp:
+                    dispose = getattr(amp, "Dispose", None)
+                    if dispose:
+                        dispose()
+            if best_area is None or area > best_area:
+                best_brep = brep
+                best_area = area
+        kept_breps = [best_brep] if best_brep is not None else []
 
-    if best_brep is None:
-        return None
-
-    new_id = sc.doc.Objects.AddBrep(best_brep)
-    if not new_id:
-        return None
-
+    new_ids = []
     layer_name = rs.ObjectLayer(target_id)
-    if layer_name and rs.IsLayer(layer_name):
-        rs.ObjectLayer(new_id, layer_name)
+    for brep in kept_breps:
+        new_id = sc.doc.Objects.AddBrep(brep)
+        if not new_id:
+            continue
+        if layer_name and rs.IsLayer(layer_name):
+            rs.ObjectLayer(new_id, layer_name)
+        new_ids.append(new_id)
+
+    if not new_ids:
+        return None
 
     if delete_input and rs.IsObject(target_id):
         rs.DeleteObject(target_id)
 
-    return [new_id]
+    return new_ids
 
 
 def _sample_domain(domain, sample_count, margin):
@@ -743,6 +821,10 @@ def subtract_surface(curves, target_surfaces=None, delete_inputs=False):
     if not cutter_ids:
         return target_surfaces
 
+    tolerance = getattr(sc.doc, "ModelAbsoluteTolerance", None)
+    if tolerance is None:
+        tolerance = 0.01
+
     output_ids = []
     for target in target_surfaces:
         if not rs.IsObject(target):
@@ -790,12 +872,14 @@ def subtract_surface(curves, target_surfaces=None, delete_inputs=False):
                         next_pieces.extend(split_ids)
                         continue
 
-                    keep_id = _keep_largest_piece(split_ids)
-                    discard_ids = [sid for sid in split_ids if sid != keep_id and rs.IsObject(sid)]
+                    kept_ids = _filter_split_piece_ids_keep_outer(split_ids, cutter_id, tolerance)
+                    if kept_ids is None:
+                        keep_id = _keep_largest_piece(split_ids)
+                        kept_ids = [keep_id] if keep_id and rs.IsObject(keep_id) else []
+                    discard_ids = [sid for sid in split_ids if sid not in kept_ids and rs.IsObject(sid)]
                     if delete_inputs and discard_ids:
                         rs.DeleteObjects(discard_ids)
-                    if keep_id and rs.IsObject(keep_id):
-                        next_pieces.append(keep_id)
+                    next_pieces.extend([sid for sid in kept_ids if sid and rs.IsObject(sid)])
                 else:
                     next_pieces.append(piece_id)
             pieces = _dedupe_ids(next_pieces)
