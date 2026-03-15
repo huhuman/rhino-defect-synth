@@ -12,6 +12,7 @@ from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
 from utils_loc.component_modeling import create_bridge_component
 from utils_loc.defect_placement import apply_defect_pipeline, get_active_defect_requests
+from utils_loc.defect_record_store import store_defect_record_payload
 from utils_loc.plugin_autoload import ensure_plugin_commands
 from utils_loc.texture_mapping import apply_component_texture_mapping
 
@@ -118,6 +119,16 @@ def _save_defect_records_if_requested(defect_result, debug_cfg=None):
     _write_json_atomic(save_path, payload)
     print("Defect records saved to '{}'".format(save_path))
     return save_path
+
+
+def _cache_defect_records_in_document(defect_result):
+    payload = defect_result if isinstance(defect_result, dict) else {}
+    if not payload:
+        return False
+    cached = bool(store_defect_record_payload(payload))
+    if cached:
+        print("Defect records cached in Rhino document metadata.")
+    return cached
 
 
 def _filter_layer_map_by_prefix(layer_map, prefixes):
@@ -261,6 +272,7 @@ def create_model(params):
             defect_result = apply_defect_pipeline(defect_cfg, model_result=result, debug_cfg=debug_cfg)
             result["defect"] = defect_result
             _log_defect_records(defect_result)
+            _cache_defect_records_in_document(defect_result)
             _save_defect_records_if_requested(defect_result, debug_cfg=debug_cfg)
             summary = defect_result.get("summary", {})
             print(
@@ -308,14 +320,17 @@ def run_render(params, show_cameras=False):
     camera_cfg = dict(params.get("camera") or {})
     if camera_cfg.get("strategy") == "component":
         component_cfg = dict(camera_cfg.get("component") or {})
-        has_defects = bool(component_cfg.get("defects"))
         has_record = bool(component_cfg.get("defect_record_path") or params.get("defect_record_path"))
-        if not has_defects and not has_record:
-            last_defect = (_LAST_MODEL_RESULT or {}).get("defect") or {}
-            if last_defect.get("camera_defects"):
-                component_cfg["defects"] = last_defect["camera_defects"]
-                camera_cfg["component"] = component_cfg
-                params["camera"] = camera_cfg
+        last_defect = (_LAST_MODEL_RESULT or {}).get("defect") or {}
+        if not has_record and last_defect.get("camera_defects"):
+            component_cfg["defects"] = last_defect["camera_defects"]
+            camera_cfg["component"] = component_cfg
+            params["camera"] = camera_cfg
+            print(
+                "Component render: using {} defect seeds from latest modeling result.".format(
+                    len(last_defect.get("camera_defects") or []),
+                )
+            )
 
     render.setup_render_environment(params)
     context = render.build_render_context(params)

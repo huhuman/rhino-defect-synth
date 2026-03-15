@@ -17,9 +17,11 @@ from utils_loc.camera import (
 )
 from utils_loc.lighting import set_random_wallpaper, set_skylight, setup_sun
 from utils_loc.defect_placement import defects_from_record_payload, load_defect_records
+from utils_loc.defect_record_store import load_defect_record_payload_from_document
 from utils_loc.outputs import render_all_outputs
 
 CAMERA_GIZMO_LAYER_DEFAULT = "demo_camera_gizmos"
+_COMPONENT_RENDER_LAYER_PREFIXES = ("component", "defect")
 
 
 def _setup_render_environment(params):
@@ -158,6 +160,13 @@ def _load_defects_from_record_path(record_path, include_defect_types=None):
     return defects_from_record_payload(payload, include_defect_types=include_defect_types)
 
 
+def _load_defects_from_document(include_defect_types=None):
+    payload = load_defect_record_payload_from_document()
+    if not payload:
+        return []
+    return defects_from_record_payload(payload, include_defect_types=include_defect_types)
+
+
 def _normalize_defects(raw_defects):
     if raw_defects is None:
         return []
@@ -188,6 +197,55 @@ def _normalize_defects(raw_defects):
     return defects
 
 
+def _resolve_component_defects(component_camera_cfg, params):
+    record_path = (
+        component_camera_cfg.get("defect_record_path")
+        or params.get("defect_record_path")
+    )
+    include_defect_types = component_camera_cfg.get("defect_types")
+
+    if record_path:
+        defects = _normalize_defects(
+            _load_defects_from_record_path(
+                record_path,
+                include_defect_types=include_defect_types,
+            )
+        )
+        if defects:
+            print(
+                "Component render: loaded {} defect seeds from record '{}'.".format(
+                    len(defects),
+                    os.path.abspath(os.path.expanduser(str(record_path))),
+                )
+            )
+            return defects
+        print(
+            "Component render: record '{}' contained no usable defect seeds; falling back to inline config.".format(
+                os.path.abspath(os.path.expanduser(str(record_path))),
+            )
+            )
+
+    defects = _normalize_defects(component_camera_cfg.get("defects"))
+    if defects:
+        print(
+            "Component render: using {} inline defect seeds from config.".format(
+                len(defects),
+            )
+        )
+        return defects
+
+    defects = _normalize_defects(
+        _load_defects_from_document(include_defect_types=include_defect_types)
+    )
+    if defects:
+        print(
+            "Component render: loaded {} defect seeds from Rhino document metadata.".format(
+                len(defects),
+            )
+        )
+    return defects
+
+
 def _resolve_position_jitter(cfg, spacing, default_scale=0.25):
     position_jitter_override = cfg.get("position_jitter")
     if position_jitter_override is None:
@@ -196,12 +254,21 @@ def _resolve_position_jitter(cfg, spacing, default_scale=0.25):
     return max(0.0, float(position_jitter_override))
 
 
+def _default_component_render_layers(layer_names):
+    if layer_names is None:
+        return list(_COMPONENT_RENDER_LAYER_PREFIXES)
+    if isinstance(layer_names, (list, tuple)):
+        return list(layer_names)
+    return layer_names
+
+
 def _build_render_context(params):
     """Collect scene/camera information required for rendering."""
     camera_cfg = params["camera"]
     strategy = _normalize_camera_strategy(camera_cfg)
     outputs_cfg = params.get("outputs") or {}
     mask_cfg = outputs_cfg.get("mask") or {}
+    scene_cfg = outputs_cfg.get("scene") or {}
     channel_cfg = params.get("channel") or {}
     bbox_data = _bbox_center_lengths()
     cube_camera_cfg = {}
@@ -231,14 +298,7 @@ def _build_render_context(params):
 
     else:
         component_camera_cfg = _normalize_component_camera_cfg(camera_cfg)
-        defects = _normalize_defects(component_camera_cfg.get("defects"))
-        if not defects:
-            defects = _normalize_defects(
-                _load_defects_from_record_path(
-                    component_camera_cfg.get("defect_record_path") or params.get("defect_record_path"),
-                    include_defect_types=component_camera_cfg.get("defect_types"),
-                )
-            )
+        defects = _resolve_component_defects(component_camera_cfg, params)
         if not defects:
             raise ValueError(
                 "camera.strategy='component' requires camera.component.defects "
@@ -256,6 +316,13 @@ def _build_render_context(params):
 
     base_out_dir = params["output_dir"]
     os.makedirs(base_out_dir, exist_ok=True)
+
+    if strategy == "component":
+        scene_only_layers = _default_component_render_layers(scene_cfg.get("only_layers"))
+        mask_only_layers = _default_component_render_layers(mask_cfg.get("only_layers"))
+    else:
+        scene_only_layers = scene_cfg.get("only_layers")
+        mask_only_layers = mask_cfg.get("only_layers")
 
     return {
         "camera_strategy": strategy,
@@ -278,9 +345,9 @@ def _build_render_context(params):
         "output_index_offset": int(params.get("output_index_offset", 0)),
         "model_iter": params.get("model_iter"),
         "render_iter": params.get("render_iter"),
-        "scene_only_layers": (outputs_cfg.get("scene") or {}).get("only_layers"),
-        "scene_hide_layers": (outputs_cfg.get("scene") or {}).get("hide_layers"),
-        "mask_only_layers": mask_cfg.get("only_layers"),
+        "scene_only_layers": scene_only_layers,
+        "scene_hide_layers": scene_cfg.get("hide_layers"),
+        "mask_only_layers": mask_only_layers,
         "mask_hide_layers": mask_cfg.get("hide_layers"),
         "channels": dict(channel_cfg) if isinstance(channel_cfg, dict) else {},
     }

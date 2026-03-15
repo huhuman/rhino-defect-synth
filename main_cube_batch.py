@@ -98,7 +98,8 @@ def _create_timestamped_subdir(base_output_dir):
     if not str(base_output_dir or "").strip():
         raise ValueError("Config must include rendering.output_dir for batch runs.")
 
-    base_dir = os.path.abspath(os.path.expanduser(str(base_output_dir)))
+    root_dir = os.path.abspath(os.path.expanduser(str(base_output_dir)))
+    base_dir = os.path.join(root_dir, "runs")
     os.makedirs(base_dir, exist_ok=True)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1256,7 +1257,7 @@ if __name__ == "__main__":
         config_name="cube.local.yaml",
         renders_per_model=None,
         max_iter=None,
-        start_face_index=24,
+        start_face_index=60,
         faces_per_model=6,
         seed=None,
         show_cameras=False,

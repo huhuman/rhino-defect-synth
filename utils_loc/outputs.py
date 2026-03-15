@@ -470,16 +470,13 @@ def _apply_mask_layer_visibility(mask_only_layers=None, mask_hide_layers=None):
     if not only_set and not hide_set:
         return
 
-    if only_set:
-        for layer in sc.doc.Layers:
-            if layer.Name:
-                layer.IsVisible = _layer_matches(layer, only_set)
-        return
-
     for layer in sc.doc.Layers:
         if not layer.Name:
             continue
-        layer.IsVisible = True
+        if only_set:
+            layer.IsVisible = _layer_matches(layer, only_set)
+        else:
+            layer.IsVisible = True
         if hide_set and _layer_matches(layer, hide_set):
             layer.IsVisible = False
 

@@ -49,6 +49,8 @@ rendering:
       # Optional: auto-load camera seeds from defect placement records.
       # defect_record_path: "C:/path/to/your/component_rendered/defect_records/model_000.json"
       # defect_types: [crack, efflore, spalling, exposed_rebar]
-      defects:
-        - point: [0.0, 0.0, 0.0]
-          normal: [0.0, 0.0, 1.0]
+      # Optional inline camera seeds. Keep empty for normal defect-driven runs.
+      # defects:
+      #   - point: [0.0, 0.0, 0.0]
+      #     normal: [0.0, 0.0, 1.0]
+      defects: []
