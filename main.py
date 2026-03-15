@@ -1,5 +1,4 @@
 #! python3
-import os
 from time import perf_counter
 
 import Rhino
@@ -27,110 +26,6 @@ STAGE_DEPENDENCIES = {
     "modeling": ("load_config",),
     "rendering": ("load_config",),
 }
-
-
-def _normalize_optional_path(path):
-    text = str(path or "").strip()
-    if not text or text.lower() in ("none", "null"):
-        return None
-    return os.path.abspath(os.path.expanduser(text))
-
-
-def _resolve_main_output_dir(cfg):
-    rendering_cfg = dict(cfg.get("rendering") or {})
-    base_output_dir = _normalize_optional_path(rendering_cfg.get("output_dir"))
-    if not base_output_dir:
-        raise ValueError("Config rendering.output_dir is required.")
-    output_dir = os.path.join(base_output_dir, "test")
-    os.makedirs(output_dir, exist_ok=True)
-    return output_dir
-
-
-def _resolve_record_output_dir(output_dir):
-    record_dir = os.path.join(str(output_dir), "records")
-    os.makedirs(record_dir, exist_ok=True)
-    return record_dir
-
-
-def _resolve_latest_defect_record_path(path):
-    target_path = _normalize_optional_path(path)
-    if not target_path:
-        return None
-
-    if os.path.isfile(target_path):
-        return target_path if target_path.lower().endswith(".json") else None
-
-    if not os.path.isdir(target_path):
-        return None
-
-    record_paths = []
-    root_depth = target_path.rstrip(os.sep).count(os.sep)
-    for root, _dirs, files in os.walk(target_path):
-        current_depth = root.rstrip(os.sep).count(os.sep)
-        if current_depth - root_depth > 3:
-            continue
-        for name in files:
-            if not name.lower().endswith(".json"):
-                continue
-            record_paths.append(os.path.join(root, name))
-
-    if not record_paths:
-        return None
-
-    preferred = [
-        record_path for record_path in record_paths
-        if os.path.basename(record_path).lower().startswith("defect_records")
-    ]
-    candidates = preferred or record_paths
-    return max(candidates, key=os.path.getmtime)
-
-
-def _prepare_modeling_params(cfg, start_face_index, output_dir=None):
-    modeling_params = dict(cfg.get("modeling", {}))
-    if not modeling_params:
-        raise ValueError("Selected 'modeling' stage but config has no 'modeling' section.")
-
-    strategy = str(modeling_params.get("strategy") or "").strip().lower()
-    if strategy == "cube":
-        modeling_params["start_face_index"] = start_face_index
-        return modeling_params
-
-    if strategy == "component" and output_dir:
-        debug_cfg = dict(modeling_params.get("debug") or {})
-        record_dir = _resolve_record_output_dir(output_dir)
-        debug_cfg["save_record_path"] = record_dir
-        modeling_params["debug"] = debug_cfg
-        print(f"Defect record output directory: {record_dir}")
-    return modeling_params
-
-
-def _prepare_rendering_params(cfg, output_dir):
-    rendering_params = dict(cfg.get("rendering", {}))
-    if not rendering_params:
-        raise ValueError("Selected 'rendering' stage but config has no 'rendering' section.")
-
-    rendering_params["output_dir"] = output_dir
-    print(f"Render output directory: {output_dir}")
-
-    camera_cfg = dict(rendering_params.get("camera") or {})
-    modeling_cfg = dict(cfg.get("modeling") or {})
-    strategy = str(modeling_cfg.get("strategy") or "").strip().lower()
-    if strategy == "component" and str(camera_cfg.get("strategy") or "").strip().lower() == "component":
-        component_cfg = dict(camera_cfg.get("component") or {})
-        record_path = component_cfg.get("defect_record_path") or rendering_params.get("defect_record_path")
-        if not record_path:
-            record_dir = _resolve_record_output_dir(output_dir)
-            auto_record_path = _resolve_latest_defect_record_path(record_dir)
-            if auto_record_path:
-                rendering_params["defect_record_path"] = auto_record_path
-                print(f"Component render: auto-selected latest defect record '{auto_record_path}'.")
-            else:
-                print(
-                    "Component render: no saved defect record was found under '{}'; "
-                    "will try Rhino document metadata next.".format(record_dir)
-                )
-
-    return rendering_params
 
 
 def reset():
@@ -310,13 +205,6 @@ def run(
         context["cfg"] = time_stage("load_config", load_config, stage_times, config_name)
 
     cfg = context["cfg"] or {}
-    run_output_dir = None
-    if "rendering" in selected_stages:
-        run_output_dir = _resolve_main_output_dir(cfg)
-    elif "modeling" in selected_stages:
-        modeling_cfg = dict(cfg.get("modeling") or {})
-        if str(modeling_cfg.get("strategy") or "").strip().lower() == "component":
-            run_output_dir = _resolve_main_output_dir(cfg)
 
     if "preparation" in selected_stages:
         preparation_params = dict(cfg.get("preparation") or {})
@@ -357,15 +245,17 @@ def run(
         time_stage("view_setup", setup_render_view, stage_times, cfg=cfg)
 
     if "modeling" in selected_stages:
-        modeling_params = _prepare_modeling_params(
-            cfg,
-            start_face_index=start_face_index,
-            output_dir=run_output_dir,
-        )
+        modeling_params = dict(cfg.get("modeling", {}))
+        if not modeling_params:
+            raise ValueError("Selected 'modeling' stage but config has no 'modeling' section.")
+        if modeling_params["strategy"] == "cube":
+            modeling_params["start_face_index"] = start_face_index
         time_stage("modeling", create_model, stage_times, params=modeling_params)
 
     if "rendering" in selected_stages:
-        rendering_params = _prepare_rendering_params(cfg, output_dir=run_output_dir)
+        rendering_params = cfg.get("rendering", {})
+        if not rendering_params:
+            raise ValueError("Selected 'rendering' stage but config has no 'rendering' section.")
         time_stage(
             "rendering",
             run_render,
