@@ -1,9 +1,7 @@
 """Unified defect placement interfaces for crack/efflore/spalling/exposed-rebar."""
 
 import copy
-import json
 import math
-import os
 import random
 import sys
 
@@ -247,6 +245,107 @@ def _polygon_centroid(points):
         cx += (x0 + x1) * cross
         cy += (y0 + y1) * cross
     return cx * factor, cy * factor
+
+
+def _point_on_segment_2d(point, start, end, tolerance=1e-9):
+    px, py = point
+    x0, y0 = start
+    x1, y1 = end
+    cross = (px - x0) * (y1 - y0) - (py - y0) * (x1 - x0)
+    if abs(cross) > tolerance:
+        return False
+    dot = (px - x0) * (x1 - x0) + (py - y0) * (y1 - y0)
+    if dot < -tolerance:
+        return False
+    seg_len_sq = (x1 - x0) ** 2 + (y1 - y0) ** 2
+    if dot - seg_len_sq > tolerance:
+        return False
+    return True
+
+
+def _point_in_polygon_2d(point, polygon, tolerance=1e-9):
+    pts = [tuple(p) for p in polygon or []]
+    if len(pts) < 3:
+        return False
+
+    inside = False
+    px, py = point
+    for idx in range(len(pts)):
+        x0, y0 = pts[idx]
+        x1, y1 = pts[(idx + 1) % len(pts)]
+        if _point_on_segment_2d((px, py), (x0, y0), (x1, y1), tolerance=tolerance):
+            return True
+        intersects = ((y0 > py) != (y1 > py))
+        if not intersects:
+            continue
+        denom = (y1 - y0)
+        if abs(denom) <= tolerance:
+            continue
+        x_cross = x0 + (py - y0) * (x1 - x0) / denom
+        if x_cross >= px - tolerance:
+            inside = not inside
+    return inside
+
+
+def _polygon_sample_point_3d(points):
+    pts = _unique_points(points)
+    if not pts:
+        return None
+    if len(pts) == 1:
+        return tuple(pts[0])
+    if len(pts) == 2:
+        return _lerp(pts[0], pts[1], 0.5)
+
+    origin = pts[0]
+    normal = (0.0, 0.0, 0.0)
+    for idx in range(len(pts)):
+        normal = _add(normal, _cross(pts[idx], pts[(idx + 1) % len(pts)]))
+    normal = _unit(normal, fallback=(0.0, 0.0, 1.0))
+    ref = (1.0, 0.0, 0.0) if abs(_dot(normal, (1.0, 0.0, 0.0))) < 0.9 else (0.0, 1.0, 0.0)
+    u_axis = _unit(_cross(ref, normal), fallback=(1.0, 0.0, 0.0))
+    v_axis = _unit(_cross(normal, u_axis), fallback=(0.0, 1.0, 0.0))
+
+    local = [
+        (
+            _dot(_sub(point, origin), u_axis),
+            _dot(_sub(point, origin), v_axis),
+        )
+        for point in pts
+    ]
+    xs = [pt[0] for pt in local]
+    ys = [pt[1] for pt in local]
+    avg_uv = (
+        sum(xs) / float(len(xs)),
+        sum(ys) / float(len(ys)),
+    )
+    bbox_center = (
+        0.5 * (min(xs) + max(xs)),
+        0.5 * (min(ys) + max(ys)),
+    )
+    centroid_uv = _polygon_centroid(local)
+
+    candidate_uvs = [centroid_uv, avg_uv, bbox_center]
+    grid_count = 5
+    if max(xs) - min(xs) > 1e-9 and max(ys) - min(ys) > 1e-9:
+        for iy in range(grid_count):
+            ty = (iy + 0.5) / float(grid_count)
+            y = min(ys) + (max(ys) - min(ys)) * ty
+            for ix in range(grid_count):
+                tx = (ix + 0.5) / float(grid_count)
+                x = min(xs) + (max(xs) - min(xs)) * tx
+                candidate_uvs.append((x, y))
+
+    seen = set()
+    for uv in candidate_uvs:
+        key = (round(float(uv[0]), 6), round(float(uv[1]), 6))
+        if key in seen:
+            continue
+        seen.add(key)
+        if not _point_in_polygon_2d(uv, local):
+            continue
+        return _add(origin, _add(_scale(u_axis, uv[0]), _scale(v_axis, uv[1])))
+
+    return _add(origin, _add(_scale(u_axis, centroid_uv[0]), _scale(v_axis, centroid_uv[1])))
 
 
 def _uniform_sample(rng, lo, hi):
@@ -998,6 +1097,35 @@ def _resolve_record_surface_cut_polygons(record):
     return []
 
 
+def _surface_subtraction_strategy(record):
+    defect_type = str((record or {}).get("type") or "").strip().lower()
+    if defect_type in ("spalling", "exposed_rebar"):
+        return "cavity"
+    if defect_type == "crack":
+        return "strip"
+    return "generic"
+
+
+def _surface_subtraction_record_priority(record):
+    strategy = _surface_subtraction_strategy(record)
+    if strategy == "cavity":
+        return 0
+    if strategy == "strip":
+        return 1
+    return 2
+
+
+def _surface_subtraction_discard_points(record, polygons):
+    if _surface_subtraction_strategy(record) != "cavity":
+        return []
+    discard_points = []
+    for polygon in polygons or []:
+        sample_point = _polygon_sample_point_3d(polygon)
+        if sample_point is not None:
+            discard_points.append(sample_point)
+    return discard_points
+
+
 def _object_key(value):
     text = str(value or "").strip()
     return text.lower() if text else ""
@@ -1432,20 +1560,30 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
     targets = 0
     resolved_records = 0
     for group in by_target_records.values():
-        target_ids = [group.get("target_id")] if rs.IsObject(group.get("target_id")) else []
-        if not target_ids:
+        current_target_ids = [group.get("target_id")] if rs.IsObject(group.get("target_id")) else []
+        if not current_target_ids:
             continue
         layer_name = str(group.get("layer_name") or "")
-        layer_records = list(group.get("records") or [])
+        layer_records = sorted(
+            list(group.get("records") or []),
+            key=_surface_subtraction_record_priority,
+        )
         resolved_records += len(layer_records)
 
-        cutter_ids = []
-        helper_ids = []
-        try:
-            for record in layer_records:
-                polygons = _resolve_record_surface_cut_polygons(record)
-                if not polygons:
-                    continue
+        group_cutters = 0
+        applied_any = False
+        for record in layer_records:
+            polygons = _resolve_record_surface_cut_polygons(record)
+            if not polygons:
+                continue
+
+            discard_points = _surface_subtraction_discard_points(record, polygons)
+            cutter_ids = []
+            helper_ids = []
+            try:
+                if not current_target_ids:
+                    break
+
                 normal_vec = _unit(record.get("normal") or (0.0, 0.0, 1.0), fallback=(0.0, 0.0, 1.0))
                 offset_span = abs(_to_float(record.get("normal_offset"), 0.0))
                 extrude_distance = max(normal_extrude_distance, normal_extrude_distance + offset_span)
@@ -1474,17 +1612,40 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
                             cutter_ids.append(curve_id)
                     else:
                         cutter_ids.append(curve_id)
-            if not cutter_ids:
-                continue
+                if not cutter_ids:
+                    continue
 
-            split_ids = subtract_surface(cutter_ids, target_surfaces=target_ids, delete_inputs=True) or []
-            _assign_layer(split_ids, layer_name)
+                try:
+                    split_ids = subtract_surface(
+                        cutter_ids,
+                        target_surfaces=current_target_ids,
+                        delete_inputs=True,
+                        discard_points=discard_points,
+                    ) or []
+                except TypeError as exc:
+                    if "discard_points" not in str(exc):
+                        raise
+                    print("Surface subtraction: cached old subtract_surface() detected; retrying without discard_points. Restart Rhino to load the latest spalling cut logic.")
+                    split_ids = subtract_surface(
+                        cutter_ids,
+                        target_surfaces=current_target_ids,
+                        delete_inputs=True,
+                    ) or []
+
+                split_ids = [sid for sid in _coerce_ids(split_ids) if sid and rs.IsObject(sid)]
+                if split_ids:
+                    current_target_ids = _dedupe_ids(split_ids)
+                    _assign_layer(current_target_ids, layer_name)
+                    applied_any = True
+                group_cutters += len(cutter_ids)
+            finally:
+                _delete_objects(helper_ids)
+                _delete_objects(cutter_ids)
+
+        if applied_any:
             groups += 1
-            cutters += len(cutter_ids)
-            targets += len(target_ids)
-        finally:
-            _delete_objects(helper_ids)
-            _delete_objects(cutter_ids)
+            cutters += group_cutters
+            targets += 1
 
     return {
         "groups": groups,
@@ -1511,18 +1672,6 @@ def _extract_camera_defects(records):
             }
         )
     return defects
-
-
-def load_defect_records(path):
-    """Load saved defect placement records for rendering/camera seeding."""
-    if not path:
-        raise ValueError("A valid record path is required.")
-    abs_path = os.path.abspath(path)
-    if not os.path.isfile(abs_path):
-        raise IOError("Defect record file not found: '{}'".format(abs_path))
-    with open(abs_path, "r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    return data
 
 
 def defects_from_record_payload(payload, include_defect_types=None):

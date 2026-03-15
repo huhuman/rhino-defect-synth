@@ -16,6 +16,14 @@ def _as_list(value):
         return []
     if isinstance(value, (list, tuple)):
         return list(value)
+    if isinstance(value, (str, bytes, dict)):
+        return [value]
+    if hasattr(value, "X") and hasattr(value, "Y"):
+        return [value]
+    try:
+        return list(value)
+    except TypeError:
+        pass
     return [value]
 
 
@@ -60,6 +68,17 @@ def _dedupe_ids(ids):
         seen.add(obj_id)
         ordered.append(obj_id)
     return ordered
+
+
+def _is_valid_object_id(obj_id):
+    if not obj_id:
+        return False
+    if str(obj_id) == "00000000-0000-0000-0000-000000000000":
+        return False
+    try:
+        return bool(rs.IsObject(obj_id))
+    except Exception:
+        return False
 
 
 def _normalize_layer_names(layer_names):
@@ -183,11 +202,63 @@ def _brep_representative_point(brep):
     return None
 
 
+def _surface_point_distance(obj_id, point):
+    if not _is_valid_object_id(obj_id) or point is None or not rs.IsSurface(obj_id):
+        return None
+    try:
+        uv = rs.SurfaceClosestPoint(obj_id, point)
+    except Exception:
+        uv = None
+    if not uv:
+        return None
+    try:
+        surface_point = rs.EvaluateSurface(obj_id, uv[0], uv[1])
+    except Exception:
+        surface_point = None
+    if surface_point is None:
+        return None
+    return _distance(surface_point, point)
+
+
+def _object_representative_point(obj_id):
+    if not _is_valid_object_id(obj_id):
+        return None
+
+    bbox = rs.BoundingBox(obj_id)
+    bbox_center = None
+    if bbox:
+        try:
+            bbox_center = (
+                sum(pt.X for pt in bbox) / float(len(bbox)),
+                sum(pt.Y for pt in bbox) / float(len(bbox)),
+                sum(pt.Z for pt in bbox) / float(len(bbox)),
+            )
+        except Exception:
+            bbox_center = None
+
+    if rs.IsSurface(obj_id):
+        sample = bbox_center or _brep_representative_point(rs.coercebrep(obj_id))
+        if sample is not None:
+            try:
+                uv = rs.SurfaceClosestPoint(obj_id, sample)
+            except Exception:
+                uv = None
+            if uv:
+                try:
+                    point = rs.EvaluateSurface(obj_id, uv[0], uv[1])
+                except Exception:
+                    point = None
+                if point is not None:
+                    return point
+
+    return _brep_representative_point(rs.coercebrep(obj_id))
+
+
 def _point_inside_solid_brep(brep, point, tolerance):
     if brep is None or point is None or not getattr(brep, "IsSolid", False):
         return False
     try:
-        return bool(brep.IsPointInside(point, float(tolerance), True))
+        return bool(brep.IsPointInside(point, float(tolerance), False))
     except Exception:
         return False
 
@@ -212,25 +283,70 @@ def _filter_split_breps_keep_outer(split_breps, cutter_breps, tolerance):
     return kept
 
 
-def _filter_split_piece_ids_keep_outer(piece_ids, cutter_id, tolerance):
+def _discard_piece_ids_from_points(piece_ids, discard_points, tolerance):
+    valid_ids = [obj_id for obj_id in _dedupe_ids(_as_list(piece_ids)) if obj_id and rs.IsObject(obj_id)]
+    points = [_xyz(point) for point in _as_list(discard_points) if point is not None]
+    if len(valid_ids) <= 1 or not points:
+        return []
+
+    area_by_id = dict((obj_id, _surface_like_area(obj_id)) for obj_id in valid_ids)
+    largest_area = max(area_by_id.values()) if area_by_id else 0.0
+    tolerance_limit = max(float(tolerance) * 10.0, 1e-4)
+    discard_ids = []
+    for point in points:
+        best_id = None
+        best_score = None
+        for obj_id in valid_ids:
+            distance = _surface_point_distance(obj_id, point)
+            if distance is None:
+                continue
+            try:
+                on_surface = bool(rs.IsPointOnSurface(obj_id, point))
+            except Exception:
+                on_surface = False
+            score = (
+                1 if on_surface else 0,
+                -float(distance),
+                -_surface_like_area(obj_id),
+            )
+            if best_score is None or score > best_score:
+                best_id = obj_id
+                best_score = score
+        if best_id is None:
+            continue
+        best_distance = -best_score[1]
+        best_area = area_by_id.get(best_id, 0.0)
+        if best_distance <= tolerance_limit and best_area < largest_area:
+            discard_ids.append(best_id)
+    return _dedupe_ids(discard_ids)
+
+
+def _filter_split_piece_ids_keep_outer(piece_ids, cutter_ids, tolerance, discard_points=None):
     valid_ids = [obj_id for obj_id in _dedupe_ids(_as_list(piece_ids)) if obj_id and rs.IsObject(obj_id)]
     if not valid_ids:
         return []
 
-    cutter_brep = rs.coercebrep(cutter_id)
-    if cutter_brep is None or not getattr(cutter_brep, "IsSolid", False):
+    discard_ids = _discard_piece_ids_from_points(valid_ids, discard_points, tolerance)
+    if discard_ids:
+        return [obj_id for obj_id in valid_ids if obj_id not in set(discard_ids)]
+
+    solid_cutters = []
+    for cutter_id in _dedupe_ids(_as_list(cutter_ids)):
+        cutter_brep = rs.coercebrep(cutter_id)
+        if cutter_brep is not None and getattr(cutter_brep, "IsSolid", False):
+            solid_cutters.append(cutter_brep)
+    if not solid_cutters:
         return None
 
     kept = []
     for obj_id in valid_ids:
-        piece_brep = rs.coercebrep(obj_id)
-        point = _brep_representative_point(piece_brep)
-        if point is None or not _point_inside_solid_brep(cutter_brep, point, tolerance):
+        point = _object_representative_point(obj_id)
+        if point is None or not any(_point_inside_solid_brep(cutter_brep, point, tolerance) for cutter_brep in solid_cutters):
             kept.append(obj_id)
     return kept
 
 
-def _split_surface_keep_outer(target_id, cutter_ids, delete_input=False):
+def _split_surface_keep_outer(target_id, cutter_ids, delete_input=False, discard_points=None):
     if not target_id or not rs.IsObject(target_id) or not rs.IsSurface(target_id):
         return None
 
@@ -260,45 +376,43 @@ def _split_surface_keep_outer(target_id, cutter_ids, delete_input=False):
         split_breps = None
     if not split_breps:
         return None
+    split_breps = [brep for brep in _as_list(split_breps) if isinstance(brep, Rhino.Geometry.Brep)]
+    if not split_breps:
+        return None
 
-    kept_breps = _filter_split_breps_keep_outer(split_breps, cutter_breps, tolerance)
-    if kept_breps is None:
-        best_brep = None
-        best_area = None
-        for brep in split_breps:
-            amp = None
-            try:
-                amp = Rhino.Geometry.AreaMassProperties.Compute(brep)
-                area = amp.Area if amp else 0.0
-            except Exception:
-                area = 0.0
-            finally:
-                if amp:
-                    dispose = getattr(amp, "Dispose", None)
-                    if dispose:
-                        dispose()
-            if best_area is None or area > best_area:
-                best_brep = brep
-                best_area = area
-        kept_breps = [best_brep] if best_brep is not None else []
-
-    new_ids = []
+    split_ids = []
     layer_name = rs.ObjectLayer(target_id)
-    for brep in kept_breps:
+    for brep in split_breps:
         new_id = sc.doc.Objects.AddBrep(brep)
-        if not new_id:
+        if not _is_valid_object_id(new_id):
             continue
         if layer_name and rs.IsLayer(layer_name):
             rs.ObjectLayer(new_id, layer_name)
-        new_ids.append(new_id)
+        split_ids.append(new_id)
 
-    if not new_ids:
+    if not split_ids:
+        return None
+
+    kept_ids = _filter_split_piece_ids_keep_outer(
+        split_ids,
+        cutter_ids,
+        tolerance,
+        discard_points=discard_points,
+    )
+    if kept_ids is None:
+        keep_id = _keep_largest_piece(split_ids)
+        kept_ids = [keep_id] if keep_id and rs.IsObject(keep_id) else []
+    discard_ids = [sid for sid in split_ids if sid not in kept_ids and rs.IsObject(sid)]
+    if discard_ids:
+        rs.DeleteObjects(discard_ids)
+
+    if not kept_ids:
         return None
 
     if delete_input and rs.IsObject(target_id):
         rs.DeleteObject(target_id)
 
-    return new_ids
+    return kept_ids
 
 
 def _sample_domain(domain, sample_count, margin):
@@ -790,7 +904,7 @@ def create_curve_from_file(filename, close_curve=True, scale=1.0, z=0.0, layer_n
     return curves
 
 
-def subtract_surface(curves, target_surfaces=None, delete_inputs=False):
+def subtract_surface(curves, target_surfaces=None, delete_inputs=False, discard_points=None):
     """Subtract/split target surfaces using closed defect curves.
 
     This helper tries boolean difference first; if that fails it falls back to
@@ -835,6 +949,7 @@ def subtract_surface(curves, target_surfaces=None, delete_inputs=False):
                 target,
                 cutter_ids,
                 delete_input=bool(delete_inputs),
+                discard_points=discard_points,
             )
             if split_result:
                 output_ids.extend(_as_list(split_result))
@@ -871,15 +986,7 @@ def subtract_surface(curves, target_surfaces=None, delete_inputs=False):
                     if len(split_ids) <= 1:
                         next_pieces.extend(split_ids)
                         continue
-
-                    kept_ids = _filter_split_piece_ids_keep_outer(split_ids, cutter_id, tolerance)
-                    if kept_ids is None:
-                        keep_id = _keep_largest_piece(split_ids)
-                        kept_ids = [keep_id] if keep_id and rs.IsObject(keep_id) else []
-                    discard_ids = [sid for sid in split_ids if sid not in kept_ids and rs.IsObject(sid)]
-                    if delete_inputs and discard_ids:
-                        rs.DeleteObjects(discard_ids)
-                    next_pieces.extend([sid for sid in kept_ids if sid and rs.IsObject(sid)])
+                    next_pieces.extend(split_ids)
                 else:
                     next_pieces.append(piece_id)
             pieces = _dedupe_ids(next_pieces)
@@ -887,7 +994,19 @@ def subtract_surface(curves, target_surfaces=None, delete_inputs=False):
                 break
 
         if pieces:
-            output_ids.extend(pieces)
+            kept_ids = _filter_split_piece_ids_keep_outer(
+                pieces,
+                cutter_ids,
+                tolerance,
+                discard_points=discard_points,
+            )
+            if kept_ids is None:
+                keep_id = _keep_largest_piece(pieces)
+                kept_ids = [keep_id] if keep_id and rs.IsObject(keep_id) else []
+            discard_ids = [sid for sid in pieces if sid not in kept_ids and rs.IsObject(sid)]
+            if discard_ids:
+                rs.DeleteObjects(discard_ids)
+            output_ids.extend(kept_ids or [])
         else:
             output_ids.append(target)
 
