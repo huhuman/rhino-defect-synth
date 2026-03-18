@@ -147,6 +147,7 @@ def create_model(params):
         crack_faces = create_cube(
             cube_map_dir=cube_cfg["cube_map_dir"],
             start_face_index=params.get("start_face_index", cube_cfg.get("start_face_index", 0)),
+            build_offset_poly=bool(cube_cfg.get("build_offset_poly", True)),
         )
 
         inward_dirs = {

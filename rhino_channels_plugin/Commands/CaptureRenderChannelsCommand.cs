@@ -13,12 +13,35 @@ namespace RhinoChannelsPlugin.Commands
 {
     public sealed class CaptureRenderChannelsCommand : Command
     {
+        private const bool VerboseLogging = false;
+
+        private static class ReusableBuffers
+        {
+            public static Point3d[] WorldPoints = Array.Empty<Point3d>();
+            public static bool[] ValidMask = Array.Empty<bool>();
+            public static float[] SourceNormals = Array.Empty<float>();
+            public static float[] Depth = Array.Empty<float>();
+            public static float[] Normal = Array.Empty<float>();
+
+            public static void EnsureSizes(int srcPixelCount, int outPixelCount)
+            {
+                if (WorldPoints.Length != srcPixelCount)
+                    WorldPoints = new Point3d[srcPixelCount];
+                if (ValidMask.Length != srcPixelCount)
+                    ValidMask = new bool[srcPixelCount];
+                if (SourceNormals.Length != srcPixelCount * 3)
+                    SourceNormals = new float[srcPixelCount * 3];
+                if (Depth.Length != outPixelCount)
+                    Depth = new float[outPixelCount];
+                if (Normal.Length != outPixelCount * 3)
+                    Normal = new float[outPixelCount * 3];
+            }
+        }
+
         public override string EnglishName => "CaptureRenderChannels";
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
-            RhinoApp.WriteLine("CaptureRenderChannels: command started.");
-
             var depthPath = string.Empty;
             var normalPath = string.Empty;
             var viewName = string.Empty;
@@ -63,7 +86,7 @@ namespace RhinoChannelsPlugin.Commands
                     throw new InvalidOperationException("No matching view found.");
 
                 if (!string.IsNullOrWhiteSpace(rendererToken))
-                    RhinoApp.WriteLine("CaptureRenderChannels: RendererId is ignored in viewport capture mode.");
+                    LogVerbose("CaptureRenderChannels: RendererId is ignored in viewport capture mode.");
 
                 view.Redraw();
 
@@ -76,8 +99,12 @@ namespace RhinoChannelsPlugin.Commands
                 if (outWidth <= 0 || outHeight <= 0)
                     throw new InvalidOperationException("Invalid output dimensions.");
 
-                RhinoApp.WriteLine(
+                LogVerbose(
                     $"CaptureRenderChannels: using view '{view.ActiveViewport.Name}', source={srcSize.Width}x{srcSize.Height}, output={outWidth}x{outHeight}.");
+
+                var srcPixelCount = srcSize.Width * srcSize.Height;
+                var outPixelCount = outWidth * outHeight;
+                ReusableBuffers.EnsureSizes(srcPixelCount, outPixelCount);
 
                 using var zcap = new ZBufferCapture(view.ActiveViewport);
                 zcap.ShowIsocurves(false);
@@ -88,11 +115,15 @@ namespace RhinoChannelsPlugin.Commands
                 zcap.ShowAnnotations(false);
                 zcap.ShowLights(false);
 
-                var worldPoints = new Point3d[srcSize.Width * srcSize.Height];
-                var validMask = new bool[srcSize.Width * srcSize.Height];
+                var worldPoints = ReusableBuffers.WorldPoints;
+                var validMask = ReusableBuffers.ValidMask;
+                var sourceNormals = ReusableBuffers.SourceNormals;
+                var depth = ReusableBuffers.Depth;
+                var normal = ReusableBuffers.Normal;
+
                 CaptureWorldPoints(zcap, srcSize.Width, srcSize.Height, worldPoints, validMask);
 
-                var depth = BuildDepthBuffer(
+                FillDepthBuffer(
                     worldPoints,
                     validMask,
                     srcSize.Width,
@@ -100,22 +131,25 @@ namespace RhinoChannelsPlugin.Commands
                     outWidth,
                     outHeight,
                     view.ActiveViewport.CameraLocation,
-                    view.ActiveViewport.CameraDirection);
+                    view.ActiveViewport.CameraDirection,
+                    depth);
 
-                var sourceNormals = BuildSourceNormalBuffer(
+                FillSourceNormalBuffer(
                     worldPoints,
                     validMask,
                     srcSize.Width,
                     srcSize.Height,
-                    view.ActiveViewport.CameraDirection);
+                    view.ActiveViewport.CameraDirection,
+                    sourceNormals);
 
-                var normal = ResampleVectorBuffer(
+                ResampleVectorBuffer(
                     sourceNormals,
                     srcSize.Width,
                     srcSize.Height,
                     outWidth,
                     outHeight,
-                    3);
+                    3,
+                    normal);
 
                 LogMinMax("Depth", depth);
                 LogMinMax("Normal", normal);
@@ -123,7 +157,7 @@ namespace RhinoChannelsPlugin.Commands
                 WritePfm(depthPath, outWidth, outHeight, 1, depth);
                 WritePfm(normalPath, outWidth, outHeight, 3, normal);
 
-                RhinoApp.WriteLine($"CaptureRenderChannels: wrote '{depthPath}' and '{normalPath}'.");
+                LogVerbose($"CaptureRenderChannels: wrote '{depthPath}' and '{normalPath}'.");
                 return Result.Success;
             }
             catch (Exception ex)
@@ -163,7 +197,7 @@ namespace RhinoChannelsPlugin.Commands
             }
         }
 
-        private static float[] BuildDepthBuffer(
+        private static void FillDepthBuffer(
             Point3d[] worldPoints,
             bool[] validMask,
             int srcWidth,
@@ -171,12 +205,12 @@ namespace RhinoChannelsPlugin.Commands
             int outWidth,
             int outHeight,
             Point3d cameraLocation,
-            Vector3d cameraDirection)
+            Vector3d cameraDirection,
+            float[] data)
         {
             if (!cameraDirection.Unitize())
                 cameraDirection = new Vector3d(0, 0, -1);
 
-            var data = new float[outWidth * outHeight];
             for (var y = 0; y < outHeight; y++)
             {
                 var sy = MapCoord(y, outHeight, srcHeight);
@@ -196,17 +230,17 @@ namespace RhinoChannelsPlugin.Commands
                     }
                 }
             }
-            return data;
         }
 
-        private static float[] BuildSourceNormalBuffer(
+        private static void FillSourceNormalBuffer(
             Point3d[] worldPoints,
             bool[] validMask,
             int width,
             int height,
-            Vector3d cameraDirection)
+            Vector3d cameraDirection,
+            float[] data)
         {
-            var data = new float[width * height * 3];
+            Array.Clear(data, 0, width * height * 3);
             if (!cameraDirection.Unitize())
                 cameraDirection = new Vector3d(0, 0, -1);
 
@@ -238,8 +272,6 @@ namespace RhinoChannelsPlugin.Commands
                     data[baseIndex + 2] = (float)n.Z;
                 }
             }
-
-            return data;
         }
 
         private static bool TryComputeTangent(
@@ -303,18 +335,21 @@ namespace RhinoChannelsPlugin.Commands
             return true;
         }
 
-        private static float[] ResampleVectorBuffer(
+        private static void ResampleVectorBuffer(
             float[] source,
             int srcWidth,
             int srcHeight,
             int outWidth,
             int outHeight,
-            int components)
+            int components,
+            float[] output)
         {
             if (srcWidth == outWidth && srcHeight == outHeight)
-                return source;
+            {
+                Array.Copy(source, output, outWidth * outHeight * components);
+                return;
+            }
 
-            var output = new float[outWidth * outHeight * components];
             for (var y = 0; y < outHeight; y++)
             {
                 var sy = MapCoord(y, outHeight, srcHeight);
@@ -327,7 +362,6 @@ namespace RhinoChannelsPlugin.Commands
                         output[oBase + c] = source[sBase + c];
                 }
             }
-            return output;
         }
 
         private static int MapCoord(int coord, int outSize, int srcSize)
@@ -363,6 +397,8 @@ namespace RhinoChannelsPlugin.Commands
 
         private static void LogMinMax(string label, float[] data)
         {
+            if (!VerboseLogging)
+                return;
             if (data.Length == 0)
             {
                 RhinoApp.WriteLine($"CaptureRenderChannels: {label} channel empty.");
@@ -384,6 +420,12 @@ namespace RhinoChannelsPlugin.Commands
                 if (v > max) max = v;
             }
             RhinoApp.WriteLine($"CaptureRenderChannels: {label} min={min}, max={max}, NaN={nanCount}");
+        }
+
+        private static void LogVerbose(string message)
+        {
+            if (VerboseLogging)
+                RhinoApp.WriteLine(message);
         }
     }
 }

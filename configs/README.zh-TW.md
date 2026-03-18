@@ -67,9 +67,9 @@
 | `output_index_start` | `int` | batch 模式 `view_XXX` 命名起始 offset。 | `0` | 會和每次 capture 影格數累加，確保檔名連續。 |
 | `preparation_scope` | `arrangement \| render_iter \| model_iter` | 控制 nested render loop 中材質清理 + preparation 的重跑頻率。 | `arrangement` | `arrangement` 為原本行為；`render_iter` 是穩定/效能折衷；`model_iter` 最保守、最省資源。 |
 | `stability.enabled` | `bool` | batch 模式保守穩定化（等待/GC/重試/guard）總開關。 | `true` | 設為 `false` 會關閉所有穩定化輔助。 |
-| `stability.wait_after_reset_ms`, `stability.wait_after_preparation_ms`, `stability.wait_before_render_ms`, `stability.wait_after_render_ms`, `stability.wait_on_retry_ms` | `int` | 在 Rhino 重操作與重試路徑前後插入等待/idle。 | `20`, `40`, `40`, `60`, `400` | 有助於降低長迴圈中的時序性失敗。 |
+| `stability.wait_after_reset_ms`, `stability.wait_after_preparation_ms`, `stability.wait_before_render_ms`, `stability.wait_after_render_ms`, `stability.wait_after_capture_frame_ms`, `stability.wait_on_retry_ms` | `int` | 在 Rhino 重操作、逐幀 capture 清理與重試路徑前後插入等待/idle。 | `20`, `40`, `40`, `60`, `0`, `400` | `wait_after_capture_frame_ms` 主要用於長 capture 序列，讓 viewport/plugin teardown 有一點喘息空間。 |
 | `stability.render_retry_count` | `int` | render pass 失敗後重試次數。 | `1` | 每次重試前會等待並執行 GC。 |
-| `stability.gc_every_render_passes`, `stability.gc_every_model_iters` | `int` | nested loop 的 Python/.NET GC 週期。 | `1`, `1` | 設 `0` 可關閉該 GC 週期。 |
+| `stability.gc_every_capture_frames`, `stability.gc_every_render_passes`, `stability.gc_every_model_iters` | `int` | nested loop 在 capture frame、render pass、model iteration 三個層級的 Python/.NET GC 週期。 | `8`, `1`, `1` | `gc_every_capture_frames` 是長序列 render 時抑制 viewport/plugin buffer 累積漂移的主要旋鈕。 |
 | `stability.clear_undo_every_render_passes`, `stability.clear_undo_every_model_iters` | `int` | 定期清 Rhino undo records 以降低記憶體壓力。 | `1`, `1` | 任一 cadence 設 `0` 可單獨停用。 |
 | `stability.max_private_memory_mb` | `float` | 當 Rhino private memory 到達門檻時，提早安全停止 batch。 | `0.0` | `0` 代表停用；用途是讓程式受控停下，而不是等 Rhino 失穩。 |
 | `stability.max_render_passes_per_run` | `int` | 完成固定數量的 render pass 後提早停止 batch。 | `0` | `0` 代表停用；適合配合外部 supervisor 分段重啟 Rhino。 |
@@ -99,6 +99,7 @@
 |---|---|---|---|---|
 | `modeling.cube.cube_map_dir` | `string` | cube contour/crack map 輸入資料夾。 | `cube_defaults.yaml` | cube 必填。 |
 | `modeling.cube.start_face_index` | `int` | cube 面索引偏移。 | `cube_defaults.yaml` | 可被 `main.run(start_face_index=...)` 覆蓋。 |
+| `modeling.cube.build_offset_poly` | `bool` | 是否先建立侵蝕後的外層開口 (`offset_poly`) 再生成 crack。 | `cube_defaults.yaml` | `false` 時改用 `crack_polys` 直接切外表面，並自表層往內擠出。 |
 | `modeling.start_face_index` | `int` | pipeline 在 cube 分支吃的執行期覆蓋值。 | `main.run` 參數 | 若設定，優先於 `modeling.cube.start_face_index`。 |
 
 ## Modeling：Component (`modeling.component`)

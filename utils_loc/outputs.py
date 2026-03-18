@@ -11,6 +11,17 @@ import System.Drawing.Imaging as Imaging
 import System.IO as IO
 
 
+def _dispose_if_possible(obj):
+    if obj is None:
+        return
+    dispose = getattr(obj, "Dispose", None)
+    if callable(dispose):
+        try:
+            dispose()
+        except Exception:
+            pass
+
+
 def _ensure_out_dir(path):
     out_dir = os.path.dirname(path) or "."
     os.makedirs(out_dir, exist_ok=True)
@@ -96,24 +107,28 @@ def _capture_bitmap(rhino_view, width=None, height=None, max_length=None, transp
         height=height,
         max_length=max_length,
     )
-    capture = Rhino.Display.ViewCapture()
-    capture.Width = resolved_width
-    capture.Height = resolved_height
-    capture.ScaleScreenItems = False
-    capture.DrawAxes = False
-    capture.DrawGrid = False
-    capture.DrawGridAxes = False
-    capture.TransparentBackground = bool(transparent)
+    capture = None
+    try:
+        capture = Rhino.Display.ViewCapture()
+        capture.Width = resolved_width
+        capture.Height = resolved_height
+        capture.ScaleScreenItems = False
+        capture.DrawAxes = False
+        capture.DrawGrid = False
+        capture.DrawGridAxes = False
+        capture.TransparentBackground = bool(transparent)
 
-    # Ensure the viewport has drawn the latest state before capture.
-    rhino_view.Redraw()
-    rs.Sleep(50)
+        # Ensure the viewport has drawn the latest state before capture.
+        rhino_view.Redraw()
+        _rhino_idle_wait(wait_ms=5)
 
-    # CaptureToBitmap expects a RhinoView instance.
-    bitmap = capture.CaptureToBitmap(rhino_view)
-    if bitmap is None:
-        raise RuntimeError("View capture failed to produce a bitmap.")
-    return bitmap
+        # CaptureToBitmap expects a RhinoView instance.
+        bitmap = capture.CaptureToBitmap(rhino_view)
+        if bitmap is None:
+            raise RuntimeError("View capture failed to produce a bitmap.")
+        return bitmap
+    finally:
+        _dispose_if_possible(capture)
 
 
 def _try_set_attr(target, name, value):
@@ -172,7 +187,7 @@ def _capture_render_channels_to_files(rhino_view, depth_path, normal_path, width
     # consume active view with Enter to avoid accidental lookup mismatch.
     rs.CurrentView(view_name)
     rhino_view.Redraw()
-    rs.Sleep(50)
+    _rhino_idle_wait(wait_ms=5)
 
     cmd_parts = [
         "-CaptureRenderChannels",
@@ -197,7 +212,7 @@ def _capture_render_channels_to_files(rhino_view, depth_path, normal_path, width
     ok = rs.Command(" ".join(cmd_parts), echo=False)
     if not ok:
         raise RuntimeError("CaptureRenderChannels command failed. Is the plugin loaded?")
-    _rhino_idle_wait(wait_ms=50)
+    _rhino_idle_wait(wait_ms=5)
     if not _wait_for_file_ready(depth_path, timeout_ms=3000, poll_ms=50):
         raise RuntimeError(
             f"CaptureRenderChannels completed but depth output was not found: {depth_path}"
@@ -267,7 +282,7 @@ def _capture_mask_basecolor_to_file(rhino_view, mask_path, width=None, height=No
 
     rs.CurrentView(view_name)
     rhino_view.Redraw()
-    rs.Sleep(50)
+    _rhino_idle_wait(wait_ms=5)
 
     cmd_parts = [
         "-CaptureBaseColorMask",
@@ -285,7 +300,7 @@ def _capture_mask_basecolor_to_file(rhino_view, mask_path, width=None, height=No
     ok = rs.Command(" ".join(cmd_parts), echo=False)
     if not ok:
         raise RuntimeError("CaptureBaseColorMask command failed. Is the plugin loaded?")
-    _rhino_idle_wait(wait_ms=50)
+    _rhino_idle_wait(wait_ms=5)
     if not _wait_for_file_ready(mask_path, timeout_ms=3000, poll_ms=50):
         raise RuntimeError(f"CaptureBaseColorMask completed but output was not found: {mask_path}")
     return mask_path

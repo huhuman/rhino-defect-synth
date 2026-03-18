@@ -94,12 +94,12 @@ def _flush_batch_state(path, state):
     _write_json_atomic(path, payload)
 
 
-def _create_timestamped_subdir(base_output_dir):
+def _create_timestamped_subdir(base_output_dir, modeling_strategy="cube"):
     if not str(base_output_dir or "").strip():
         raise ValueError("Config must include rendering.output_dir for batch runs.")
 
     root_dir = os.path.abspath(os.path.expanduser(str(base_output_dir)))
-    base_dir = os.path.join(root_dir, "runs")
+    base_dir = os.path.join(root_dir, "runs", modeling_strategy)
     os.makedirs(base_dir, exist_ok=True)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -362,7 +362,13 @@ def _resolve_stability_cfg(nested_cfg):
         ),
         "wait_before_render_ms": _to_non_negative_int(raw.get("wait_before_render_ms", 40)),
         "wait_after_render_ms": _to_non_negative_int(raw.get("wait_after_render_ms", 60)),
+        "wait_after_capture_frame_ms": _to_non_negative_int(
+            raw.get("wait_after_capture_frame_ms", 0)
+        ),
         "wait_on_retry_ms": _to_non_negative_int(raw.get("wait_on_retry_ms", 400)),
+        "gc_every_capture_frames": _to_non_negative_int(
+            raw.get("gc_every_capture_frames", 8)
+        ),
         "render_retry_count": _to_non_negative_int(raw.get("render_retry_count", 1)),
         "gc_every_render_passes": _to_non_negative_int(raw.get("gc_every_render_passes", 1)),
         "gc_every_model_iters": _to_non_negative_int(raw.get("gc_every_model_iters", 1)),
@@ -389,7 +395,9 @@ def _resolve_stability_cfg(nested_cfg):
                 "wait_after_preparation_ms": 0,
                 "wait_before_render_ms": 0,
                 "wait_after_render_ms": 0,
+                "wait_after_capture_frame_ms": 0,
                 "wait_on_retry_ms": 0,
+                "gc_every_capture_frames": 0,
                 "render_retry_count": 0,
                 "gc_every_render_passes": 0,
                 "gc_every_model_iters": 0,
@@ -851,8 +859,10 @@ def run(
             "Stability controls: "
             f"enabled={stability_cfg['enabled']}, "
             f"render_retry_count={stability_cfg['render_retry_count']}, "
+            f"gc_every_capture_frames={stability_cfg['gc_every_capture_frames']}, "
             f"gc_every_render_passes={stability_cfg['gc_every_render_passes']}, "
             f"gc_every_model_iters={stability_cfg['gc_every_model_iters']}, "
+            f"wait_after_capture_frame_ms={stability_cfg['wait_after_capture_frame_ms']}, "
             f"clear_undo_every_render_passes={stability_cfg['clear_undo_every_render_passes']}, "
             f"clear_undo_every_model_iters={stability_cfg['clear_undo_every_model_iters']}, "
             f"max_private_memory_mb={stability_cfg['max_private_memory_mb']}, "
@@ -1005,6 +1015,12 @@ def run(
                     render_params["model_iter"] = model_iter
                     render_params["render_iter"] = render_iter
                     render_params["output_index_offset"] = next_output_index
+                    render_params["capture_gc_every_frames"] = stability_cfg[
+                        "gc_every_capture_frames"
+                    ]
+                    render_params["capture_wait_after_frame_ms"] = stability_cfg[
+                        "wait_after_capture_frame_ms"
+                    ]
 
                     arrangement_label = arrangement if arrangement is not None else "config"
                     camera_cfg = render_params.get("camera")
@@ -1257,7 +1273,7 @@ if __name__ == "__main__":
         config_name="cube.local.yaml",
         renders_per_model=None,
         max_iter=None,
-        start_face_index=60,
+        start_face_index=54,
         faces_per_model=6,
         seed=None,
         show_cameras=False,

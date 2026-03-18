@@ -17,19 +17,19 @@ namespace RhinoChannelsPlugin.Commands
     [SupportedOSPlatform("windows")]
     public sealed class CaptureBaseColorMaskCommand : Command
     {
+        private const bool VerboseLogging = false;
+
         private sealed class MaskObjectEntry : IDisposable
         {
-            public MaskObjectEntry(Guid objectId, Color color, string layerName, Mesh[] meshes)
+            public MaskObjectEntry(Guid objectId, Color color, Mesh[] meshes)
             {
                 ObjectId = objectId;
                 Color = color;
-                LayerName = layerName;
                 Meshes = meshes ?? Array.Empty<Mesh>();
             }
 
             public Guid ObjectId { get; }
             public Color Color { get; }
-            public string LayerName { get; }
             public Mesh[] Meshes { get; }
 
             public void Dispose()
@@ -104,8 +104,6 @@ namespace RhinoChannelsPlugin.Commands
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
-            RhinoApp.WriteLine("CaptureBaseColorMask: command started.");
-
             var maskPath = string.Empty;
             var viewName = string.Empty;
             var widthToken = string.Empty;
@@ -147,11 +145,11 @@ namespace RhinoChannelsPlugin.Commands
                 if (outWidth <= 0 || outHeight <= 0)
                     throw new InvalidOperationException("Invalid output dimensions.");
 
-                RhinoApp.WriteLine(
+                LogVerbose(
                     $"CaptureBaseColorMask: using view '{view.ActiveViewport.Name}', source={srcSize.Width}x{srcSize.Height}, output={outWidth}x{outHeight}.");
 
                 var maskEntries = CollectVisibleMaskEntries(doc);
-                RhinoApp.WriteLine($"CaptureBaseColorMask: visible mask objects={maskEntries.Count}.");
+                LogVerbose($"CaptureBaseColorMask: visible mask objects={maskEntries.Count}.");
 
                 var previousMode = view.ActiveViewport.DisplayMode;
                 var previousGrid = view.ActiveViewport.ConstructionGridVisible;
@@ -199,7 +197,7 @@ namespace RhinoChannelsPlugin.Commands
                     view.Redraw();
                 }
 
-                RhinoApp.WriteLine($"CaptureBaseColorMask: wrote '{maskPath}'.");
+                LogVerbose($"CaptureBaseColorMask: wrote '{maskPath}'.");
                 return Result.Success;
             }
             catch (Exception ex)
@@ -240,17 +238,10 @@ namespace RhinoChannelsPlugin.Commands
                 if (layer == null || layer.IsDeleted || !layer.IsVisible)
                     continue;
 
-                var layerName = string.IsNullOrWhiteSpace(layer.FullPath)
-                    ? (string.IsNullOrWhiteSpace(layer.Name) ? $"Layer_{layerIndex}" : layer.Name)
-                    : layer.FullPath;
                 var meshes = BuildMonotoneMeshes(obj, layer.Color);
                 if (meshes.Count == 0)
-                {
-                    RhinoApp.WriteLine(
-                        $"CaptureBaseColorMask: skipped unsupported or unmeshable object '{obj.ObjectType}' on layer '{layerName}'.");
                     continue;
-                }
-                entries.Add(new MaskObjectEntry(obj.Id, layer.Color, layerName, meshes.ToArray()));
+                entries.Add(new MaskObjectEntry(obj.Id, layer.Color, meshes.ToArray()));
             }
 
             return entries;
@@ -381,6 +372,12 @@ namespace RhinoChannelsPlugin.Commands
             {
                 return false;
             }
+        }
+
+        private static void LogVerbose(string message)
+        {
+            if (VerboseLogging)
+                RhinoApp.WriteLine(message);
         }
     }
 }

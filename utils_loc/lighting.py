@@ -45,9 +45,20 @@ def set_light_intensity(light_id, value):
         return False
 
     geometry = light_obj.DuplicateLightGeometry()
-    geometry.Intensity = float(value)
-    sc.doc.Lights.Modify(light_obj.Id, geometry)
-    return True
+    if geometry is None:
+        return False
+
+    try:
+        geometry.Intensity = float(value)
+        sc.doc.Lights.Modify(light_obj.Id, geometry)
+        return True
+    finally:
+        dispose = getattr(geometry, "Dispose", None)
+        if callable(dispose):
+            try:
+                dispose()
+            except Exception:
+                pass
 
 
 def random_natural_light_color():

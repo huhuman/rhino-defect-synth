@@ -19,6 +19,7 @@
 - 每個 timestamped batch 輸出資料夾都會額外寫入 `batch_log.txt` 與 `batch_state.json`
 - `batch_state.json` 會記錄目前進度，以及完成 model 邊界上的安全 resume 點
 - stability guard 可在記憶體、材質表大小或 render pass 次數超過門檻時提早受控停止，而不是讓 Rhino 直接硬 crash
+- 長 capture 序列現在可做逐幀 cleanup/GC 節流，channel plugin 也會重用大型 buffer，避免每幀反覆重配造成 session drift
 - nested-loop 的 `seed` 現在會一致地作用在該次 Rhino run 的 batch 隨機流程
 
 ## 需求
@@ -160,7 +161,7 @@ main_cube_batch.run(
   - cube contour 各陣列長度必須一致；不一致會明確報錯
   - 共用 point-set 解析已集中到 `utils_loc.defect_shapes.extract_point_sets()`（`utils_loc.defect_modeling.py` 也使用）
 
-`crack` 幾何透過 `utils_loc/crack_modeling.py::create_crack()` 共用，並可配置深度範圍、圖層與清理行為。函式會驗證 `base_poly` 與 `offset_poly`，且在 `cleanup_inputs=True` 時失敗路徑也會做清理。
+`crack` 幾何透過 `utils_loc/crack_modeling.py::create_crack()` 共用，並可配置深度範圍、圖層與清理行為。有提供 `offset_poly` 時會先建立外層侵蝕殼；未提供時則改由 crack polygon 直接從表面往內擠出。`cleanup_inputs=True` 時失敗路徑仍會清理輸入物件。
 
 ### 3) `rendering`
 由 `utils_loc/pipeline.py::run_render()` 與 `utils_loc/render.py` 使用。
@@ -222,6 +223,7 @@ main_cube_batch.run(
 - `seed`
 - `rendering_sampler`
 - `stability.*`（等待/重試/GC/undo/memory guard）
+- `stability.gc_every_capture_frames` / `stability.wait_after_capture_frame_ms`（用於長 pose sequence capture 期間的速度漂移）
 
 `main_cube_batch.py` 目前流程：
 - 每個模型 iteration：`reset -> preparation -> modeling`，且在重度的非 render document 操作期間會暫停 redraw。

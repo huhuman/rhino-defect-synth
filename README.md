@@ -19,6 +19,7 @@ The current `main_cube_batch.py` path has been hardened for long-running Rhino s
 - each timestamped batch folder now records both `batch_log.txt` and `batch_state.json`
 - `batch_state.json` records current progress plus a safe resume point at completed model boundaries
 - stability guards can stop early on memory/material/pass-count thresholds instead of letting Rhino drift into a hard crash
+- long capture sequences now support frame-level cleanup/GC pacing, and the channel plugin reuses large buffers instead of reallocating them every frame
 - nested-loop `seed` now drives batch-level random choices consistently within that Rhino run
 
 ## Requirements
@@ -160,7 +161,7 @@ Returned model result includes:
   - cube contour arrays must have consistent lengths; mismatches raise explicit errors
   - shared point-set parsing is centralized in `utils_loc.defect_shapes.extract_point_sets()` (also used by `utils_loc.defect_modeling.py`)
 
-`crack` generation is shared through `utils_loc/crack_modeling.py::create_crack()` and takes configurable depth ranges/layers/cleanup. It validates both `base_poly` and `offset_poly`, and applies cleanup in failure paths when `cleanup_inputs=True`.
+`crack` generation is shared through `utils_loc/crack_modeling.py::create_crack()` and takes configurable depth ranges/layers/cleanup. When `offset_poly` is provided it builds the outer erosion shell first; otherwise crack polygons extrude directly from the surface. Cleanup still applies on failure paths when `cleanup_inputs=True`.
 
 ### 3) `rendering`
 Used by `utils_loc/pipeline.py::run_render()` and `utils_loc/render.py`.
@@ -222,6 +223,7 @@ Optional section to control batch iterations and per-model render variants:
 - `seed`
 - `rendering_sampler`
 - `stability.*` (wait/retry/GC/undo/memory guards)
+- `stability.gc_every_capture_frames` / `stability.wait_after_capture_frame_ms` for long pose sequences that slowly drift during capture
 
 Batch flow in `main_cube_batch.py`:
 - Per model iteration: `reset -> preparation -> modeling`, with redraw suspended during heavy non-render document mutations.

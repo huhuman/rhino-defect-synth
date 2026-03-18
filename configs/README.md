@@ -67,9 +67,9 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `output_index_start` | `int` | Starting offset for `view_XXX` numbering in batch mode. | `0` | Combined with per-render captured-frame count to keep filenames continuous. |
 | `preparation_scope` | `arrangement \| render_iter \| model_iter` | Controls how often material cleanup + preparation reruns in nested render loops. | `arrangement` | `arrangement` keeps original behavior; `render_iter` is a safer/faster compromise; `model_iter` is most conservative for stability/perf. |
 | `stability.enabled` | `bool` | Master switch for conservative waits/GC/retries/guards in batch mode. | `true` | Set `false` to disable all stability helpers. |
-| `stability.wait_after_reset_ms`, `stability.wait_after_preparation_ms`, `stability.wait_before_render_ms`, `stability.wait_after_render_ms`, `stability.wait_on_retry_ms` | `int` | Sleep/idle pacing around heavy Rhino operations and retry path. | `20`, `40`, `40`, `60`, `400` | Helps avoid race-like failures in long runs. |
+| `stability.wait_after_reset_ms`, `stability.wait_after_preparation_ms`, `stability.wait_before_render_ms`, `stability.wait_after_render_ms`, `stability.wait_after_capture_frame_ms`, `stability.wait_on_retry_ms` | `int` | Sleep/idle pacing around heavy Rhino operations, per-frame capture cleanup, and retry path. | `20`, `40`, `40`, `60`, `0`, `400` | `wait_after_capture_frame_ms` is mainly for long capture sequences when viewport/plugin teardown needs a little breathing room. |
 | `stability.render_retry_count` | `int` | Retry count for failed render pass before aborting. | `1` | Retries call full render pass again after wait + GC. |
-| `stability.gc_every_render_passes`, `stability.gc_every_model_iters` | `int` | Periodic Python/.NET GC cadence in nested loops. | `1`, `1` | Set `0` to disable a cadence. |
+| `stability.gc_every_capture_frames`, `stability.gc_every_render_passes`, `stability.gc_every_model_iters` | `int` | Periodic Python/.NET GC cadence for capture frames, render passes, and model iterations. | `8`, `1`, `1` | `gc_every_capture_frames` is the main lever when long render sequences slowly drift due to viewport/plugin buffer churn. |
 | `stability.clear_undo_every_render_passes`, `stability.clear_undo_every_model_iters` | `int` | Clears Rhino undo records periodically to reduce memory pressure. | `1`, `1` | Set either cadence to `0` to disable it. |
 | `stability.max_private_memory_mb` | `float` | Stops the batch early when Rhino private memory reaches this threshold. | `0.0` | `0` disables the guard; intended as a controlled stop before Rhino becomes unstable. |
 | `stability.max_render_passes_per_run` | `int` | Stops the batch after a fixed number of completed render passes. | `0` | `0` disables the guard; useful when an external supervisor restarts Rhino between chunks. |
@@ -99,6 +99,7 @@ Batch runtime flow in `main_cube_batch.py`:
 |---|---|---|---|---|
 | `modeling.cube.cube_map_dir` | `string` | Input folder for cube contour/crack maps. | `cube_defaults.yaml` | Required for cube. |
 | `modeling.cube.start_face_index` | `int` | Face offset used by cube modeling. | `cube_defaults.yaml` | Can be overridden by `main.run(start_face_index=...)`. |
+| `modeling.cube.build_offset_poly` | `bool` | Builds the eroded/offset opening (`offset_poly`) before crack extrusion. | `cube_defaults.yaml` | `false` makes cube cracks extrude directly from the outer face using crack polygons as cutters. |
 | `modeling.start_face_index` | `int` | Optional runtime override consumed by pipeline for cube branch. | `main.run` argument | If set, takes precedence over `modeling.cube.start_face_index`. |
 | `preparation.colors` (cube) | `dict[str,str]` | Defines strict cube layers checked by runtime before modeling. | `cube_base.yaml` | Must include `cube::face` and `crack::CS1/2/3`. |
 

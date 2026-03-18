@@ -56,7 +56,7 @@ def create_crack(
         crack_polys: Crack boundary curve ids.
         crack_inside_polys: Inner (hole) curve ids.
         base_poly: Base crack footprint curve id.
-        offset_poly: Outer crack area curve id.
+        offset_poly: Optional outer crack area curve id. When omitted, cracks extrude from the surface.
         diff_polys: Difference polygons used to patch parent surface.
         inward_dir: Required inward vector from sampled surface normal.
         d1_range: (min, max) shallow inward depth.
@@ -71,14 +71,12 @@ def create_crack(
     inside_polys = [cid for cid in crack_inside_polys or [] if cid and rs.IsPolyline(cid)]
     diff_polys = [cid for cid in diff_polys or [] if cid and rs.IsPolyline(cid)]
 
-    if (
-        not crack_polys
-        or not base_poly
-        or not offset_poly
-        or not rs.IsPolyline(base_poly)
-        or not rs.IsPolyline(offset_poly)
-    ):
-        print("create_crack: crack_polys, base_poly, and offset_poly must be valid polylines.")
+    has_offset_poly = bool(offset_poly and rs.IsPolyline(offset_poly))
+    if not crack_polys:
+        print("create_crack: crack_polys must contain valid polylines.")
+        return None
+    if has_offset_poly and (not base_poly or not rs.IsPolyline(base_poly)):
+        print("create_crack: base_poly must be a valid polyline when offset_poly is provided.")
         return None
 
     direction = rs.VectorUnitize(inward_dir) if inward_dir is not None else None
@@ -108,37 +106,42 @@ def create_crack(
             redraw_was_enabled = bool(rs.EnableRedraw(False))
 
         diff_surfaces = []
-        for diff_poly in diff_polys:
-            surfaces = _coerce_ids(rs.AddPlanarSrf(diff_poly) or [])
-            if not surfaces:
-                continue
-            rs.MoveObjects(surfaces, vec_d1)
-            diff_surfaces.extend(surfaces)
+        loft_ids = []
+        if has_offset_poly:
+            for diff_poly in diff_polys:
+                surfaces = _coerce_ids(rs.AddPlanarSrf(diff_poly) or [])
+                if not surfaces:
+                    continue
+                rs.MoveObjects(surfaces, vec_d1)
+                diff_surfaces.extend(surfaces)
 
-        base_bottom_curve = rs.CopyObject(base_poly, vec_d1)
-        if not base_bottom_curve:
-            print("create_crack: failed to offset base curve.")
-            return None
-        cleanup_ids.append(base_bottom_curve)
+            base_bottom_curve = rs.CopyObject(base_poly, vec_d1)
+            if not base_bottom_curve:
+                print("create_crack: failed to offset base curve.")
+                return None
+            cleanup_ids.append(base_bottom_curve)
 
-        if not rs.CurveDirectionsMatch(offset_poly, base_bottom_curve):
-            rs.ReverseCurve(base_bottom_curve)
-        seam_param = rs.CurveClosestPoint(base_bottom_curve, rs.CurveStartPoint(offset_poly))
-        if seam_param is not None:
-            rs.CurveSeam(base_bottom_curve, seam_param)
+            if not rs.CurveDirectionsMatch(offset_poly, base_bottom_curve):
+                rs.ReverseCurve(base_bottom_curve)
+            seam_param = rs.CurveClosestPoint(base_bottom_curve, rs.CurveStartPoint(offset_poly))
+            if seam_param is not None:
+                rs.CurveSeam(base_bottom_curve, seam_param)
 
-        loft_ids = _coerce_ids(rs.AddLoftSrf([offset_poly, base_bottom_curve]) or [])
+            loft_ids = _coerce_ids(rs.AddLoftSrf([offset_poly, base_bottom_curve]) or [])
 
         extrusions = []
         bottom_caps = []
+        crack_start_vector = vec_delta if has_offset_poly else vec_d2
+        crack_move_vector = vec_d1 if has_offset_poly else None
         for crack_poly in crack_polys:
             start = rs.CurveStartPoint(crack_poly)
             if not start:
                 continue
-            end = rs.PointAdd(start, vec_delta)
+            end = rs.PointAdd(start, crack_start_vector)
             extrusion_ids = _coerce_ids([rs.ExtrudeCurveStraight(crack_poly, start, end)])
             if extrusion_ids:
-                rs.MoveObjects(extrusion_ids, vec_d1)
+                if crack_move_vector:
+                    rs.MoveObjects(extrusion_ids, crack_move_vector)
                 extrusions.extend(extrusion_ids)
 
             cap_ids = _coerce_ids(rs.AddPlanarSrf(crack_poly) or [])
@@ -151,15 +154,18 @@ def create_crack(
         for sub_poly in inside_polys:
             start = rs.CurveStartPoint(sub_poly)
             if start:
-                end = rs.PointAdd(start, vec_delta)
+                inside_vector = vec_delta if has_offset_poly else vec_d2
+                end = rs.PointAdd(start, inside_vector)
                 inside_extrusion_ids = _coerce_ids([rs.ExtrudeCurveStraight(sub_poly, start, end)])
                 if inside_extrusion_ids:
-                    rs.MoveObjects(inside_extrusion_ids, vec_d1)
+                    if has_offset_poly:
+                        rs.MoveObjects(inside_extrusion_ids, vec_d1)
                     inside_extrusions.extend(inside_extrusion_ids)
-            cap_ids = _coerce_ids(rs.AddPlanarSrf(sub_poly) or [])
-            if cap_ids:
-                rs.MoveObjects(cap_ids, vec_d1)
-                inside_caps.extend(cap_ids)
+            if has_offset_poly:
+                cap_ids = _coerce_ids(rs.AddPlanarSrf(sub_poly) or [])
+                if cap_ids:
+                    rs.MoveObjects(cap_ids, vec_d1)
+                    inside_caps.extend(cap_ids)
 
         crack_geometry_ids = []
         crack_geometry_ids.extend(extrusions)
@@ -179,7 +185,7 @@ def create_crack(
             "extrusions": extrusions,
             "bottom_caps": bottom_caps,
             "parent_fills": parent_fill_ids,
-            "d1": d1,
+            "d1": d1 if has_offset_poly else 0.0,
             "d2": d2,
         }
     finally:

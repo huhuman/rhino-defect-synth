@@ -1,9 +1,11 @@
 """Render stage helpers used by the pipeline orchestrator."""
 
+import gc
 import math
 import os
 import random
 
+import Rhino
 import rhinoscriptsyntax as rs
 import scriptcontext as sc
 
@@ -30,6 +32,44 @@ from utils_loc.outputs import render_all_outputs
 CAMERA_GIZMO_LAYER_DEFAULT = "demo_camera_gizmos"
 _COMPONENT_RENDER_LAYER_PREFIXES = ("component", "defect")
 _HELPER_LIGHT_PREFIXES = ("face_light", "defect_light")
+
+
+def _to_non_negative_int(value, default=0):
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    return max(0, parsed)
+
+
+def _run_capture_gc():
+    try:
+        gc.collect()
+    except Exception:
+        pass
+    try:
+        import System
+
+        System.GC.Collect()
+        wait_fn = getattr(System.GC, "WaitForPendingFinalizers", None)
+        if callable(wait_fn):
+            wait_fn()
+    except Exception:
+        pass
+
+
+def _stabilize_after_capture_frame(frame_idx_1based, context):
+    wait_after_frame_ms = _to_non_negative_int(context.get("capture_wait_after_frame_ms", 0))
+    gc_every_frames = _to_non_negative_int(context.get("capture_gc_every_frames", 0))
+
+    try:
+        Rhino.RhinoApp.Wait()
+    except Exception:
+        pass
+    if wait_after_frame_ms > 0:
+        rs.Sleep(wait_after_frame_ms)
+    if gc_every_frames > 0 and int(frame_idx_1based) % gc_every_frames == 0:
+        _run_capture_gc()
 
 
 def _setup_render_environment(params):
@@ -378,6 +418,12 @@ def _build_render_context(params):
         "mask_only_layers": mask_only_layers,
         "mask_hide_layers": mask_cfg.get("hide_layers"),
         "channels": dict(channel_cfg) if isinstance(channel_cfg, dict) else {},
+        "capture_gc_every_frames": _to_non_negative_int(
+            params.get("capture_gc_every_frames", 0)
+        ),
+        "capture_wait_after_frame_ms": _to_non_negative_int(
+            params.get("capture_wait_after_frame_ms", 0)
+        ),
         "defect_light_cfg": _normalize_component_defect_light_cfg(lighting_cfg)
         if strategy == "component"
         else {"enabled": False},
@@ -648,6 +694,7 @@ def _capture_pose_sequence(poses, context):
             for i, pose in enumerate(poses[:-1]):
                 next_pose = poses[i + 1]
                 _capture_pose(frame_idx, pose, context)
+                _stabilize_after_capture_frame(frame_idx + 1, context)
                 frame_idx += 1
 
                 for step in range(1, transition_frames + 1):
@@ -664,13 +711,16 @@ def _capture_pose_sequence(poses, context):
                         "light": pose.get("light"),
                     }
                     _capture_pose(frame_idx, interp_pose, context)
+                    _stabilize_after_capture_frame(frame_idx + 1, context)
                     frame_idx += 1
 
             _capture_pose(frame_idx, poses[-1], context)
+            _stabilize_after_capture_frame(frame_idx + 1, context)
             return
 
         for idx, pose in enumerate(poses):
             _capture_pose(idx, pose, context)
+            _stabilize_after_capture_frame(idx + 1, context)
     finally:
         delete_named_lights("defect_light")
 
