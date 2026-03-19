@@ -22,6 +22,12 @@ The current `main_cube_batch.py` path has been hardened for long-running Rhino s
 - long capture sequences now support frame-level cleanup/GC pacing, and the channel plugin reuses large buffers instead of reallocating them every frame
 - nested-loop `seed` now drives batch-level random choices consistently within that Rhino run
 
+Warning:
+- Long-running `cube` batch runs can still crash Rhino unexpectedly. The current guards reduce drift and make resume/restart easier, but they do not fully eliminate the crash issue yet.
+
+TODO:
+- Root-cause and permanently fix the long-run crash behavior in `main_cube_batch.py` instead of relying on guarded early-stop/restart mitigation.
+
 ## Requirements
 - Rhino 8 (Windows) with Python scripting enabled.
 - Python modules available in Rhino:

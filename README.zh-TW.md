@@ -22,6 +22,12 @@
 - 長 capture 序列現在可做逐幀 cleanup/GC 節流，channel plugin 也會重用大型 buffer，避免每幀反覆重配造成 session drift
 - nested-loop 的 `seed` 現在會一致地作用在該次 Rhino run 的 batch 隨機流程
 
+Warning：
+- 長時間的 `cube` batch run 仍然可能讓 Rhino 非預期 crash。現在這些 guard 主要是降低 session drift、讓 resume/restart 比較可控，還沒有把這個 crash 問題徹底解掉。
+
+TODO：
+- 找出 `main_cube_batch.py` 長時間執行 crash 的根因，做真正的永久修復，而不是只依賴 guarded early-stop / restart 這類緩解手段。
+
 ## 需求
 - Rhino 8 (Windows) 並啟用 Python scripting。
 - Rhino 內可用 Python 模組：

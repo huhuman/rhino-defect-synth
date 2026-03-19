@@ -1273,7 +1273,7 @@ if __name__ == "__main__":
         config_name="cube.local.yaml",
         renders_per_model=None,
         max_iter=None,
-        start_face_index=54,
+        start_face_index=0,
         faces_per_model=6,
         seed=None,
         show_cameras=False,
