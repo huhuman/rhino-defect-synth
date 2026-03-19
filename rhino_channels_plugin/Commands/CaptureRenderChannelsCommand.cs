@@ -13,7 +13,7 @@ namespace RhinoChannelsPlugin.Commands
 {
     public sealed class CaptureRenderChannelsCommand : Command
     {
-        private const bool VerboseLogging = false;
+        private static readonly bool VerboseLogging = false;
 
         private static class ReusableBuffers
         {

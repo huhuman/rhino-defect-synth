@@ -17,7 +17,7 @@ namespace RhinoChannelsPlugin.Commands
     [SupportedOSPlatform("windows")]
     public sealed class CaptureBaseColorMaskCommand : Command
     {
-        private const bool VerboseLogging = false;
+        private static readonly bool VerboseLogging = false;
 
         private sealed class MaskObjectEntry : IDisposable
         {
@@ -151,11 +151,12 @@ namespace RhinoChannelsPlugin.Commands
                 var maskEntries = CollectVisibleMaskEntries(doc);
                 LogVerbose($"CaptureBaseColorMask: visible mask objects={maskEntries.Count}.");
 
-                var previousMode = view.ActiveViewport.DisplayMode;
-                var previousGrid = view.ActiveViewport.ConstructionGridVisible;
-                var previousPlane = view.ActiveViewport.ConstructionPlaneVisible;
-                var previousConstructionAxes = view.ActiveViewport.ConstructionAxesVisible;
-                var previousWorldAxes = view.ActiveViewport.WorldAxesVisible;
+                var viewport = view.ActiveViewport;
+                var previousMode = viewport.DisplayMode;
+                var previousGrid = viewport.ConstructionGridVisible;
+                var previousPlane = TryGetViewportBool(viewport, "ConstructionPlaneVisible");
+                var previousConstructionAxes = viewport.ConstructionAxesVisible;
+                var previousWorldAxes = viewport.WorldAxesVisible;
                 var shadedMode = DisplayModeDescription.GetDisplayMode(DisplayModeDescription.ShadedId);
                 if (shadedMode == null)
                     throw new InvalidOperationException("Built-in display mode 'Shaded' is unavailable.");
@@ -163,11 +164,11 @@ namespace RhinoChannelsPlugin.Commands
                 var changedAa = TrySetOpenGlAntialiasLevel(0, out var prevAaLevel);
                 try
                 {
-                    view.ActiveViewport.DisplayMode = shadedMode;
-                    view.ActiveViewport.ConstructionGridVisible = false;
-                    view.ActiveViewport.ConstructionPlaneVisible = false;
-                    view.ActiveViewport.ConstructionAxesVisible = false;
-                    view.ActiveViewport.WorldAxesVisible = false;
+                    viewport.DisplayMode = shadedMode;
+                    viewport.ConstructionGridVisible = false;
+                    TrySetViewportBool(viewport, "ConstructionPlaneVisible", false);
+                    viewport.ConstructionAxesVisible = false;
+                    viewport.WorldAxesVisible = false;
                     view.Redraw();
                     RhinoApp.Wait();
 
@@ -187,11 +188,12 @@ namespace RhinoChannelsPlugin.Commands
                 {
                     foreach (var entry in maskEntries)
                         entry.Dispose();
-                    view.ActiveViewport.DisplayMode = previousMode;
-                    view.ActiveViewport.ConstructionGridVisible = previousGrid;
-                    view.ActiveViewport.ConstructionPlaneVisible = previousPlane;
-                    view.ActiveViewport.ConstructionAxesVisible = previousConstructionAxes;
-                    view.ActiveViewport.WorldAxesVisible = previousWorldAxes;
+                    viewport.DisplayMode = previousMode;
+                    viewport.ConstructionGridVisible = previousGrid;
+                    if (previousPlane.HasValue)
+                        TrySetViewportBool(viewport, "ConstructionPlaneVisible", previousPlane.Value);
+                    viewport.ConstructionAxesVisible = previousConstructionAxes;
+                    viewport.WorldAxesVisible = previousWorldAxes;
                     if (changedAa)
                         TrySetOpenGlAntialiasLevel(prevAaLevel, out _);
                     view.Redraw();
@@ -371,6 +373,45 @@ namespace RhinoChannelsPlugin.Commands
             catch
             {
                 return false;
+            }
+        }
+
+        private static bool? TryGetViewportBool(RhinoViewport viewport, string propertyName)
+        {
+            if (viewport == null || string.IsNullOrWhiteSpace(propertyName))
+                return null;
+
+            try
+            {
+                var prop = viewport.GetType().GetProperty(propertyName);
+                if (prop == null || !prop.CanRead || prop.PropertyType != typeof(bool))
+                    return null;
+
+                var value = prop.GetValue(viewport, null);
+                return value is bool flag ? flag : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static void TrySetViewportBool(RhinoViewport viewport, string propertyName, bool value)
+        {
+            if (viewport == null || string.IsNullOrWhiteSpace(propertyName))
+                return;
+
+            try
+            {
+                var prop = viewport.GetType().GetProperty(propertyName);
+                if (prop == null || !prop.CanWrite || prop.PropertyType != typeof(bool))
+                    return;
+
+                prop.SetValue(viewport, value, null);
+            }
+            catch
+            {
+                // Ignore viewport property differences across RhinoCommon builds.
             }
         }
 
