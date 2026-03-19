@@ -567,7 +567,31 @@ def _ensure_layer(layer_name):
     return created or layer_name
 
 
-def _add_camera_gizmo(idx, pose, scale, layer_name=None):
+def _camera_gizmo_layers(layer_name):
+    root_layer = _ensure_layer(layer_name)
+    if not root_layer:
+        return {"root": None, "cam": None, "label": None}
+    return {
+        "root": root_layer,
+        "cam": _ensure_layer("{}::cam".format(root_layer)),
+        "label": _ensure_layer("{}::label".format(root_layer)),
+    }
+
+
+def _camera_gizmo_layer_tree(layer_name):
+    root = str(layer_name or "").strip()
+    if not root:
+        return []
+    layer_names = rs.LayerNames(sort=True) or []
+    tree = [
+        name for name in layer_names
+        if name == root or name.startswith(root + "::")
+    ]
+    tree.sort(key=lambda name: (name.count("::"), len(name)), reverse=True)
+    return tree
+
+
+def _add_camera_gizmo(idx, pose, scale, layer_names=None):
     pos = tuple(float(v) for v in pose["position"])
     tgt = pose.get("target")
     dir_vec = pose.get("direction")
@@ -588,55 +612,76 @@ def _add_camera_gizmo(idx, pose, scale, layer_name=None):
         tuple(base_center[i] + right[i] * half_w - up_vec[i] * half_w for i in range(3)),
     ]
 
-    obj_ids = []
+    body_ids = []
     poly_id = rs.AddPolyline(base_corners + [base_corners[0]])
     if poly_id:
-        obj_ids.append(poly_id)
+        body_ids.append(poly_id)
     for corner in base_corners:
         line_id = rs.AddLine(corner, tip)
         if line_id:
-            obj_ids.append(line_id)
+            body_ids.append(line_id)
+    label_ids = []
     dot_id = rs.AddTextDot(f"cam {idx}", pos)
     if dot_id:
-        obj_ids.append(dot_id)
+        label_ids.append(dot_id)
     if tgt:
         look_line_id = rs.AddLine(pos, tgt)
         if look_line_id:
-            obj_ids.append(look_line_id)
+            body_ids.append(look_line_id)
 
-    if layer_name:
-        for obj_id in obj_ids:
+    if isinstance(layer_names, dict):
+        for obj_id in body_ids:
             if rs.IsObject(obj_id):
-                rs.ObjectLayer(obj_id, layer_name)
+                rs.ObjectLayer(obj_id, layer_names.get("cam") or layer_names.get("root"))
+        for obj_id in label_ids:
+            if rs.IsObject(obj_id):
+                rs.ObjectLayer(obj_id, layer_names.get("label") or layer_names.get("root"))
+    elif layer_names:
+        for obj_id in body_ids + label_ids:
+            if rs.IsObject(obj_id):
+                rs.ObjectLayer(obj_id, layer_names)
 
-    return obj_ids
+    return body_ids + label_ids
 
 
 def _preview_camera_gizmos(poses, lengths, layer_name=CAMERA_GIZMO_LAYER_DEFAULT):
     """Draw camera gizmos in Rhino for visual debugging."""
-    use_layer = _ensure_layer(layer_name)
+    use_layers = _camera_gizmo_layers(layer_name)
     gizmo_scale = max(min(lengths), 1e-3) * 0.08
     created_ids = []
     for idx, pose in enumerate(poses):
-        created_ids.extend(_add_camera_gizmo(idx, pose, gizmo_scale, layer_name=use_layer))
+        created_ids.extend(_add_camera_gizmo(idx, pose, gizmo_scale, layer_names=use_layers))
     rs.Redraw()
     return created_ids
 
 
 def delete_camera_gizmo_layer(layer_name=CAMERA_GIZMO_LAYER_DEFAULT, delete_layer=True):
     """Delete camera gizmo objects created on the given layer."""
-    if not layer_name or not rs.IsLayer(layer_name):
+    layer_tree = _camera_gizmo_layer_tree(layer_name)
+    if not layer_tree:
         return 0
 
-    obj_ids = rs.ObjectsByLayer(layer_name, select=False) or []
+    obj_ids = []
+    seen = set()
+    for name in layer_tree:
+        for obj_id in rs.ObjectsByLayer(name, select=False) or []:
+            key = str(obj_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            obj_ids.append(obj_id)
+
     if obj_ids:
         rs.DeleteObjects(obj_ids)
 
-    if delete_layer and rs.IsLayer(layer_name):
-        try:
-            rs.DeleteLayer(layer_name)
-        except Exception:
-            pass
+    if delete_layer:
+        for name in layer_tree:
+            if not rs.IsLayer(name):
+                continue
+            try:
+                rs.DeleteLayer(name)
+            except Exception:
+                pass
 
     rs.Redraw()
     return len(obj_ids)

@@ -330,6 +330,23 @@ def _resolve_component_mid_slice_path(camera_cfg, camera_gizmo_layer):
     }
 
 
+def _build_component_defect_demo_context(base_out_dir, params, camera_cfg):
+    render_params = _resolve_camera_demo_render_params(params)
+    render_params["output_dir"] = base_out_dir
+    render_params["camera"] = dict(camera_cfg or {})
+    try:
+        return render_core.build_render_context(render_params)
+    except ValueError as exc:
+        message = str(exc)
+        if "requires camera.component.defects" in message:
+            print(
+                "render_demo(camera): component defect seeds not found; "
+                "using bbox path only."
+            )
+            return None
+        raise
+
+
 def _build_camera_capture_context(base_out_dir, params, camera_cfg):
     outputs_cfg = params.get("outputs") or {}
     scene_cfg = outputs_cfg.get("scene") or {}
@@ -717,10 +734,26 @@ def _run_camera_demo(base_out_dir, params):
 
     if camera_strategy == "component":
         component_path = _resolve_component_mid_slice_path(camera_cfg, camera_gizmo_layer)
-        poses = component_path["poses"]
+        bbox_path_poses = list(component_path["poses"])
+        poses = list(bbox_path_poses)
         lengths_for_gizmos = component_path["aabb"]["lengths"]
         capture_context = _build_camera_capture_context(base_out_dir, params, camera_cfg)
         strategy_tag = "component-aabb-mid-slice"
+
+        defect_render_context = _build_component_defect_demo_context(
+            base_out_dir,
+            params,
+            camera_cfg,
+        )
+        defect_poses = []
+        if defect_render_context is not None:
+            defect_poses = list(render_core.generate_render_poses(defect_render_context) or [])
+            capture_context = defect_render_context
+            capture_context["smooth_path"] = False
+            capture_context["transition_frames"] = 0
+            poses.extend(defect_poses)
+            if defect_poses:
+                strategy_tag = "component-aabb-mid-slice-plus-defects"
 
         if component_path["smooth_path"]:
             print(
@@ -732,8 +765,14 @@ def _run_camera_demo(base_out_dir, params):
             "render_demo(camera): component bbox path "
             f"bbox_scale={component_path['bbox_scale']:g}, "
             f"corner_count={len(component_path['vertices'])}, "
-            f"pose_count={len(poses)}."
+            f"pose_count={len(bbox_path_poses)}."
         )
+        if defect_poses:
+            print(
+                "render_demo(camera): component defect camera poses "
+                f"count={len(defect_poses)}, "
+                f"combined_pose_count={len(poses)}."
+            )
 
     else:
         cam_params = _resolve_camera_demo_render_params(params)
@@ -807,8 +846,9 @@ def render_demo(base_out_dir, params=None):
       - face_lights (dict): optional args for utils_loc.lighting.setup_face_lights (lighting demo)
       - camera (dict): required for camera demo
       - camera_demo_mode (str): camera route mode: show | capture
-      - camera.component.smooth_path / transition_frames: component demo path interpolation
+      - camera.component.smooth_path / transition_frames: component bbox-path interpolation
       - camera.component.bbox_scale: XY scale factor applied to the scene bbox path (default 1.5)
+      - camera.component.defects or cached Rhino defect metadata: optional defect-focused poses
       - cleanup_camera_gizmos (bool), camera_gizmo_layer (str),
         delete_camera_gizmo_layer_on_cleanup (bool)
       - width, height, max_length (int): optional capture sizing
