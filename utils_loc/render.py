@@ -99,6 +99,13 @@ def _setup_render_environment(params):
     )
 
 
+def _clear_selected_objects():
+    try:
+        rs.UnselectAllObjects()
+    except Exception:
+        pass
+
+
 def _coerce_vec3(value, label):
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         raise ValueError(f"{label} must be a 3-item list/tuple.")
@@ -200,7 +207,26 @@ def _normalize_component_camera_cfg(camera_cfg):
         raise ValueError(
             "camera.component is required and must be a dict when camera.strategy='component'."
         )
-    return dict(component_cfg)
+    normalized = dict(component_cfg)
+    distance_ranges = normalized.get("distance_ranges")
+    if not isinstance(distance_ranges, dict) or not distance_ranges:
+        raise ValueError(
+            "camera.component.distance_ranges is required and must be a dict of defect_type -> [min, max]."
+        )
+    sample_count = int(normalized.get("sample_count", 1))
+    if sample_count <= 0:
+        raise ValueError("camera.component.sample_count must be >= 1.")
+    normalized["sample_count"] = sample_count
+    normalized["distance_ranges"] = {
+        str(key or "").strip().lower(): value
+        for key, value in distance_ranges.items()
+        if str(key or "").strip()
+    }
+    if not normalized["distance_ranges"]:
+        raise ValueError(
+            "camera.component.distance_ranges must define at least one defect type or 'default'."
+        )
+    return normalized
 
 
 def _load_defects_from_document(include_defect_types=None):
@@ -480,42 +506,11 @@ def _generate_render_poses(context):
 
     component_cfg = context["component_camera_cfg"]
     defects = context["defects"]
-    default_radius_min = 120.0
-    default_radius_max = 220.0
-    radius_min = float(
-        component_cfg.get(
-            "radius_min",
-            component_cfg.get("distance_min", default_radius_min),
-        )
-    )
-    radius_max = float(
-        component_cfg.get(
-            "radius_max",
-            component_cfg.get("distance_max", default_radius_max),
-        )
-    )
-    if radius_min > radius_max:
-        radius_min, radius_max = radius_max, radius_min
-
     poses = generate_defect_camera_poses(
         defects=defects,
-        cameras_per_defect=max(1, int(component_cfg.get("cameras_per_defect", 1))),
-        radius_min=radius_min,
-        radius_max=radius_max,
-        target_jitter=float(component_cfg.get("target_jitter", 0.0)),
-    )
-
-    spacing = max(abs(radius_max - radius_min), 0.5 * (radius_min + radius_max), 1e-3)
-    position_jitter = _resolve_position_jitter(
-        component_cfg,
-        spacing,
-        default_scale=0.0,
-    )
-    direction_jitter_degrees = float(component_cfg.get("direction_jitter_degrees", 0.0))
-    poses = jitter_camera_poses(
-        poses,
-        position_jitter=position_jitter,
-        direction_jitter_degrees=direction_jitter_degrees,
+        sample_count=int(component_cfg["sample_count"]),
+        distance_ranges=component_cfg["distance_ranges"],
+        direction_jitter_degrees=float(component_cfg.get("direction_jitter_degrees", 5.0)),
     )
     light_cfg = context.get("defect_light_cfg") or {}
     if light_cfg.get("enabled", False):
@@ -802,6 +797,7 @@ def redraw_views():
 
 def render(params, show_cameras=False):
     """Run the full render stage from env setup to output capture."""
+    _clear_selected_objects()
     setup_render_environment(params)
     context = build_render_context(params)
     if context is None:

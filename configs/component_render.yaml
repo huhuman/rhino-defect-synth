@@ -42,14 +42,14 @@ rendering:
       bbox_scale: 1.5
       smooth_path: false
       transition_frames: 0
-      cameras_per_defect: 3
-      radius_min: 120.0
-      radius_max: 220.0
-      target_jitter: 0.0
-      direction_jitter_degrees: 0.0
-      position_jitter: null
-      position_jitter_scale: 0.0
-      # Legacy aliases kept in code for compatibility: distance_min / distance_max.
+      sample_count: 3
+      direction_jitter_degrees: 5.0
+      distance_ranges:
+        crack: [50.0, 150.0]
+        efflore: [150.0, 500.0]
+        spalling: [150.0, 500.0]
+        exposed_rebar: [150.0, 500.0]
+        default: [150.0, 500.0]
       # Auto-load camera seeds from Rhino document defect metadata.
       # defect_types: [crack, efflore, spalling, exposed_rebar]
       # Optional inline camera seeds. Keep empty for normal defect-driven runs.

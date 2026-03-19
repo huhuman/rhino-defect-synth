@@ -244,13 +244,9 @@ Batch runtime flow in `main_cube_batch.py`:
 |---|---|---|---|---|
 | `defects` | `list[{point,normal}]` | Direct defect seeds for camera generation. | none | Optional manual override; normal component runs read cached Rhino document metadata. |
 | `defect_types` | `list[str] | str | null` | Filters loaded defects by type. | none | Applied when reading cached Rhino document metadata. |
-| `cameras_per_defect` | `int` | Number of poses per defect seed. | `1` | Minimum clamped to 1. |
-| `radius_min/max` | `float` | Hemisphere-shell radius range around defect center. | `120.0 / 220.0` | Samples only on the side pointed to by the defect normal. |
-| `distance_min/max` | `float` | Legacy alias for `radius_min/max`. | none | Kept for backward compatibility. |
-| `target_jitter` | `float` | Target point jitter. | `0.0` | |
-| `direction_jitter_degrees` | `float` | Final look-direction jitter. | `0.0` | |
-| `position_jitter` | `float | null` | Absolute pose-position jitter. | none | If null, scale-based jitter is used. |
-| `position_jitter_scale` | `float` | Position jitter scale vs spacing. | `0.0` | Used when `position_jitter` is null. |
+| `sample_count` | `int` | Number of poses generated per defect seed. | `component_render.yaml` | Distances are partitioned into `sample_count` bands and one pose is emitted per band. |
+| `distance_ranges.<defect_type>` | `list[float, float]` | Per-defect-type camera distance range. | `component_render.yaml` | Canonical keys: `crack`, `efflore`, `spalling`, `exposed_rebar`, `default`. |
+| `direction_jitter_degrees` | `float` | Angular jitter around the defect outward normal. | `component_render.yaml` | Camera always remains on the normal-facing hemisphere and still targets the defect center. |
 
 ## Pipeline Fallbacks and Convenience
 

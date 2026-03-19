@@ -243,13 +243,9 @@
 |---|---|---|---|---|
 | `defects` | `list[{point,normal}]` | 直接提供缺陷 seed。 | 無 | 可作手動 override；一般 component render 會直接讀 Rhino 文件 metadata 快取。 |
 | `defect_types` | `list[str] | str | null` | 載入後按 type 過濾。 | 無 | 套用於讀取 Rhino 文件 metadata 快取時。 |
-| `cameras_per_defect` | `int` | 每個缺陷產生相機數。 | `1` | 會至少夾到 1。 |
-| `radius_min/max` | `float` | 以 defect 中心為球心的半球殼半徑範圍。 | `120.0 / 220.0` | 只會從 defect normal 指向那半邊取樣。 |
-| `distance_min/max` | `float` | `radius_min/max` 的舊版別名。 | 無 | 保留向後相容。 |
-| `target_jitter` | `float` | target 點位抖動。 | `0.0` | |
-| `direction_jitter_degrees` | `float` | 最終視線方向抖動。 | `0.0` | |
-| `position_jitter` | `float | null` | 絕對位置抖動。 | 無 | null 時改用 scale。 |
-| `position_jitter_scale` | `float` | 相對 spacing 的位置抖動比例。 | `0.0` | `position_jitter` 為 null 時使用。 |
+| `sample_count` | `int` | 每個缺陷要產生的相機數。 | `component_render.yaml` | 會先把距離範圍切成 `sample_count` 段，再每段取 1 個 pose。 |
+| `distance_ranges.<defect_type>` | `list[float, float]` | 依缺陷類型設定相機距離範圍。 | `component_render.yaml` | 標準 key：`crack`、`efflore`、`spalling`、`exposed_rebar`、`default`。 |
+| `direction_jitter_degrees` | `float` | 沿 defect outward normal 附近的角度抖動。 | `component_render.yaml` | 相機仍固定落在 normal 那半球，且 target 會指向 defect 中心。 |
 
 ## Pipeline fallback 與便捷行為
 

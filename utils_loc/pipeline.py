@@ -12,7 +12,7 @@ from utils_loc.component_modeling import create_bridge_component
 from utils_loc.defect_placement import apply_defect_pipeline, get_active_defect_requests
 from utils_loc.defect_record_store import store_defect_record_payload
 from utils_loc.plugin_autoload import ensure_plugin_commands
-from utils_loc.texture_mapping import apply_component_texture_mapping
+from utils_loc.texture_mapping import apply_component_texture_mapping, apply_efflore_texture_mapping
 
 import importlib
 render = importlib.import_module("utils_loc.render")
@@ -211,6 +211,20 @@ def create_model(params):
                     summary.get("exposed_rebar", 0),
                 )
             )
+        efflore_texture_mapping_result = apply_efflore_texture_mapping(
+            defect_cfg=defect_cfg,
+            layer_material_metadata=_LAST_PREPARATION_LAYER_METADATA,
+        )
+        result["efflore_texture_mapping"] = efflore_texture_mapping_result
+        if efflore_texture_mapping_result.get("enabled"):
+            print(
+                "-------- Efflore Texture Mapping ------- "
+                "(applied: {}, surfaces: {}, skipped: {})".format(
+                    efflore_texture_mapping_result.get("applied", 0),
+                    efflore_texture_mapping_result.get("surface_objects", 0),
+                    efflore_texture_mapping_result.get("skipped", 0),
+                )
+            )
         texture_mapping_result = apply_component_texture_mapping(
             component_cfg=component_cfg,
             layer_material_metadata=_LAST_PREPARATION_LAYER_METADATA,
@@ -243,6 +257,11 @@ def create_model(params):
 def run_render(params, show_cameras=False):
     """Pipeline render stage."""
     params = dict(params or {})
+
+    try:
+        rs.UnselectAllObjects()
+    except Exception:
+        pass
 
     render.setup_render_environment(params)
     context = render.build_render_context(params)

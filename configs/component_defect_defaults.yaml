@@ -66,6 +66,14 @@ modeling:
       z_threshold: 45.0
       span_range_cm: [30.0, 100.0]
       fixed_thickness: 0.25
+      texture_mapping:
+        enabled: true
+        preserve_aspect_ratio: true
+        world_size_v: 300.0
+        world_size_z: 300.0
+        world_size_u: null
+        aspect_ratio_fallback: 1.0
+        texture_channel: 1
     spalling:
       enabled: true
       count: 0
