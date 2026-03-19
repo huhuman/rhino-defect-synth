@@ -84,6 +84,15 @@ def _classify_crack_row_condition_state(row):
     return "CS3"
 
 
+def _crack_base_instance_id(row):
+    instance_id = str((row or {}).get("instance_id") or "").strip()
+    if instance_id.endswith("_skeleton"):
+        return instance_id[: -len("_skeleton")]
+    if instance_id.endswith("_erodex1"):
+        return instance_id[: -len("_erodex1")]
+    return instance_id
+
+
 def _to_polygon_json_path(instance_mask_path):
     if not instance_mask_path:
         return None
@@ -543,9 +552,13 @@ def _load_shapes_from_overview_csv(runtime, defect_type, cfg, defect_cfg, count,
     requested = max(0, runtime._to_int(overview_cfg.get("sample_count"), count))
     shapes = []
     if defect_type == "crack":
-        crack_buckets = {"CS1": [], "CS2": [], "CS3": []}
+        crack_families = {}
         for row in rows:
-            crack_buckets.setdefault(_classify_crack_row_condition_state(row), []).append(row)
+            base_id = _crack_base_instance_id(row)
+            if not base_id:
+                continue
+            family = crack_families.setdefault(base_id, {})
+            family[_classify_crack_row_condition_state(row)] = row
 
         missing_cs_counts = {}
         for _idx in range(requested):
@@ -553,19 +566,26 @@ def _load_shapes_from_overview_csv(runtime, defect_type, cfg, defect_cfg, count,
             cs_level = str(target_profile.get("condition_state") or "").strip().upper()
             if cs_level not in ("CS1", "CS2", "CS3"):
                 cs_level = "CS1"
-            pool = crack_buckets.get(cs_level) or []
-            if not pool:
+            eligible_families = [family for family in crack_families.values() if family.get(cs_level)]
+            if not eligible_families:
+                missing_cs_counts[cs_level] = missing_cs_counts.get(cs_level, 0) + 1
+                continue
+            family = rng.choice(eligible_families)
+            geometry_row = family.get("CS1") or family.get("CS2") or family.get("CS3")
+            if not geometry_row:
                 missing_cs_counts[cs_level] = missing_cs_counts.get(cs_level, 0) + 1
                 continue
             shape = _build_shape_from_overview_row(
                 runtime,
                 defect_type,
-                rng.choice(pool),
+                geometry_row,
                 defect_cfg,
                 rng=rng,
                 target_profile=target_profile,
             )
             if shape is not None:
+                shape["overview_source_instance_id"] = (family.get(cs_level) or {}).get("instance_id")
+                shape["geometry_source_instance_id"] = geometry_row.get("instance_id")
                 shapes.append(shape)
 
         if missing_cs_counts:

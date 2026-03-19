@@ -13,7 +13,7 @@ from utils_loc import defect_placement_efflore
 from utils_loc import defect_placement_reference
 from utils_loc import defect_placement_spalling
 from utils_loc import defect_placement_templates
-from utils_loc.defect_modeling import get_surfaces, subtract_surface
+from utils_loc.defect_modeling import get_reference_points, get_surfaces, subtract_surface
 
 
 _DEFECT_MODELERS = {
@@ -712,6 +712,10 @@ def _visible_interval_distances(interval, axis_range, path_length):
     if hi - lo <= 1e-6:
         return None
     return float(lo * path_length), float(hi * path_length)
+
+
+def _make_rebar_pipe(start, end, radius):
+    return defect_placement_spalling._make_rebar_pipe(sys.modules[__name__], start, end, radius)
 
 
 def _build_rebar_rib_ids(centerline_points, radius_cm, axis_range, visible_interval, rebar_cfg):
