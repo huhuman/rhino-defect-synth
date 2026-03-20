@@ -144,9 +144,6 @@ preparation:
     ]
     "component::pier": *component_concrete_materials
     "defect::crack::CS1": &defect_crack_materials [
-      "Conc dark gray",
-      "Concrete dark",
-      "Concrete rusty",
       "concrete_0006_color_2k",
       "concrete_0013_color_2k",
       "concrete_0019_color_2k",
