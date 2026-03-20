@@ -226,6 +226,30 @@ def _resolve_component_demo_value(camera_cfg, key, default=None, aliases=None):
     return default
 
 
+def _resolve_component_short_edge_interpolation_count(camera_cfg):
+    explicit = _resolve_component_demo_value(
+        camera_cfg,
+        "short_edge_interpolation_count",
+        default=None,
+        aliases=[
+            "short_edge_steps",
+            "short_edge_sample_count",
+            "bbox_short_edge_interpolation_count",
+            "bbox_short_edge_steps",
+        ],
+    )
+    if explicit is not None:
+        return _to_non_negative_int(explicit, default=0)
+
+    legacy = _resolve_component_demo_value(
+        camera_cfg,
+        "transition_frames",
+        default=0,
+        aliases=["transition_frame"],
+    )
+    return _to_non_negative_int(legacy, default=0)
+
+
 def _scale_vertices_about_center(vertices, center, scale_xy):
     cx, cy, cz = (float(v) for v in center)
     factor = max(float(scale_xy), 1e-6)
@@ -278,26 +302,22 @@ def _resolve_component_mid_slice_path(camera_cfg, camera_gizmo_layer):
             aliases=["smooth"],
         )
     )
-    base_transition = _to_non_negative_int(
-        _resolve_component_demo_value(
-            camera_cfg,
-            "transition_frames",
-            default=0,
-            aliases=["transition_frame"],
-        ),
-        default=0,
+    short_edge_interpolation_count = _resolve_component_short_edge_interpolation_count(
+        camera_cfg
     )
     loop_vertices = list(vertices)
     if len(loop_vertices) > 1:
         loop_vertices.append(loop_vertices[0])
 
-    if not smooth or base_transition <= 0:
+    interpolation_enabled = bool(smooth) or short_edge_interpolation_count > 0
+
+    if not interpolation_enabled:
         return {
             "aabb": aabb,
             "vertices": vertices,
             "poses": [_pose_from_position(vertex, center) for vertex in loop_vertices],
             "smooth_path": smooth,
-            "base_transition": base_transition,
+            "short_edge_interpolation_count": short_edge_interpolation_count,
             "segment_transition_frames": [],
             "bbox_scale": bbox_scale,
         }
@@ -310,7 +330,11 @@ def _resolve_component_mid_slice_path(camera_cfg, camera_gizmo_layer):
         start = loop_vertices[idx]
         end = loop_vertices[idx + 1]
         edge_len = _distance_vec3(start, end)
-        step_count = int(math.ceil(float(base_transition) / min_side * edge_len))
+        step_count = int(
+            math.ceil(
+                float(short_edge_interpolation_count) * float(edge_len) / float(min_side)
+            )
+        )
         step_count = max(0, step_count)
         segment_transition_frames.append(step_count)
 
@@ -324,7 +348,7 @@ def _resolve_component_mid_slice_path(camera_cfg, camera_gizmo_layer):
         "vertices": vertices,
         "poses": poses,
         "smooth_path": smooth,
-        "base_transition": base_transition,
+        "short_edge_interpolation_count": short_edge_interpolation_count,
         "segment_transition_frames": segment_transition_frames,
         "bbox_scale": bbox_scale,
     }
@@ -755,10 +779,11 @@ def _run_camera_demo(base_out_dir, params):
             if defect_poses:
                 strategy_tag = "component-aabb-mid-slice-plus-defects"
 
-        if component_path["smooth_path"]:
+        if component_path["segment_transition_frames"]:
             print(
                 "render_demo(camera): component path interpolation "
-                f"base_transition={component_path['base_transition']}, "
+                "short_edge_interpolation_count="
+                f"{component_path['short_edge_interpolation_count']}, "
                 f"per_segment={component_path['segment_transition_frames']}."
             )
         print(
@@ -846,7 +871,9 @@ def render_demo(base_out_dir, params=None):
       - face_lights (dict): optional args for utils_loc.lighting.setup_face_lights (lighting demo)
       - camera (dict): required for camera demo
       - camera_demo_mode (str): camera route mode: show | capture
-      - camera.component.smooth_path / transition_frames: component bbox-path interpolation
+      - camera.component.smooth_path / transition_frames: legacy component bbox-path interpolation
+      - camera.component.short_edge_interpolation_count: insert count for the shortest bbox edge;
+        longer edges scale proportionally by edge length
       - camera.component.bbox_scale: XY scale factor applied to the scene bbox path (default 1.5)
       - camera.component.defects or cached Rhino defect metadata: optional defect-focused poses
       - cleanup_camera_gizmos (bool), camera_gizmo_layer (str),

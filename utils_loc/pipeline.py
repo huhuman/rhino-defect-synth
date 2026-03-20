@@ -129,6 +129,11 @@ def prepare(params=None):
         layer_color_dict=colors,
     )
 
+    return {
+        "selected_materials": dict(selected_materials or {}),
+        "selected_material_metadata": dict(selected_material_metadata or {}),
+    }
+
 
 def create_model(params):
     """Create the model based on the provided parameters.
