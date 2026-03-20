@@ -1103,6 +1103,222 @@ def _scale_shape_geometry(shape, scale):
         shape["shape_radius"] = float(radius) * factor
 
 
+def _rotate_polygon_2d(points, angle_deg):
+    angle = math.radians(float(angle_deg))
+    cos_v = math.cos(angle)
+    sin_v = math.sin(angle)
+    rotated = []
+    for point in points or []:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        x = float(point[0])
+        y = float(point[1])
+        rotated.append((x * cos_v - y * sin_v, x * sin_v + y * cos_v))
+    return rotated
+
+
+def _shape_fit_polygons_2d(defect_type, shape):
+    shape = shape or {}
+    defect_key = str(defect_type or "").strip().lower()
+    if defect_key == "crack":
+        polygons = [poly for poly in (shape.get("crack_polys") or []) if len(poly or []) >= 3]
+        if polygons:
+            return polygons
+    elif defect_key == "spalling":
+        polygon = shape.get("spall_poly") or shape.get("offset_poly") or shape.get("base_poly")
+        if len(polygon or []) >= 3:
+            return [polygon]
+    elif defect_key == "efflore":
+        polygons = []
+        outer = shape.get("efflore_outer_poly")
+        inner = shape.get("efflore_inner_poly") or shape.get("offset_poly") or shape.get("base_poly")
+        if len(outer or []) >= 3:
+            polygons.append(outer)
+        if len(inner or []) >= 3:
+            polygons.append(inner)
+        if polygons:
+            return polygons
+
+    polygons = [poly for poly in (shape.get("polygons") or []) if len(poly or []) >= 3]
+    if polygons:
+        return polygons
+    fallback = shape.get("offset_poly") or shape.get("base_poly") or shape.get("primary_poly")
+    if len(fallback or []) >= 3:
+        return [fallback]
+    return []
+
+
+def _resolve_boundary_axis_limits_for_candidate(defect_cfg, random_cfg, candidate):
+    boundary_margin = _to_float(_resolve_random_value(defect_cfg, random_cfg, "boundary_margin", 0.9), 0.9)
+    boundary_margin = _clamp(boundary_margin, 0.0, 1.0)
+    boundary_dist_u = _to_optional_float((candidate or {}).get("boundary_dist_u"))
+    boundary_dist_v = _to_optional_float((candidate or {}).get("boundary_dist_v"))
+    boundary_dist = _to_optional_float((candidate or {}).get("boundary_dist"))
+    limit_u = None if boundary_dist_u is None else max(0.0, float(boundary_dist_u) * float(boundary_margin))
+    limit_v = None if boundary_dist_v is None else max(0.0, float(boundary_dist_v) * float(boundary_margin))
+    limit_r = None if boundary_dist is None else max(0.0, float(boundary_dist) * float(boundary_margin))
+    return limit_u, limit_v, limit_r
+
+
+def _shape_scale_limit_for_angle(defect_type, shape, angle_deg, limit_u, limit_v, limit_r):
+    scale_limit = 1.0
+    polygons = _shape_fit_polygons_2d(defect_type, shape)
+    if not polygons:
+        return scale_limit
+
+    if limit_u is not None and limit_u <= 1e-9:
+        return 0.0
+    if limit_v is not None and limit_v <= 1e-9:
+        return 0.0
+    if limit_r is not None and limit_r <= 1e-9:
+        return 0.0
+
+    max_abs_x = 0.0
+    max_abs_y = 0.0
+    max_radius = 0.0
+    for polygon in polygons:
+        rotated = _rotate_polygon_2d(polygon, angle_deg)
+        for point in rotated:
+            max_abs_x = max(max_abs_x, abs(float(point[0])))
+            max_abs_y = max(max_abs_y, abs(float(point[1])))
+            max_radius = max(max_radius, math.sqrt(float(point[0]) ** 2 + float(point[1]) ** 2))
+
+    if limit_u is not None and max_abs_x > 1e-9:
+        scale_limit = min(scale_limit, float(limit_u) / float(max_abs_x))
+    if limit_v is not None and max_abs_y > 1e-9:
+        scale_limit = min(scale_limit, float(limit_v) / float(max_abs_y))
+    if limit_r is not None and max_radius > 1e-9:
+        scale_limit = min(scale_limit, float(limit_r) / float(max_radius))
+    return max(0.0, float(scale_limit))
+
+
+def _refresh_shape_severity(shape, defect_type, defect_cfg):
+    if not isinstance(shape, dict):
+        return
+    defect_key = str(defect_type or "").strip().lower()
+    condition_state = shape.get("condition_state")
+
+    if defect_key == "crack":
+        width_cm = _to_optional_float(shape.get("target_metric_cm"))
+        if width_cm is not None and width_cm > 0.0:
+            t1, t2 = _resolve_crack_width_thresholds_local(defect_cfg)
+            if width_cm < t1:
+                condition_state = "CS1"
+            elif width_cm < t2:
+                condition_state = "CS2"
+            else:
+                condition_state = "CS3"
+            shape["severity_t1_cm"] = float(t1)
+            shape["severity_t2_cm"] = float(t2)
+    elif defect_key == "spalling":
+        diameter_cm = _to_optional_float(shape.get("target_metric_cm"))
+        depth_cm = _to_optional_float(shape.get("target_spall_depth_cm"))
+        if diameter_cm is not None and depth_cm is not None:
+            depth_threshold, diameter_threshold = _resolve_spalling_thresholds(defect_cfg)
+            condition_state = "CS3" if (
+                float(depth_cm) >= float(depth_threshold) and float(diameter_cm) >= float(diameter_threshold)
+            ) else "CS2"
+            shape["depth_threshold"] = float(depth_threshold)
+            shape["diameter_threshold"] = float(diameter_threshold)
+    else:
+        condition_state = _normalize_condition_state(condition_state, default="CS2")
+
+    if condition_state:
+        condition_state = _normalize_condition_state(condition_state, default="CS1")
+        shape["condition_state"] = condition_state
+        shape["severity"] = condition_state
+
+
+def _scaled_shape_copy(shape, scale, defect_type, defect_cfg):
+    if not isinstance(shape, dict):
+        return None
+    factor = float(scale)
+    if factor <= 1e-9:
+        return None
+    scaled = copy.deepcopy(shape)
+    if abs(factor - 1.0) > 1e-12:
+        _scale_shape_geometry(scaled, factor)
+        metric_scale = _to_optional_float(scaled.get("metric_scale"))
+        if metric_scale is not None:
+            scaled["metric_scale"] = float(metric_scale) * factor
+        target_metric_cm = _to_optional_float(scaled.get("target_metric_cm"))
+        if target_metric_cm is not None:
+            scaled["target_metric_cm"] = float(target_metric_cm) * factor
+        target_spall_depth_cm = _to_optional_float(scaled.get("target_spall_depth_cm"))
+        if target_spall_depth_cm is not None:
+            scaled["target_spall_depth_cm"] = float(target_spall_depth_cm) * factor
+    _refresh_shape_severity(scaled, defect_type, defect_cfg)
+    return scaled
+
+
+def _shape_projects_inside_surface(defect_type, shape, candidate, transform):
+    surface_id = (candidate or {}).get("surface_id")
+    if not surface_id or not rs.IsObject(surface_id):
+        return True
+    angle_deg = float((transform or {}).get("angle_deg", 0.0))
+    polygons = _shape_fit_polygons_2d(defect_type, shape)
+    if not polygons:
+        return True
+
+    for polygon in polygons:
+        projected = _project_points_to_surface(
+            polygon,
+            candidate,
+            angle_deg,
+            normal_offset=0.0,
+        )
+        if len(projected) < 4:
+            return False
+        for point in projected[:-1]:
+            try:
+                if not rs.IsPointOnSurface(surface_id, point):
+                    return False
+            except Exception:
+                return False
+    return True
+
+
+def _fit_shape_to_candidate_transform(defect_type, shape, defect_cfg, random_cfg, candidate, transform):
+    if not isinstance(shape, dict):
+        return None
+
+    limit_u, limit_v, limit_r = _resolve_boundary_axis_limits_for_candidate(defect_cfg, random_cfg, candidate)
+    axis_scale_limit = _shape_scale_limit_for_angle(
+        defect_type,
+        shape,
+        float((transform or {}).get("angle_deg", 0.0)),
+        limit_u,
+        limit_v,
+        limit_r,
+    )
+    if axis_scale_limit <= 1e-9:
+        return None
+
+    best_shape = _scaled_shape_copy(shape, min(1.0, axis_scale_limit), defect_type, defect_cfg)
+    if best_shape is None:
+        return None
+    if _shape_projects_inside_surface(defect_type, best_shape, candidate, transform):
+        return best_shape
+
+    lo = 0.0
+    hi = min(1.0, axis_scale_limit)
+    best = None
+    for _ in range(14):
+        mid = 0.5 * (lo + hi)
+        if mid <= 1e-6:
+            break
+        trial = _scaled_shape_copy(shape, mid, defect_type, defect_cfg)
+        if trial is None:
+            hi = mid
+            continue
+        if _shape_projects_inside_surface(defect_type, trial, candidate, transform):
+            best = trial
+            lo = mid
+        else:
+            hi = mid
+    return best
+
+
 def _resolve_crack_width_thresholds_local(crack_cfg):
     crack_cfg = crack_cfg or {}
     t1 = _to_optional_float(crack_cfg.get("t1"))
@@ -1183,6 +1399,7 @@ def _fit_shape_profile_to_candidate(defect_type, shape, defect_cfg, random_cfg, 
     if not isinstance(shape, dict):
         return None
     adapted = copy.deepcopy(shape)
+    _refresh_shape_severity(adapted, defect_type, defect_cfg)
 
     boundary_limit = _resolve_boundary_limit_for_candidate(defect_cfg, random_cfg, candidate)
     if boundary_limit is None:
@@ -1206,6 +1423,7 @@ def _fit_shape_profile_to_candidate(defect_type, shape, defect_cfg, random_cfg, 
         metric_scale = _to_optional_float(adapted.get("metric_scale"))
         if metric_scale is not None:
             adapted["metric_scale"] = float(metric_scale) * float(scale_cap)
+        _refresh_shape_severity(adapted, defect_type, defect_cfg)
         return adapted
 
     metric_cap = float(target_metric_cm) * float(scale_cap)
@@ -1245,6 +1463,7 @@ def _fit_shape_profile_to_candidate(defect_type, shape, defect_cfg, random_cfg, 
     ):
         if key in profile:
             adapted[key] = profile.get(key)
+    _refresh_shape_severity(adapted, defect_type, defect_cfg)
     return adapted
 
 
@@ -1253,13 +1472,6 @@ def _sample_transform(defect_type, defect_cfg, random_cfg, candidate, shape, rng
     angle_max = _to_float(_resolve_random_value(defect_cfg, random_cfg, "orientation_max_deg", 360.0), 360.0)
     if angle_min > angle_max:
         angle_min, angle_max = angle_max, angle_min
-
-    boundary_margin = _to_float(_resolve_random_value(defect_cfg, random_cfg, "boundary_margin", 0.9), 0.9)
-    boundary_margin = max(0.0, min(1.0, boundary_margin))
-    shape_radius = _to_float(shape.get("shape_radius"), 0.0)
-
-    if shape_radius > 1e-9 and shape_radius > (float(candidate["boundary_dist"]) * boundary_margin):
-        return None
 
     if str(defect_type or "").strip().lower() == "efflore":
         angle_deg = 0.0
@@ -1679,6 +1891,16 @@ def _build_instance_records_for_type(
                 continue
             transform = _sample_transform(defect_type, defect_cfg, random_cfg, candidate, shape, rng=rng)
             if transform is None:
+                continue
+            shape = _fit_shape_to_candidate_transform(
+                defect_type,
+                shape,
+                defect_cfg,
+                random_cfg,
+                candidate,
+                transform,
+            )
+            if shape is None:
                 continue
             placed = modeler(
                 runtime,

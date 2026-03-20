@@ -112,6 +112,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | `convert_polygons_to_surfaces` | `bool` | Converts generated polygons to surfaces. | `component_defaults.yaml` | Affects result object types. |
 | `keep_polygon_curves` | `bool` | Keeps source polyline curves when surfaces are created. | `component_defaults.yaml` | Useful for debug. |
 | `texture_mapping.enabled` | `bool` | Applies Rhino object texture mapping after component modeling. | `component_defaults.yaml` | Keeps layer-driven materials but stops per-face UV fit/stretch. |
+| `texture_mapping.fit_to_object_bounds` | `bool` | Fits the mapping plane extents to each surface object's projected bounds before writing UVs. | `component_defaults.yaml` | Useful when world/orthogonal mapping should still show the full texture on each object instead of only a cropped tile section. |
 | `texture_mapping.preserve_aspect_ratio` | `bool` | Uses selected texture bitmap width:height to derive `world_size_u`. | `component_defaults.yaml` | When material metadata is unavailable, falls back to `aspect_ratio_fallback`. |
 | `texture_mapping.world_size_v` | `float` | Base world-space tile height for planar surface mapping. | `component_defaults.yaml` | `world_size_u` auto-scales by aspect ratio unless explicitly set. |
 | `texture_mapping.world_size_z` | `float` | Depth interval used when creating Rhino mapping primitives. | `component_defaults.yaml` | Leave near `world_size_v` unless you need a thicker mapping volume. |
@@ -172,6 +173,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | `efflore.z_threshold` | `float` | Max allowed normal elevation (degrees) from the XY plane for efflore candidate surfaces. | `component_defect_defaults.yaml` | Surface pool is filtered by `abs(elevation)<=threshold` before reference-point sampling; default `5.0`. |
 | `efflore.span_range_cm` | `list[float,float]` | Efflore span sampling range (cm) for px-to-world normalization. | `component_defect_defaults.yaml` | Alternatives: `span_min_cm/span_max_cm` or fixed `span_cm`. |
 | `efflore.fixed_thickness` | `float` | Base thickness used for efflore extrusion. | `component_defect_defaults.yaml` | Geometry is offset by +normal then extruded along -normal. |
+| `efflore.texture_mapping.fit_to_object_bounds` | `bool` | Fits each efflore surface's orthogonal mapping extents to the projected object bounds. | `component_defect_defaults.yaml` | Default `true` so orthogonal mapping keeps the whole material visible on each efflore patch. |
 | `spalling.enabled`, `spalling.count` | `bool`, `int` | Enables spalling placement and sets requested instance count. | `component_defect_defaults.yaml` | Count is ignored when disabled. |
 | `spalling.overview_csv_path` | `string | null` | Reads spalling overview rows and resolves polygon JSON per instance. | `component_defect_defaults.yaml` | If no usable shapes, spalling placement is skipped. |
 | `spalling.cs_weights` | `list[float]` | Weighted CS sampling for spalling severity. | `component_defect_defaults.yaml` | Order is `[CS2, CS3]`; default `[1,1]`. |

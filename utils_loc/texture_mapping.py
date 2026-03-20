@@ -216,6 +216,68 @@ def _resolve_mapping_sizes(mapping_cfg, layer_name, layer_material_metadata):
     }
 
 
+def _geometry_plane_bbox(geometry, plane):
+    if geometry is None or plane is None:
+        return None
+
+    get_bbox = getattr(geometry, "GetBoundingBox", None)
+    if get_bbox is not None:
+        try:
+            bbox = get_bbox(plane)
+            if bbox is not None and getattr(bbox, "IsValid", False):
+                return bbox
+        except Exception:
+            pass
+
+    duplicate = getattr(geometry, "Duplicate", None)
+    if duplicate is None:
+        return None
+
+    try:
+        dup = duplicate()
+    except Exception:
+        dup = None
+    if dup is None:
+        return None
+
+    try:
+        xform = Rhino.Geometry.Transform.PlaneToPlane(plane, Rhino.Geometry.Plane.WorldXY)
+        if not dup.Transform(xform):
+            return None
+        bbox = dup.GetBoundingBox(True)
+        if bbox is not None and getattr(bbox, "IsValid", False):
+            return bbox
+    except Exception:
+        return None
+    return None
+
+
+def _fitted_mapping_sizes(obj_id, plane, sizes, mapping_cfg):
+    if not bool((mapping_cfg or {}).get("fit_to_object_bounds", False)):
+        return sizes
+
+    rhino_object = _coerce_rhino_object(obj_id)
+    geometry = _object_geometry(rhino_object)
+    bbox = _geometry_plane_bbox(geometry, plane)
+    if bbox is None:
+        return sizes
+
+    try:
+        size_u = float(bbox.Max.X) - float(bbox.Min.X)
+        size_v = float(bbox.Max.Y) - float(bbox.Min.Y)
+    except Exception:
+        return sizes
+
+    if size_u <= 1e-6 or size_v <= 1e-6:
+        return sizes
+
+    fitted = dict(sizes or {})
+    # Add a tiny guard band so projected edges do not land exactly on the mapping interval.
+    fitted["size_u"] = max(1e-6, size_u * 1.02)
+    fitted["size_v"] = max(1e-6, size_v * 1.02)
+    return fitted
+
+
 def _set_texture_mapping(obj_id, mapping, channel):
     if mapping is None:
         return False
@@ -269,12 +331,13 @@ def _set_texture_mapping(obj_id, mapping, channel):
         return False
 
 
-def _planar_mapping_for_surface(obj_id, sizes):
+def _planar_mapping_for_surface(obj_id, sizes, mapping_cfg=None):
     if _TEXTURE_MAPPING_CLS is None:
         return None
     plane = _surface_frame(obj_id)
     if plane is None:
         return None
+    sizes = _fitted_mapping_sizes(obj_id, plane, sizes, mapping_cfg)
 
     create = getattr(_TEXTURE_MAPPING_CLS, "CreatePlaneMapping", None)
     if create is None:
@@ -291,12 +354,13 @@ def _planar_mapping_for_surface(obj_id, sizes):
         return None
 
 
-def _world_orthogonal_mapping_for_surface(obj_id, sizes):
+def _world_orthogonal_mapping_for_surface(obj_id, sizes, mapping_cfg=None):
     if _TEXTURE_MAPPING_CLS is None:
         return None
     plane = _world_orthogonal_plane_from_surface(obj_id)
     if plane is None:
         return None
+    sizes = _fitted_mapping_sizes(obj_id, plane, sizes, mapping_cfg)
 
     create = getattr(_TEXTURE_MAPPING_CLS, "CreatePlaneMapping", None)
     if create is None:
@@ -410,7 +474,7 @@ def _apply_texture_mapping_to_layers(
             layer_stats["objects"] += 1
 
             if _is_surface_like(obj_id):
-                mapping = surface_mapping_fn(obj_id, sizes)
+                mapping = surface_mapping_fn(obj_id, sizes, mapping_cfg)
                 if _set_texture_mapping(obj_id, mapping, channel):
                     summary["applied"] += 1
                     summary["surface_objects"] += 1

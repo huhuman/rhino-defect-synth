@@ -68,6 +68,7 @@ modeling:
       fixed_thickness: 0.25
       texture_mapping:
         enabled: true
+        fit_to_object_bounds: true
         preserve_aspect_ratio: true
         world_size_v: 300.0
         world_size_z: 300.0

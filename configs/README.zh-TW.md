@@ -111,6 +111,7 @@
 | `convert_polygons_to_surfaces` | `bool` | 將 polygon 轉 surface。 | `component_defaults.yaml` | 影響輸出物件型別。 |
 | `keep_polygon_curves` | `bool` | 建 surface 後仍保留曲線。 | `component_defaults.yaml` | 偵錯常用。 |
 | `texture_mapping.enabled` | `bool` | 在 component 建模完成後對物件套 Rhino texture mapping。 | `component_defaults.yaml` | 保留 layer 控材質，但避免每個面用預設 UV 硬撐貼圖。 |
+| `texture_mapping.fit_to_object_bounds` | `bool` | 寫入 UV 前，先把 mapping 平面的 U/V 尺寸貼齊每個 surface 物件的投影外框。 | `component_defaults.yaml` | 適合 world/正交 mapping；可避免只看到材質的一小塊，而不是整張圖覆蓋在物件上。 |
 | `texture_mapping.preserve_aspect_ratio` | `bool` | 用被選中的貼圖 bitmap 寬高比推回 `world_size_u`。 | `component_defaults.yaml` | 若拿不到材質圖尺寸，改用 `aspect_ratio_fallback`。 |
 | `texture_mapping.world_size_v` | `float` | planar surface mapping 的世界座標貼圖高度。 | `component_defaults.yaml` | 除非明確指定 `world_size_u`，否則會依比例自動算寬度。 |
 | `texture_mapping.world_size_z` | `float` | 建立 Rhino mapping primitive 時使用的深度區間。 | `component_defaults.yaml` | 通常維持接近 `world_size_v` 即可。 |
@@ -171,6 +172,7 @@
 | `efflore.z_threshold` | `float` | efflore 候選面法向相對 XY 平面的最大仰角（度）。 | `component_defect_defaults.yaml` | 會先以 `abs(仰角)<=threshold` 篩 surface pool，再抽 reference points；預設 `5.0`。 |
 | `efflore.span_range_cm` | `list[float,float]` | efflore 尺度抽樣範圍（cm），用於 px->world 正規化。 | `component_defect_defaults.yaml` | 也可用 `span_min_cm/span_max_cm` 或固定 `span_cm`。 |
 | `efflore.fixed_thickness` | `float` | efflore 擠出厚度基準。 | `component_defect_defaults.yaml` | 幾何流程為先沿 +normal 偏移再沿 -normal 擠出。 |
+| `efflore.texture_mapping.fit_to_object_bounds` | `bool` | 讓每個 efflore surface 的正交 mapping 尺寸貼齊自身投影外框。 | `component_defect_defaults.yaml` | 預設 `true`，避免改成正交後只顯示材質中間一部分。 |
 | `spalling.enabled`, `spalling.count` | `bool`, `int` | spalling 放置開關與要求實例數。 | `component_defect_defaults.yaml` | 停用時 count 會被忽略。 |
 | `spalling.overview_csv_path` | `string | null` | 讀 spalling overview rows 並解析每個實例的 polygon JSON。 | `component_defect_defaults.yaml` | 若找不到可用 shape 會跳過 spalling。 |
 | `spalling.cs_weights` | `list[float]` | spalling CS 加權隨機。 | `component_defect_defaults.yaml` | 順序為 `[CS2, CS3]`，預設 `[1,1]`。 |
