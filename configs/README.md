@@ -214,9 +214,6 @@ Batch runtime flow in `main_cube_batch.py`:
 | `lighting.sun.date/latitude/longitude/timezone/intensity/north` | mixed | Direct pass-through sun parameters. | runtime defaults | Optional. |
 | `lighting.skylight.enabled` | `bool` | Enables skylight. | `true` | Passed to skylight setup. |
 | `lighting.skylight.intensity` | `float` | Skylight intensity. | `0.25` | |
-| `lighting.defect_lights.enabled` | `bool` | Rebuilds one helper light per captured component pose. | `true` | Component camera only. |
-| `lighting.defect_lights.light_type` | `string` | Helper light type. | `point` | Intended to stay `point`; spot/directional also work. |
-| `lighting.defect_lights.intensity` | `float` | Helper light intensity. | `0.5` | Color uses the same warm random palette as cube face lights. |
 
 ## Rendering Camera: Common
 

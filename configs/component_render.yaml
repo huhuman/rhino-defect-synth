@@ -12,10 +12,13 @@ rendering:
   match_viewport_aspect: true
   output_dir: "C:/path/to/your/component_rendered"
   lighting:
-    defect_lights:
+    sun:
       enabled: true
-      light_type: point
-      intensity: 0.5
+      time_of_day: null
+      intensity: 1.0
+    skylight:
+      enabled: true
+      intensity: 0.25
   channel:
     color: true
     depth: true

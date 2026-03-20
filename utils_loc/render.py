@@ -18,9 +18,7 @@ from utils_loc.camera import (
     sort_poses_topdown_circular,
 )
 from utils_loc.lighting import (
-    create_targeted_light,
     delete_named_lights,
-    random_natural_light_color,
     set_random_wallpaper,
     set_skylight,
     setup_sun,
@@ -268,53 +266,6 @@ def _normalize_defects(raw_defects):
     return defects
 
 
-def _normalize_component_defect_light_cfg(lighting_cfg):
-    cfg_raw = (lighting_cfg or {}).get("defect_lights")
-    if not isinstance(cfg_raw, dict):
-        return {"enabled": False}
-    cfg = dict(cfg_raw)
-    return {
-        "enabled": bool(cfg.get("enabled", True)),
-        "light_type": str(cfg.get("light_type") or "point").strip().lower() or "point",
-        "intensity": float(cfg.get("intensity", 0.5)),
-        "spot_hotspot": float(cfg.get("spot_hotspot", 0.6)),
-        "spot_falloff": float(cfg.get("spot_falloff", 55.0)),
-    }
-
-
-def _build_component_pose_light(pose, light_cfg):
-    if not light_cfg.get("enabled", False):
-        return None
-    return {
-        "position": tuple(float(v) for v in pose["position"]),
-        "target": tuple(float(v) for v in pose.get("target", pose["position"])),
-        "light_type": light_cfg.get("light_type", "point"),
-        "intensity": float(light_cfg.get("intensity", 0.5)),
-        "color": random_natural_light_color(),
-        "name": "defect_light",
-        "spot_hotspot": float(light_cfg.get("spot_hotspot", 0.6)),
-        "spot_falloff": float(light_cfg.get("spot_falloff", 55.0)),
-    }
-
-
-def _apply_pose_light(pose):
-    light = pose.get("light")
-    if not isinstance(light, dict):
-        return None
-
-    delete_named_lights(light.get("name", "defect_light"))
-    return create_targeted_light(
-        position=light["position"],
-        target=light.get("target"),
-        light_type=light.get("light_type", "point"),
-        intensity=light.get("intensity", 0.5),
-        color=light.get("color"),
-        name=light.get("name"),
-        spot_hotspot=light.get("spot_hotspot", 0.6),
-        spot_falloff=light.get("spot_falloff", 55.0),
-    )
-
-
 def _resolve_component_defects(component_camera_cfg):
     include_defect_types = component_camera_cfg.get("defect_types")
 
@@ -363,7 +314,6 @@ def _build_render_context(params):
     mask_cfg = outputs_cfg.get("mask") or {}
     scene_cfg = outputs_cfg.get("scene") or {}
     channel_cfg = params.get("channel") or {}
-    lighting_cfg = params.get("lighting") or {}
     bbox_data = _bbox_center_lengths()
     cube_camera_cfg = {}
     component_camera_cfg = {}
@@ -450,9 +400,6 @@ def _build_render_context(params):
         "capture_wait_after_frame_ms": _to_non_negative_int(
             params.get("capture_wait_after_frame_ms", 0)
         ),
-        "defect_light_cfg": _normalize_component_defect_light_cfg(lighting_cfg)
-        if strategy == "component"
-        else {"enabled": False},
     }
 
 
@@ -512,12 +459,6 @@ def _generate_render_poses(context):
         distance_ranges=component_cfg["distance_ranges"],
         direction_jitter_degrees=float(component_cfg.get("direction_jitter_degrees", 5.0)),
     )
-    light_cfg = context.get("defect_light_cfg") or {}
-    if light_cfg.get("enabled", False):
-        poses = [
-            dict(pose, light=_build_component_pose_light(pose, light_cfg))
-            for pose in poses
-        ]
     return sort_poses_topdown_circular(poses, center=center)
 
 
@@ -705,7 +646,6 @@ def _build_capture_basename(output_idx, context):
 
 
 def _capture_pose(idx, pose, context):
-    _apply_pose_light(pose)
     set_camera(position=pose["position"], target=pose["target"], lens=context["lens"])
     basename = _build_capture_basename(idx, context)
     render_all_outputs(
@@ -728,41 +668,37 @@ def _capture_pose_sequence(poses, context):
     smooth_path = context["smooth_path"]
     transition_frames = context["transition_frames"]
 
-    try:
-        if smooth_path and transition_frames > 0:
-            frame_idx = 0
-            for i, pose in enumerate(poses[:-1]):
-                next_pose = poses[i + 1]
-                _capture_pose(frame_idx, pose, context)
+    if smooth_path and transition_frames > 0:
+        frame_idx = 0
+        for i, pose in enumerate(poses[:-1]):
+            next_pose = poses[i + 1]
+            _capture_pose(frame_idx, pose, context)
+            _stabilize_after_capture_frame(frame_idx + 1, context)
+            frame_idx += 1
+
+            for step in range(1, transition_frames + 1):
+                t = step / float(transition_frames + 1)
+                interp_pos = (
+                    pose["position"][0] + (next_pose["position"][0] - pose["position"][0]) * t,
+                    pose["position"][1] + (next_pose["position"][1] - pose["position"][1]) * t,
+                    pose["position"][2] + (next_pose["position"][2] - pose["position"][2]) * t,
+                )
+                interp_pose = {
+                    "position": interp_pos,
+                    "target": pose["target"],
+                    "direction": pose.get("direction"),
+                }
+                _capture_pose(frame_idx, interp_pose, context)
                 _stabilize_after_capture_frame(frame_idx + 1, context)
                 frame_idx += 1
 
-                for step in range(1, transition_frames + 1):
-                    t = step / float(transition_frames + 1)
-                    interp_pos = (
-                        pose["position"][0] + (next_pose["position"][0] - pose["position"][0]) * t,
-                        pose["position"][1] + (next_pose["position"][1] - pose["position"][1]) * t,
-                        pose["position"][2] + (next_pose["position"][2] - pose["position"][2]) * t,
-                    )
-                    interp_pose = {
-                        "position": interp_pos,
-                        "target": pose["target"],
-                        "direction": pose.get("direction"),
-                        "light": pose.get("light"),
-                    }
-                    _capture_pose(frame_idx, interp_pose, context)
-                    _stabilize_after_capture_frame(frame_idx + 1, context)
-                    frame_idx += 1
+        _capture_pose(frame_idx, poses[-1], context)
+        _stabilize_after_capture_frame(frame_idx + 1, context)
+        return
 
-            _capture_pose(frame_idx, poses[-1], context)
-            _stabilize_after_capture_frame(frame_idx + 1, context)
-            return
-
-        for idx, pose in enumerate(poses):
-            _capture_pose(idx, pose, context)
-            _stabilize_after_capture_frame(idx + 1, context)
-    finally:
-        delete_named_lights("defect_light")
+    for idx, pose in enumerate(poses):
+        _capture_pose(idx, pose, context)
+        _stabilize_after_capture_frame(idx + 1, context)
 
 
 def setup_render_environment(params):

@@ -213,9 +213,6 @@
 | `lighting.sun.date/latitude/longitude/timezone/intensity/north` | mixed | 太陽光直通參數。 | runtime default | 可選。 |
 | `lighting.skylight.enabled` | `bool` | 是否開啟 skylight。 | `true` | |
 | `lighting.skylight.intensity` | `float` | skylight 強度。 | `0.25` | |
-| `lighting.defect_lights.enabled` | `bool` | 每張 component render 前重建一盞輔助燈。 | `true` | 僅 component camera 使用。 |
-| `lighting.defect_lights.light_type` | `string` | 輔助燈型別。 | `point` | 預期維持 `point`；spot/directional 也可。 |
-| `lighting.defect_lights.intensity` | `float` | 輔助燈強度。 | `0.5` | 顏色沿用 cube face lights 的暖色隨機盤。 |
 
 ## Rendering Camera：共用
 
