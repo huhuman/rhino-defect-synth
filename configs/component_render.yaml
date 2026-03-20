@@ -6,6 +6,45 @@ modeling:
   defect:
     enabled: true
 
+nested_loop:
+  seed: null
+  max_iter: 1
+  renders_per_model: 2
+  output_index_start: 0
+  reapply_texture_mapping_per_render: true
+  # Set to false to disable per-model geometry randomization in main_component_batch.py.
+  component_sampler:
+    centerline:
+      # Discrete stationing presets instead of continuous jitter.
+      span: [1828.8, 2133.6, 2438.4]
+      num_base_pts: [3, 4, 5]
+    slab:
+      width: [1097.28, 1219.2, 1341.12]
+      thickness: [22.86, 25.4, 27.94]
+    beam:
+      # Standardized beam section families; choose one per model_iter.
+      section_key: [
+        "36 I-beam",
+        "42 I-beam",
+        "48 I-beam",
+        "54 I-beam",
+        "63 bulb_t-beam",
+        "72 bulb_t-beam",
+        "36A IL-beam",
+        "45A IL-beam",
+        "54A IL-beam",
+        "36B IL-beam",
+        "45B IL-beam",
+      ]
+    pier:
+      # Presets keep type/dimensions coupled instead of mixing arbitrary ranges.
+      - {type: "hammerhead", H: 1097.28, V: 457.2, W: 137.16}
+      - {type: "hammerhead", H: 1417.32, V: 609.6, W: 152.4}
+      - {type: "m_column", H: 1219.2, V: 609.6, W: 152.4}
+      - {type: "m_column", H: 1341.12, V: 762.0, W: 182.88}
+  # Random overrides merged into rendering once per render_iter.
+  rendering_sampler: {}
+
 rendering:
   width: 1920
   height: 1080

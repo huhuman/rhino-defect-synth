@@ -4,6 +4,33 @@ view_setup:
     - "crack"
   hide_layers: []
 
+nested_loop:
+  seed: null
+  renders_per_model: 1
+  max_iter: null
+  camera_arrangements: null
+  output_index_start: 0
+  preparation_scope: arrangement
+  rendering_sampler: {}
+  stability:
+    enabled: true
+    wait_after_reset_ms: 20
+    wait_after_preparation_ms: 40
+    wait_before_render_ms: 40
+    wait_after_render_ms: 60
+    wait_after_capture_frame_ms: 0
+    wait_on_retry_ms: 400
+    gc_every_capture_frames: 8
+    render_retry_count: 1
+    gc_every_render_passes: 1
+    gc_every_model_iters: 1
+    clear_undo_every_render_passes: 1
+    clear_undo_every_model_iters: 1
+    max_private_memory_mb: 0.0
+    max_render_passes_per_run: 0
+    max_basic_materials: 0
+    log_memory: true
+
 rendering:
   width: 1920
   height: 1080
