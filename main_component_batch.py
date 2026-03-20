@@ -23,6 +23,30 @@ from utils_loc.texture_mapping import (
 
 install_timestamped_print()
 
+_DEFAULT_COMPONENT_CENTERLINE_SPANS_CM = [1828.8, 2133.6, 2438.4]
+_DEFAULT_COMPONENT_NUM_BASE_PTS = [3, 4, 5]
+_DEFAULT_COMPONENT_SLAB_WIDTHS_CM = [1097.28, 1219.2, 1341.12]
+_DEFAULT_COMPONENT_SLAB_THICKNESSES_CM = [22.86, 25.4, 27.94]
+_DEFAULT_COMPONENT_BEAM_SECTION_KEYS = [
+    "36 I-beam",
+    "42 I-beam",
+    "48 I-beam",
+    "54 I-beam",
+    "63 bulb_t-beam",
+    "72 bulb_t-beam",
+    "36A IL-beam",
+    "45A IL-beam",
+    "54A IL-beam",
+    "36B IL-beam",
+    "45B IL-beam",
+]
+_DEFAULT_COMPONENT_PIER_PRESETS = [
+    {"type": "hammerhead", "H": 1097.28, "V": 457.2, "W": 137.16},
+    {"type": "hammerhead", "H": 1417.32, "V": 609.6, "W": 152.4},
+    {"type": "m_column", "H": 1219.2, "V": 609.6, "W": 152.4},
+    {"type": "m_column", "H": 1341.12, "V": 762.0, "W": 182.88},
+]
+
 
 class _TeeWriter:
     """Mirror writes to multiple stream targets."""
@@ -144,49 +168,29 @@ def _sample_rendering_params(base_rendering, rendering_sampler, rng):
     return _deep_update(params, sampled_overrides)
 
 
-def _relative_range(value, min_scale, max_scale):
-    base = float(value)
-    lo = base * float(min_scale)
-    hi = base * float(max_scale)
-    return {
-        "min": min(lo, hi),
-        "max": max(lo, hi),
-    }
-
-
 def _default_component_sampler(component_cfg):
     component_cfg = dict(component_cfg or {})
-    centerline_cfg = dict(component_cfg.get("centerline") or {})
-    slab_cfg = dict(component_cfg.get("slab") or {})
-    pier_cfg = dict(component_cfg.get("pier") or {})
-
     sampler = {}
 
-    span = centerline_cfg.get("span")
-    if span is not None:
-        sampler.setdefault("centerline", {})["span"] = _relative_range(span, 0.8, 1.2)
+    if component_cfg.get("centerline") is not None:
+        sampler["centerline"] = {
+            "span": list(_DEFAULT_COMPONENT_CENTERLINE_SPANS_CM),
+            "num_base_pts": list(_DEFAULT_COMPONENT_NUM_BASE_PTS),
+        }
 
-    slab_width = slab_cfg.get("width")
-    if slab_width is not None:
-        sampler.setdefault("slab", {})["width"] = _relative_range(slab_width, 0.85, 1.15)
+    if component_cfg.get("slab") is not None:
+        sampler["slab"] = {
+            "width": list(_DEFAULT_COMPONENT_SLAB_WIDTHS_CM),
+            "thickness": list(_DEFAULT_COMPONENT_SLAB_THICKNESSES_CM),
+        }
 
-    slab_thickness = slab_cfg.get("thickness")
-    if slab_thickness is not None:
-        sampler.setdefault("slab", {})["thickness"] = _relative_range(
-            slab_thickness,
-            0.9,
-            1.1,
-        )
+    if component_cfg.get("beam") is not None:
+        sampler["beam"] = {
+            "section_key": list(_DEFAULT_COMPONENT_BEAM_SECTION_KEYS),
+        }
 
-    for key, min_scale, max_scale in (
-        ("H", 0.8, 1.25),
-        ("V", 0.8, 1.25),
-        ("W", 0.85, 1.2),
-    ):
-        value = pier_cfg.get(key)
-        if value is None:
-            continue
-        sampler.setdefault("pier", {})[key] = _relative_range(value, min_scale, max_scale)
+    if component_cfg.get("pier") is not None:
+        sampler["pier"] = [dict(item) for item in _DEFAULT_COMPONENT_PIER_PRESETS]
 
     return sampler
 
@@ -251,12 +255,15 @@ def _component_dimension_snapshot(component_cfg):
     beam_cfg = dict(component_cfg.get("beam") or {})
     return {
         "centerline_span": centerline_cfg.get("span"),
+        "centerline_num_base_pts": centerline_cfg.get("num_base_pts"),
         "slab_width": slab_cfg.get("width"),
         "slab_thickness": slab_cfg.get("thickness"),
         "beam_num_lines": beam_cfg.get("num_lines"),
+        "beam_section_key": beam_cfg.get("section_key"),
         "pier_H": pier_cfg.get("H"),
         "pier_V": pier_cfg.get("V"),
         "pier_W": pier_cfg.get("W"),
+        "pier_type": pier_cfg.get("type"),
         "pier_count": pier_cfg.get("count"),
     }
 
@@ -264,12 +271,15 @@ def _component_dimension_snapshot(component_cfg):
 def _format_dimension_snapshot(snapshot):
     ordered_keys = (
         "centerline_span",
+        "centerline_num_base_pts",
         "slab_width",
         "slab_thickness",
         "beam_num_lines",
+        "beam_section_key",
         "pier_H",
         "pier_V",
         "pier_W",
+        "pier_type",
         "pier_count",
     )
     parts = []
@@ -348,7 +358,7 @@ def run(
     show_cameras=False,
     print_timings=True,
 ):
-    """Run component modeling in batch and capture two randomized render passes per model."""
+    """Run component modeling in batch and capture randomized render passes per model."""
     stage_times = []
     timer_start = perf_counter()
     log_file = None
