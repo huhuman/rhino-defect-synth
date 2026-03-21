@@ -375,6 +375,13 @@ def _build_camera_capture_context(base_out_dir, params, camera_cfg):
     outputs_cfg = params.get("outputs") or {}
     scene_cfg = outputs_cfg.get("scene") or {}
     mask_cfg = outputs_cfg.get("mask") or {}
+    channel_cfg = params.get("channel") or {}
+    component_layer_default = getattr(render_core, "_default_component_render_layers", None)
+    scene_only_layers = scene_cfg.get("only_layers")
+    mask_only_layers = mask_cfg.get("only_layers")
+    if callable(component_layer_default):
+        scene_only_layers = component_layer_default(scene_only_layers)
+        mask_only_layers = component_layer_default(mask_only_layers)
     return {
         "base_out_dir": base_out_dir,
         "lens": camera_cfg.get("lens"),
@@ -387,12 +394,19 @@ def _build_camera_capture_context(base_out_dir, params, camera_cfg):
         "output_index_offset": _to_non_negative_int(params.get("output_index_offset", 0)),
         "model_iter": params.get("model_iter"),
         "render_iter": params.get("render_iter"),
-        "scene_only_layers": scene_cfg.get("only_layers"),
+        "scene_only_layers": scene_only_layers,
         "scene_hide_layers": scene_cfg.get("hide_layers"),
-        "mask_only_layers": mask_cfg.get("only_layers"),
+        "mask_only_layers": mask_only_layers,
         "mask_hide_layers": mask_cfg.get("hide_layers"),
+        "channels": dict(channel_cfg) if isinstance(channel_cfg, dict) else {},
         "smooth_path": False,
         "transition_frames": 0,
+        "capture_gc_every_frames": _to_non_negative_int(
+            params.get("capture_gc_every_frames", 0)
+        ),
+        "capture_wait_after_frame_ms": _to_non_negative_int(
+            params.get("capture_wait_after_frame_ms", 0)
+        ),
     }
 
 

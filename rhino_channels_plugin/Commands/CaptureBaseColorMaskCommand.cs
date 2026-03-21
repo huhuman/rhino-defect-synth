@@ -223,7 +223,20 @@ namespace RhinoChannelsPlugin.Commands
         private static List<MaskObjectEntry> CollectVisibleMaskEntries(RhinoDoc doc)
         {
             var entries = new List<MaskObjectEntry>();
-            foreach (var obj in doc.Objects)
+            var settings = new ObjectEnumeratorSettings
+            {
+                ActiveObjects = true,
+                DeletedObjects = false,
+                HiddenObjects = false,
+                IncludeGrips = false,
+                IncludeLights = false,
+                LockedObjects = true,
+                NormalObjects = true,
+                ReferenceObjects = false,
+                VisibleFilter = true,
+            };
+
+            foreach (var obj in doc.Objects.GetObjectList(settings))
             {
                 if (obj == null || obj.IsDeleted)
                     continue;

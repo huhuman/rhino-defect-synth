@@ -7,8 +7,13 @@ import json
 import os
 import random
 import sys
+from contextlib import contextmanager
 from datetime import datetime
 from time import perf_counter
+
+import Rhino
+import rhinoscriptsyntax as rs
+import scriptcontext as sc
 
 import main as main_entry
 
@@ -310,6 +315,404 @@ def _run_gc():
         pass
 
 
+def _to_non_negative_int(value, default=0):
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    return max(0, parsed)
+
+
+def _to_non_negative_float(value, default=0.0):
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(default)
+    return max(0.0, parsed)
+
+
+def _resolve_stability_cfg(nested_cfg):
+    raw = (nested_cfg or {}).get("stability")
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("nested_loop.stability must be a dict when provided.")
+
+    enabled = bool(raw.get("enabled", True))
+    cfg = {
+        "enabled": enabled,
+        "wait_after_reset_ms": _to_non_negative_int(raw.get("wait_after_reset_ms", 20)),
+        "wait_after_preparation_ms": _to_non_negative_int(
+            raw.get("wait_after_preparation_ms", 40)
+        ),
+        "wait_before_render_ms": _to_non_negative_int(raw.get("wait_before_render_ms", 40)),
+        "wait_after_render_ms": _to_non_negative_int(raw.get("wait_after_render_ms", 60)),
+        "wait_after_capture_frame_ms": _to_non_negative_int(
+            raw.get("wait_after_capture_frame_ms", 0)
+        ),
+        "wait_on_retry_ms": _to_non_negative_int(raw.get("wait_on_retry_ms", 400)),
+        "gc_every_capture_frames": _to_non_negative_int(
+            raw.get("gc_every_capture_frames", 8)
+        ),
+        "render_retry_count": _to_non_negative_int(raw.get("render_retry_count", 1)),
+        "gc_every_render_passes": _to_non_negative_int(raw.get("gc_every_render_passes", 1)),
+        "gc_every_model_iters": _to_non_negative_int(raw.get("gc_every_model_iters", 1)),
+        "clear_undo_every_render_passes": _to_non_negative_int(
+            raw.get("clear_undo_every_render_passes", 1)
+        ),
+        "clear_undo_every_model_iters": _to_non_negative_int(
+            raw.get("clear_undo_every_model_iters", 1)
+        ),
+        "max_private_memory_mb": _to_non_negative_float(
+            raw.get("max_private_memory_mb", 0.0)
+        ),
+        "max_render_passes_per_run": _to_non_negative_int(
+            raw.get("max_render_passes_per_run", 0)
+        ),
+        "max_basic_materials": _to_non_negative_int(raw.get("max_basic_materials", 0)),
+        "log_memory": bool(raw.get("log_memory", True)),
+    }
+
+    if not enabled:
+        cfg.update(
+            {
+                "wait_after_reset_ms": 0,
+                "wait_after_preparation_ms": 0,
+                "wait_before_render_ms": 0,
+                "wait_after_render_ms": 0,
+                "wait_after_capture_frame_ms": 0,
+                "wait_on_retry_ms": 0,
+                "gc_every_capture_frames": 0,
+                "render_retry_count": 0,
+                "gc_every_render_passes": 0,
+                "gc_every_model_iters": 0,
+                "clear_undo_every_render_passes": 0,
+                "clear_undo_every_model_iters": 0,
+                "max_private_memory_mb": 0.0,
+                "max_render_passes_per_run": 0,
+                "max_basic_materials": 0,
+                "log_memory": False,
+            }
+        )
+
+    return cfg
+
+
+def _stability_wait(wait_ms=0, redraw=False):
+    wait_ms = max(0, int(wait_ms))
+    if redraw:
+        try:
+            sc.doc.Views.Redraw()
+        except Exception:
+            pass
+    try:
+        Rhino.RhinoApp.Wait()
+    except Exception:
+        pass
+    if wait_ms > 0:
+        rs.Sleep(wait_ms)
+
+
+@contextmanager
+def _suspend_view_updates():
+    redraw_previous = None
+    active_view = None
+    drawing_previous = None
+
+    try:
+        redraw_previous = rs.EnableRedraw(False)
+    except Exception:
+        redraw_previous = None
+
+    try:
+        active_view = getattr(sc.doc.Views, "ActiveView", None)
+        if active_view is not None and hasattr(active_view, "EnableDrawing"):
+            drawing_previous = bool(active_view.EnableDrawing)
+            if drawing_previous:
+                active_view.EnableDrawing = False
+    except Exception:
+        drawing_previous = None
+
+    try:
+        yield
+    finally:
+        if active_view is not None and drawing_previous is not None:
+            try:
+                active_view.EnableDrawing = bool(drawing_previous)
+            except Exception:
+                pass
+        try:
+            if redraw_previous is None:
+                rs.EnableRedraw(True)
+            else:
+                rs.EnableRedraw(bool(redraw_previous))
+        except Exception:
+            pass
+
+
+def _set_active_view_display_mode(mode_name):
+    if not str(mode_name or "").strip():
+        return False
+
+    render_view = getattr(sc.doc.Views, "ActiveView", None)
+    if render_view is None:
+        return False
+
+    mode = Rhino.Display.DisplayModeDescription.FindByName(str(mode_name))
+    if mode is None:
+        return False
+
+    try:
+        render_view.ActiveViewport.DisplayMode = mode
+        return True
+    except Exception:
+        return False
+
+
+def _set_batch_work_view():
+    for mode_name in ("Wireframe", "Shaded"):
+        if _set_active_view_display_mode(mode_name):
+            return mode_name
+    return None
+
+
+def _table_count(table):
+    if table is None:
+        return None
+    try:
+        return int(getattr(table, "Count"))
+    except Exception:
+        return None
+
+
+def _private_memory_mb():
+    process = None
+    try:
+        import System
+
+        process = System.Diagnostics.Process.GetCurrentProcess()
+        return float(process.PrivateMemorySize64) / (1024.0 * 1024.0)
+    except Exception:
+        return None
+    finally:
+        dispose = getattr(process, "Dispose", None)
+        if callable(dispose):
+            try:
+                dispose()
+            except Exception:
+                pass
+
+
+def _log_runtime_snapshot(label, enabled=False):
+    if not enabled:
+        return
+
+    parts = []
+    obj_count = _table_count(getattr(sc.doc, "Objects", None))
+    if obj_count is not None:
+        parts.append(f"objects={obj_count}")
+
+    layer_count = _table_count(getattr(sc.doc, "Layers", None))
+    if layer_count is not None:
+        parts.append(f"layers={layer_count}")
+
+    render_mat_count = _table_count(getattr(sc.doc, "RenderMaterials", None))
+    if render_mat_count is not None:
+        parts.append(f"render_materials={render_mat_count}")
+
+    basic_mat_count = _table_count(getattr(sc.doc, "Materials", None))
+    if basic_mat_count is not None:
+        parts.append(f"basic_materials={basic_mat_count}")
+
+    memory_mb = _private_memory_mb()
+    if memory_mb is not None:
+        parts.append(f"private_mem_mb={memory_mb:.1f}")
+
+    if parts:
+        print(f"[runtime] {label}: {', '.join(parts)}")
+
+
+def _clear_undo_records():
+    clear_fn = getattr(sc.doc, "ClearUndoRecords", None)
+    if callable(clear_fn):
+        try:
+            clear_fn()
+            return True
+        except Exception:
+            return False
+    return False
+
+
+def _run_render_demo_with_retry(base_out_dir, params, retry_count=0, wait_on_retry_ms=0):
+    max_retries = max(0, int(retry_count))
+    for attempt in range(max_retries + 1):
+        try:
+            return run_render_demo(base_out_dir=base_out_dir, params=params)
+        except Exception as exc:
+            if attempt >= max_retries:
+                raise
+            print(
+                f"Render pass failed ({attempt + 1}/{max_retries + 1}): {exc}. "
+                f"Retrying after {int(wait_on_retry_ms)} ms..."
+            )
+            _stability_wait(wait_ms=wait_on_retry_ms, redraw=True)
+            _run_gc()
+
+
+def _memory_guard_triggered(stability_cfg, label=""):
+    limit_mb = float(stability_cfg.get("max_private_memory_mb") or 0.0)
+    if limit_mb <= 0.0:
+        return False
+
+    current_mb = _private_memory_mb()
+    if current_mb is None or current_mb < limit_mb:
+        return False
+
+    label = str(label or "runtime")
+    print(
+        f"[stability] memory_guard_triggered at {label}: "
+        f"private_mem_mb={current_mb:.1f}, limit_mb={limit_mb:.1f}"
+    )
+    return True
+
+
+def _basic_material_guard_triggered(stability_cfg, label=""):
+    limit = int(stability_cfg.get("max_basic_materials") or 0)
+    if limit <= 0:
+        return False
+
+    current = _table_count(getattr(sc.doc, "Materials", None))
+    if current is None or current <= limit:
+        return False
+
+    label = str(label or "runtime")
+    print(
+        f"[stability] basic_material_guard_triggered at {label}: "
+        f"basic_materials={current}, limit={limit}"
+    )
+    return True
+
+
+def _apply_batch_autosave_policy(preparation_params):
+    prep_cfg = dict(preparation_params or {})
+    autosave_cfg = dict(prep_cfg.get("autosave") or {})
+    disable_during_batch = bool(autosave_cfg.get("disable_during_batch", True))
+    if not disable_during_batch:
+        print("[stability] autosave policy: keep enabled (disable_during_batch=false).")
+        return None
+
+    app_settings = getattr(Rhino, "ApplicationSettings", None)
+    settings_obj = getattr(app_settings, "FileSettings", None) if app_settings is not None else None
+    if settings_obj is None:
+        print("[stability] autosave policy: FileSettings API unavailable; skipping.")
+        return None
+
+    enabled_value = None
+    changed = False
+
+    if hasattr(settings_obj, "AutoSaveEnabled"):
+        try:
+            enabled_value = bool(settings_obj.AutoSaveEnabled)
+            settings_obj.AutoSaveEnabled = False
+            changed = True
+        except Exception:
+            changed = False
+
+    state = {
+        "settings_obj": settings_obj,
+        "enabled_value": enabled_value,
+        "changed": bool(changed),
+    }
+
+    if changed:
+        print("[stability] autosave policy: disabled during batch.")
+    else:
+        print("[stability] autosave policy: no supported autosave property found.")
+    return state
+
+
+def _restore_batch_autosave_policy(state):
+    state = dict(state or {})
+    if not state or not bool(state.get("changed")):
+        return
+
+    settings_obj = state.get("settings_obj")
+    if settings_obj is None:
+        return
+
+    restored_enabled = False
+    if state.get("enabled_value") is not None and hasattr(settings_obj, "AutoSaveEnabled"):
+        try:
+            settings_obj.AutoSaveEnabled = bool(state.get("enabled_value"))
+            restored_enabled = True
+        except Exception:
+            restored_enabled = False
+
+    if restored_enabled:
+        print("[stability] autosave policy: restored previous settings.")
+    else:
+        print("[stability] autosave policy: restore failed (properties unavailable).")
+
+
+def _apply_batch_undo_policy(preparation_params):
+    prep_cfg = dict(preparation_params or {})
+    undo_cfg = dict(prep_cfg.get("undo") or {})
+    disable_during_batch = bool(undo_cfg.get("disable_during_batch", True))
+    if not disable_during_batch:
+        print("[stability] undo policy: keep recording enabled (disable_during_batch=false).")
+        return None
+
+    doc = getattr(sc, "doc", None)
+    if doc is None or not hasattr(doc, "UndoRecordingEnabled"):
+        print("[stability] undo policy: UndoRecordingEnabled API unavailable; skipping.")
+        return None
+
+    try:
+        enabled_value = bool(doc.UndoRecordingEnabled)
+    except Exception:
+        print("[stability] undo policy: unable to read current undo state; skipping.")
+        return None
+
+    changed = False
+    if enabled_value:
+        try:
+            doc.UndoRecordingEnabled = False
+            changed = True
+            print("[stability] undo policy: disabled undo recording during batch.")
+        except Exception:
+            print("[stability] undo policy: failed to disable undo recording.")
+    else:
+        print("[stability] undo policy: already disabled before batch.")
+
+    return {
+        "doc": doc,
+        "enabled_value": enabled_value,
+        "changed": bool(changed),
+    }
+
+
+def _restore_batch_undo_policy(state):
+    state = dict(state or {})
+    if not state or not bool(state.get("changed")):
+        return
+
+    doc = state.get("doc")
+    if doc is None or not hasattr(doc, "UndoRecordingEnabled"):
+        return
+
+    restored = False
+    try:
+        doc.UndoRecordingEnabled = bool(state.get("enabled_value"))
+        restored = True
+    except Exception:
+        restored = False
+
+    if restored:
+        print("[stability] undo policy: restored previous undo-recording setting.")
+    else:
+        print("[stability] undo policy: failed to restore previous undo-recording setting.")
+
+
 def _reapply_texture_mapping(modeling_params, material_metadata):
     material_metadata = dict(material_metadata or {})
     component_cfg = dict(modeling_params.get("component") or {})
@@ -364,12 +767,17 @@ def run(
     log_file = None
     stdout_backup = None
     stderr_backup = None
+    autosave_state = None
+    undo_state = None
     batch_state_path = None
     batch_state = None
     global_random_state = None
+    current_model_iter = None
+    current_render_iter = None
 
     cfg = load_config(config_name)
     nested_cfg = dict(cfg.get("nested_loop") or {})
+    stability_cfg = _resolve_stability_cfg(nested_cfg)
     preparation_params = dict(cfg.get("preparation") or {})
 
     modeling_params_base = dict(cfg.get("modeling") or {})
@@ -422,6 +830,9 @@ def run(
         else:
             rng = random.Random()
 
+        autosave_state = _apply_batch_autosave_policy(preparation_params)
+        undo_state = _apply_batch_undo_policy(preparation_params)
+
         if renders_per_model is None:
             renders_per_model = nested_cfg.get("renders_per_model", 2)
         renders_per_model = max(1, int(renders_per_model))
@@ -432,6 +843,8 @@ def run(
 
         next_output_index = int(nested_cfg.get("output_index_start", 0))
         stop_after_preview = False
+        stop_after_guard = False
+        render_pass_count = 0
 
         batch_state = {
             "status": "running",
@@ -441,6 +854,7 @@ def run(
             "progress": {
                 "models_total": max_iter,
                 "renders_per_model": renders_per_model,
+                "render_pass_count": render_pass_count,
                 "next_output_index": next_output_index,
             },
             "current": {
@@ -456,6 +870,20 @@ def run(
             f"Component batch: models={max_iter}, renders_per_model={renders_per_model}, "
             f"reapply_texture_mapping_per_render={reapply_mapping_per_render}"
         )
+        print(
+            "Stability controls: "
+            f"enabled={stability_cfg['enabled']}, "
+            f"render_retry_count={stability_cfg['render_retry_count']}, "
+            f"gc_every_capture_frames={stability_cfg['gc_every_capture_frames']}, "
+            f"gc_every_render_passes={stability_cfg['gc_every_render_passes']}, "
+            f"gc_every_model_iters={stability_cfg['gc_every_model_iters']}, "
+            f"wait_after_capture_frame_ms={stability_cfg['wait_after_capture_frame_ms']}, "
+            f"clear_undo_every_render_passes={stability_cfg['clear_undo_every_render_passes']}, "
+            f"clear_undo_every_model_iters={stability_cfg['clear_undo_every_model_iters']}, "
+            f"max_private_memory_mb={stability_cfg['max_private_memory_mb']}, "
+            f"max_render_passes_per_run={stability_cfg['max_render_passes_per_run']}, "
+            f"max_basic_materials={stability_cfg['max_basic_materials']}"
+        )
         if component_sampler:
             print(
                 "Component sampler enabled: "
@@ -465,8 +893,23 @@ def run(
             print("Component sampler disabled.")
 
         for model_iter in range(max_iter):
+            current_model_iter = int(model_iter)
+            current_render_iter = None
             model_stage_start = perf_counter()
             print(f"=== model_iter={model_iter} ===")
+            _log_runtime_snapshot(
+                label=f"before_model_iter[{model_iter}]",
+                enabled=stability_cfg["log_memory"],
+            )
+            if _memory_guard_triggered(
+                stability_cfg=stability_cfg,
+                label=f"before_model_iter[{model_iter}]",
+            ) or _basic_material_guard_triggered(
+                stability_cfg=stability_cfg,
+                label=f"before_model_iter[{model_iter}]",
+            ):
+                stop_after_guard = True
+                break
 
             sampled_component_cfg = _sample_component_params(
                 base_component_cfg,
@@ -496,16 +939,35 @@ def run(
                 "render_iter": None,
                 "stage": "modeling",
             }
+            batch_state["progress"]["render_pass_count"] = render_pass_count
             batch_state["progress"]["next_output_index"] = next_output_index
             _flush_batch_state(batch_state_path, batch_state)
 
-            main_entry.reset()
+            with _suspend_view_updates():
+                _set_batch_work_view()
+                main_entry.reset()
+            _stability_wait(
+                wait_ms=stability_cfg["wait_after_reset_ms"],
+                redraw=True,
+            )
 
             model_prepare_params = _prepare_params_for_batch(preparation_params, rng)
             print(f"Model preparation seed: {model_prepare_params.get('seed')}")
-            prepare(model_prepare_params)
+            with _suspend_view_updates():
+                _set_batch_work_view()
+                prepare(model_prepare_params)
+            _stability_wait(
+                wait_ms=stability_cfg["wait_after_preparation_ms"],
+                redraw=True,
+            )
+            with _suspend_view_updates():
+                _set_batch_work_view()
+                create_model(sampled_modeling_params)
+            _stability_wait(
+                wait_ms=stability_cfg["wait_before_render_ms"],
+                redraw=True,
+            )
             main_entry.setup_render_view(cfg=cfg)
-            create_model(sampled_modeling_params)
 
             stage_times.append(
                 (f"reset->modeling[{model_iter}]", perf_counter() - model_stage_start)
@@ -520,14 +982,27 @@ def run(
             }
 
             for render_iter in range(renders_per_model):
+                current_render_iter = int(render_iter)
                 render_stage_start = perf_counter()
                 print(f"-- render_iter={render_iter} --")
 
-                clear_imported_materials_from_doc()
+                with _suspend_view_updates():
+                    _set_batch_work_view()
+                    clear_imported_materials_from_doc()
                 render_prepare_params = _prepare_params_for_batch(preparation_params, rng)
                 print(f"Render preparation seed: {render_prepare_params.get('seed')}")
-                prepare_result = prepare(render_prepare_params) or {}
+                with _suspend_view_updates():
+                    _set_batch_work_view()
+                    prepare_result = prepare(render_prepare_params) or {}
+                _stability_wait(
+                    wait_ms=stability_cfg["wait_after_preparation_ms"],
+                    redraw=True,
+                )
                 main_entry.setup_render_view(cfg=cfg)
+                _stability_wait(
+                    wait_ms=stability_cfg["wait_before_render_ms"],
+                    redraw=True,
+                )
 
                 if reapply_mapping_per_render:
                     _reapply_texture_mapping(
@@ -545,6 +1020,12 @@ def run(
                 render_params["model_iter"] = model_iter
                 render_params["render_iter"] = render_iter
                 render_params["output_index_offset"] = next_output_index
+                render_params["capture_gc_every_frames"] = stability_cfg[
+                    "gc_every_capture_frames"
+                ]
+                render_params["capture_wait_after_frame_ms"] = stability_cfg[
+                    "wait_after_capture_frame_ms"
+                ]
                 render_params.setdefault(
                     "output_basename_pattern",
                     "m{model_iter:04d}_r{render_iter:02d}_view_{output_idx:06d}",
@@ -559,15 +1040,19 @@ def run(
                     "render_iter": render_iter,
                     "stage": "rendering",
                 }
+                batch_state["progress"]["render_pass_count"] = render_pass_count
                 batch_state["progress"]["next_output_index"] = next_output_index
                 _flush_batch_state(batch_state_path, batch_state)
 
-                captured_paths = run_render_demo(
+                captured_paths = _run_render_demo_with_retry(
                     base_out_dir=batch_output_dir,
                     params=demo_params,
+                    retry_count=stability_cfg["render_retry_count"],
+                    wait_on_retry_ms=stability_cfg["wait_on_retry_ms"],
                 )
                 captured_count = 0 if show_cameras else len(captured_paths)
                 next_output_index += captured_count
+                render_pass_count += 1
 
                 print(
                     f"render_iter={render_iter}: captured_views={captured_count}, "
@@ -591,22 +1076,102 @@ def run(
                         perf_counter() - render_stage_start,
                     )
                 )
+                _stability_wait(
+                    wait_ms=stability_cfg["wait_after_render_ms"],
+                    redraw=False,
+                )
 
+                with _suspend_view_updates():
+                    _set_batch_work_view()
+                    clear_imported_materials_from_doc()
+
+                if (
+                    stability_cfg["gc_every_render_passes"] > 0
+                    and render_pass_count % stability_cfg["gc_every_render_passes"] == 0
+                ):
+                    _run_gc()
+                if (
+                    stability_cfg["clear_undo_every_render_passes"] > 0
+                    and render_pass_count % stability_cfg["clear_undo_every_render_passes"] == 0
+                ):
+                    cleared = _clear_undo_records()
+                    print(
+                        f"[stability] clear_undo_after_render_pass={render_pass_count}: "
+                        f"{'ok' if cleared else 'unsupported'}"
+                    )
                 batch_state["progress"]["next_output_index"] = next_output_index
+                batch_state["progress"]["render_pass_count"] = render_pass_count
                 _flush_batch_state(batch_state_path, batch_state)
 
                 if show_cameras:
                     stop_after_preview = True
                     break
 
+                if (
+                    stability_cfg["max_render_passes_per_run"] > 0
+                    and render_pass_count >= stability_cfg["max_render_passes_per_run"]
+                ):
+                    print(
+                        "[stability] max_render_passes_per_run reached "
+                        f"({render_pass_count}). Stopping run safely."
+                    )
+                    stop_after_guard = True
+                    break
+                if _memory_guard_triggered(
+                    stability_cfg=stability_cfg,
+                    label=f"after_render_pass[{model_iter},{render_iter}]",
+                ) or _basic_material_guard_triggered(
+                    stability_cfg=stability_cfg,
+                    label=f"after_render_pass[{model_iter},{render_iter}]",
+                ):
+                    stop_after_guard = True
+                    break
+
+            if stop_after_preview or stop_after_guard:
+                break
+
             batch_state["history"].append(model_history)
+            model_iter_1based = model_iter + 1
+            if (
+                stability_cfg["clear_undo_every_model_iters"] > 0
+                and model_iter_1based % stability_cfg["clear_undo_every_model_iters"] == 0
+            ):
+                cleared = _clear_undo_records()
+                print(
+                    f"[stability] clear_undo_after_model_iter={model_iter_1based}: "
+                    f"{'ok' if cleared else 'unsupported'}"
+                )
+            if (
+                stability_cfg["gc_every_model_iters"] > 0
+                and model_iter_1based % stability_cfg["gc_every_model_iters"] == 0
+            ):
+                _run_gc()
             _flush_batch_state(batch_state_path, batch_state)
-            _run_gc()
+            _log_runtime_snapshot(
+                label=f"after_model_iter[{model_iter}]",
+                enabled=stability_cfg["log_memory"],
+            )
+            if _memory_guard_triggered(
+                stability_cfg=stability_cfg,
+                label=f"after_model_iter[{model_iter}]",
+            ) or _basic_material_guard_triggered(
+                stability_cfg=stability_cfg,
+                label=f"after_model_iter[{model_iter}]",
+            ):
+                stop_after_guard = True
+                break
 
             if stop_after_preview:
                 break
 
-        if stop_after_preview:
+        if stop_after_guard:
+            batch_state["status"] = "stopped_by_guard"
+            batch_state["current"] = {
+                "model_iter": current_model_iter,
+                "render_iter": current_render_iter,
+                "stage": "guard_stop",
+            }
+        elif stop_after_preview:
             batch_state["status"] = "preview_stopped"
             batch_state["current"] = {
                 "model_iter": batch_state["current"].get("model_iter"),
@@ -621,6 +1186,7 @@ def run(
                 "stage": "completed",
             }
         batch_state["progress"]["next_output_index"] = next_output_index
+        batch_state["progress"]["render_pass_count"] = render_pass_count
         _flush_batch_state(batch_state_path, batch_state)
 
         if print_timings:
@@ -643,6 +1209,8 @@ def run(
                 random.setstate(global_random_state)
             except Exception:
                 pass
+        _restore_batch_undo_policy(undo_state)
+        _restore_batch_autosave_policy(autosave_state)
         _stop_batch_logging(log_file, stdout_backup, stderr_backup)
 
 
@@ -650,7 +1218,7 @@ if __name__ == "__main__":
     run(
         config_name="component.local.yaml",
         renders_per_model=None,
-        max_iter=1,
+        max_iter=None,
         seed=None,
         show_cameras=False,
         print_timings=True,

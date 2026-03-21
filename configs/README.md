@@ -49,13 +49,13 @@ This document is table-first: each parameter is mapped to runtime behavior.
 | `preparation.plugin_autoload.required_commands` | `string \| list[string]` | Command names that must be available before continuing. | `["CaptureRenderChannels", "CaptureBaseColorMask"]` | If any command is missing, preparation attempts plugin auto-load. |
 | `preparation.plugin_autoload.strict` | `bool` | Whether missing commands / load failures should stop pipeline. | `true` | Set `false` to warn and continue. |
 | `preparation.plugin_autoload.verbose` | `bool` | Controls informational logging when required commands are already available. | `true` | Does not affect strict-error behavior. |
-| `preparation.autosave.disable_during_batch` | `bool` | In long-running `main_cube_batch.py` runs, temporarily disables Rhino autosave during execution. | `true` | Restored in `finally`; ignored when Rhino FileSettings API is unavailable. |
-| `preparation.undo.disable_during_batch` | `bool` | In long-running `main_cube_batch.py` runs, temporarily disables Rhino undo recording during execution. | `true` | Restored in `finally`; separate from periodic undo-record cleanup cadence. |
+| `preparation.autosave.disable_during_batch` | `bool` | In long-running `*_batch.py` runs, temporarily disables Rhino autosave during execution. | `true` | Restored in `finally`; ignored when Rhino FileSettings API is unavailable. |
+| `preparation.undo.disable_during_batch` | `bool` | In long-running `*_batch.py` runs, temporarily disables Rhino undo recording during execution. | `true` | Restored in `finally`; separate from periodic undo-record cleanup cadence. |
 | `modeling` | `dict` | Passed to `pipeline.create_model`. | config | Must include `strategy`. |
 | `rendering` | `dict` | Passed to `pipeline.run_render`. | config | Required for render stage. |
-| `nested_loop` | `dict` | Used by `main_cube_batch.run` for batched cube dataset generation. | none | Optional; ignored by `main.py`. |
+| `nested_loop` | `dict` | Used by `main_cube_batch.run` and `main_component_batch.run` for batched dataset generation. | none | Optional; ignored by `main.py`. |
 
-## Batch Loop Parameters (`nested_loop`, for `main_cube_batch.py`)
+## Batch Loop Parameters (`nested_loop`, primarily `main_cube_batch.py`; shared stability subset also used by `main_component_batch.py`)
 
 | Parameter path | Type | Runtime mechanism | Default source | Notes |
 |---|---|---|---|---|

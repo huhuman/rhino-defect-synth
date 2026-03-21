@@ -12,6 +12,24 @@ nested_loop:
   renders_per_model: 2
   output_index_start: 0
   reapply_texture_mapping_per_render: true
+  stability:
+    enabled: true
+    wait_after_reset_ms: 20
+    wait_after_preparation_ms: 40
+    wait_before_render_ms: 40
+    wait_after_render_ms: 60
+    wait_after_capture_frame_ms: 0
+    wait_on_retry_ms: 400
+    gc_every_capture_frames: 8
+    render_retry_count: 1
+    gc_every_render_passes: 1
+    gc_every_model_iters: 1
+    clear_undo_every_render_passes: 1
+    clear_undo_every_model_iters: 1
+    max_private_memory_mb: 0.0
+    max_render_passes_per_run: 0
+    max_basic_materials: 0
+    log_memory: true
   # Set to false to disable per-model geometry randomization in main_component_batch.py.
   component_sampler:
     centerline:
@@ -99,3 +117,9 @@ rendering:
       #   - point: [0.0, 0.0, 0.0]
       #     normal: [0.0, 0.0, 1.0]
       defects: []
+
+preparation:
+  autosave:
+    disable_during_batch: true
+  undo:
+    disable_during_batch: true
