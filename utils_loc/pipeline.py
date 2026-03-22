@@ -1,6 +1,7 @@
 """Simple entry point orchestrating material, modeling, and rendering steps."""
 
 import json
+import os
 
 import rhinoscriptsyntax as rs
 
@@ -22,6 +23,70 @@ _LAST_MODEL_RESULT = None
 _LAST_PREPARATION_LAYER_METADATA = {}
 
 
+def _round_if_number(value, digits=3):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return round(value, digits)
+    return value
+
+
+def _round_vec3(value, digits=3):
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return value
+    rounded = []
+    for item in value:
+        try:
+            rounded.append(round(float(item), digits))
+        except Exception:
+            return value
+    return rounded
+
+
+def _summarize_metric_block(value, digits=3):
+    if not isinstance(value, dict):
+        return value
+    return {
+        str(key): _round_if_number(metric, digits=digits)
+        for key, metric in sorted(value.items())
+    }
+
+
+def _summarize_defect_record_for_log(record):
+    record = dict(record or {})
+    source_file = record.get("shape_source_file")
+    if source_file:
+        source_file = os.path.basename(str(source_file))
+
+    summary = {
+        "type": record.get("type"),
+        "condition_state": record.get("condition_state"),
+        "severity": record.get("severity"),
+        "surface_layer": record.get("surface_layer"),
+        "point": _round_vec3(record.get("point")),
+        "normal": _round_vec3(record.get("normal")),
+        "reference_size": _round_if_number(record.get("reference_size")),
+        "boundary_dist": _round_if_number(record.get("boundary_dist")),
+        "angle_deg": _round_if_number(record.get("angle_deg")),
+        "normal_offset": _round_if_number(record.get("normal_offset")),
+        "source_file": source_file,
+        "source_index": record.get("shape_source_index"),
+        "instance_id": record.get("instance_id"),
+        "instance_index": record.get("instance_index"),
+        "target_metric_cm": _round_if_number(record.get("target_metric_cm")),
+        "metric_scale": _round_if_number(record.get("metric_scale")),
+        "has_exposed_rebar": bool(record.get("has_exposed_rebar", False)),
+    }
+
+    for metric_key in ("crack_metrics", "efflore_metrics", "spall_metrics", "rebar_metrics"):
+        if metric_key in record:
+            summary[metric_key] = _summarize_metric_block(record.get(metric_key))
+
+    return {key: value for key, value in summary.items() if value not in (None, "", [], {})}
+
+
 def _log_defect_records(defect_result):
     payload = defect_result if isinstance(defect_result, dict) else {}
     records = payload.get("records") or []
@@ -41,7 +106,7 @@ def _log_defect_records(defect_result):
 
     for idx, record in enumerate(records):
         try:
-            record_text = json.dumps(record, sort_keys=True)
+            record_text = json.dumps(_summarize_defect_record_for_log(record), sort_keys=True)
         except Exception:
             record_text = str(record)
         print("Defect record[{}]: {}".format(idx, record_text))

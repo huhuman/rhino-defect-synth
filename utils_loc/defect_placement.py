@@ -1955,10 +1955,32 @@ def _build_instance_records_for_type(
 
 def _json_ready_records(records):
     ready = []
+    removable_keys = {
+        "surface_id",
+        "geometry_ids",
+        "mask_ids",
+        "seed_id",
+        "seed_ids",
+        "normal_debug_id",
+        "normal_debug_ids",
+        "spall_geometry_ids",
+        "rebar_geometry_ids",
+        "exposed_rebar_geometry_ids",
+        "efflore_inner_geometry_ids",
+        "efflore_outer_geometry_ids",
+        "efflore_top_geometry_ids",
+        "efflore_side_geometry_ids",
+        "efflore_inner_top_geometry_ids",
+        "efflore_inner_side_geometry_ids",
+        "efflore_outer_top_geometry_ids",
+        "efflore_outer_side_geometry_ids",
+    }
     for idx, record in enumerate(records):
         item = dict(record)
         item.pop("surface_cut_polygon", None)
         item.pop("surface_cut_polygons", None)
+        for key in removable_keys:
+            item.pop(key, None)
         item["instance_index"] = idx
         ready.append(item)
     return ready
@@ -2259,7 +2281,7 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
         "spalling": sum(1 for item in json_ready if item.get("type") == "spalling"),
         "exposed_rebar": sum(
             1 for item in json_ready
-            if item.get("type") == "exposed_rebar" or bool(item.get("rebar_geometry_ids"))
+            if item.get("type") == "exposed_rebar" or bool(item.get("has_exposed_rebar"))
         ),
     }
 
