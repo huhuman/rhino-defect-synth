@@ -10,6 +10,8 @@ import System.Drawing as Drawing
 import System.Drawing.Imaging as Imaging
 import System.IO as IO
 
+_TIMING_LOG_STATUS_EMITTED = False
+
 
 def _dispose_if_possible(obj):
     if obj is None:
@@ -593,6 +595,17 @@ def render_all_outputs(
     log_timings = bool(log_timings)
     total_start = perf_counter()
     step_timings = {}
+    global _TIMING_LOG_STATUS_EMITTED
+    if not _TIMING_LOG_STATUS_EMITTED:
+        enabled_channels = [
+            name for name, enabled in channel_flags.items() if bool(enabled)
+        ]
+        print(
+            "[timing] channel-wise capture logging "
+            f"{'enabled' if log_timings else 'disabled'}; "
+            f"channels={','.join(enabled_channels)}"
+        )
+        _TIMING_LOG_STATUS_EMITTED = True
 
     def _record_timing(name, start_time):
         if log_timings:

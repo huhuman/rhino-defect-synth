@@ -132,6 +132,23 @@ def _create_timestamped_subdir(base_output_dir, modeling_strategy="component"):
     return candidate
 
 
+def _enabled_channel_names(channel_cfg):
+    if not isinstance(channel_cfg, dict):
+        return ["color", "depth", "normal", "depth_buffer", "normal_buffer", "mask"]
+    enabled = []
+    for name in (
+        "color",
+        "depth",
+        "normal",
+        "depth_buffer",
+        "normal_buffer",
+        "mask",
+    ):
+        if bool(channel_cfg.get(name, True)):
+            enabled.append(name)
+    return enabled
+
+
 def _sample_value(spec, rng):
     if isinstance(spec, (list, tuple)):
         if not spec:
@@ -885,6 +902,11 @@ def run(
             f"max_private_memory_mb={stability_cfg['max_private_memory_mb']}, "
             f"max_render_passes_per_run={stability_cfg['max_render_passes_per_run']}, "
             f"max_basic_materials={stability_cfg['max_basic_materials']}"
+        )
+        print(
+            "Render capture logging: "
+            f"log_output_timings={bool(base_rendering.get('log_output_timings', False))}, "
+            f"enabled_channels={','.join(_enabled_channel_names(base_rendering.get('channel')))}"
         )
         if component_sampler:
             print(
