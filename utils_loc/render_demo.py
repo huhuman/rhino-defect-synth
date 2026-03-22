@@ -399,6 +399,7 @@ def _build_camera_capture_context(base_out_dir, params, camera_cfg):
         "mask_only_layers": mask_only_layers,
         "mask_hide_layers": mask_cfg.get("hide_layers"),
         "channels": dict(channel_cfg) if isinstance(channel_cfg, dict) else {},
+        "log_output_timings": bool(params.get("log_output_timings", False)),
         "smooth_path": False,
         "transition_frames": 0,
         "capture_gc_every_frames": _to_non_negative_int(

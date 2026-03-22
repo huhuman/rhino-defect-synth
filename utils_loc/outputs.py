@@ -560,6 +560,7 @@ def render_all_outputs(
     mask_only_layers=None,
     mask_hide_layers=None,
     channels=None,
+    log_timings=False,
 ):
     """
     Convenience helper to render color, depth, normal, and mask in one call.
@@ -589,6 +590,13 @@ def render_all_outputs(
     prev_wallpaper_file = render_view.ActiveViewport.WallpaperFilename
     layer_visibility_snapshot = _snapshot_layer_visibility()
     render_view.Redraw()
+    log_timings = bool(log_timings)
+    total_start = perf_counter()
+    step_timings = {}
+
+    def _record_timing(name, start_time):
+        if log_timings:
+            step_timings[name] = perf_counter() - start_time
 
     try:
         capture_width, capture_height = _resolve_capture_size(
@@ -624,21 +632,26 @@ def render_all_outputs(
                 )
 
         if any(channel_flags[name] for name in ("color", "depth", "normal", "depth_buffer", "normal_buffer")):
+            step_start = perf_counter()
             _apply_scene_layer_visibility(
                 scene_only_layers=scene_only_layers,
                 scene_hide_layers=scene_hide_layers,
             )
             render_view.Redraw()
+            _record_timing("scene_visibility", step_start)
 
         if channel_flags["color"]:
+            step_start = perf_counter()
             render_image(
                 rhino_view=render_view,
                 out_path=outputs["color"],
                 width=capture_width,
                 height=capture_height,
             )
+            _record_timing("color", step_start)
 
         if channel_flags["depth_buffer"] or channel_flags["normal_buffer"]:
+            step_start = perf_counter()
             _capture_selected_render_channels(
                 render_view,
                 depth_path=outputs.get("depth_buffer"),
@@ -646,16 +659,20 @@ def render_all_outputs(
                 width=capture_width,
                 height=capture_height,
             )
+            _record_timing("buffer_channels", step_start)
 
         if channel_flags["depth"]:
+            step_start = perf_counter()
             render_depth(
                 rhino_view=render_view,
                 out_path=outputs["depth"],
                 width=capture_width,
                 height=capture_height,
             )
+            _record_timing("depth", step_start)
 
         if channel_flags["normal"]:
+            step_start = perf_counter()
             render_view.ActiveViewport.SetWallpaper("", False)
             render_normal(
                 rhino_view=render_view,
@@ -663,19 +680,32 @@ def render_all_outputs(
                 width=capture_width,
                 height=capture_height,
             )
+            _record_timing("normal", step_start)
 
         if channel_flags["mask"]:
+            step_start = perf_counter()
             _restore_layer_visibility(layer_visibility_snapshot)
             _apply_mask_layer_visibility(
                 mask_only_layers=mask_only_layers,
                 mask_hide_layers=mask_hide_layers,
             )
             render_view.Redraw()
+            _record_timing("mask_visibility", step_start)
+            step_start = perf_counter()
             render_mask(
                 rhino_view=render_view,
                 out_path=outputs["mask"],
                 width=capture_width,
                 height=capture_height,
+            )
+            _record_timing("mask", step_start)
+
+        if log_timings:
+            timing_parts = [f"{name}={duration:.2f}s" for name, duration in step_timings.items()]
+            total_duration = perf_counter() - total_start
+            print(
+                f"[timing] frame={basename} total={total_duration:.2f}s "
+                + " ".join(timing_parts)
             )
 
         return outputs

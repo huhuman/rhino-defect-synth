@@ -67,6 +67,7 @@ rendering:
   width: 1920
   height: 1080
   match_viewport_aspect: true
+  log_output_timings: false
   output_dir: "C:/path/to/your/component_rendered"
   lighting:
     sun:

@@ -394,6 +394,7 @@ def _build_render_context(params):
         "mask_only_layers": mask_only_layers,
         "mask_hide_layers": mask_cfg.get("hide_layers"),
         "channels": dict(channel_cfg) if isinstance(channel_cfg, dict) else {},
+        "log_output_timings": bool(params.get("log_output_timings", False)),
         "capture_gc_every_frames": _to_non_negative_int(
             params.get("capture_gc_every_frames", 0)
         ),
@@ -660,6 +661,7 @@ def _capture_pose(idx, pose, context):
         mask_only_layers=context.get("mask_only_layers"),
         mask_hide_layers=context.get("mask_hide_layers"),
         channels=context.get("channels"),
+        log_timings=bool(context.get("log_output_timings", False)),
     )
 
 

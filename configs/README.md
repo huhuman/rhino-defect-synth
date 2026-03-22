@@ -194,6 +194,7 @@ Batch runtime flow in `main_cube_batch.py`:
 | `width`, `height` | `int | null` | Explicit capture resolution. | viewport size | If unset, viewport dimensions are used. |
 | `max_length` | `int | null` | Longest-side output constraint (preserve aspect). | none | Used when width/height are unset. |
 | `match_viewport_aspect` | `bool` | Auto-adjust output size when viewport/output aspect ratios differ. | `true` | Recommended to avoid depth/normal buffer FOV mismatch. |
+| `log_output_timings` | `bool` | Logs per-frame timing breakdown for output stages. | `false` | Useful for diagnosing whether slowdown is in color, buffer channels, depth/normal, or mask. |
 | `background_wallpaper_dir` | `string | null` | Random wallpaper selection before rendering. | none | Optional. |
 | `output_basename_pattern` | `string | null` | Python format pattern for frame naming. | none | Supports `{output_idx}`, `{model_iter}`, `{render_iter}`. |
 | `output_basename_prefix` | `string | null` | Prefix naming fallback. | none | Used when pattern is unset. |

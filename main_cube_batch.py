@@ -525,11 +525,13 @@ def _log_runtime_snapshot(label, enabled=False):
 def _clear_undo_records():
     clear_fn = getattr(sc.doc, "ClearUndoRecords", None)
     if callable(clear_fn):
-        try:
-            clear_fn()
-            return True
-        except Exception:
-            return False
+        for args in ((True,), tuple()):
+            try:
+                clear_fn(*args)
+                return True
+            except Exception:
+                continue
+        return False
     return False
 
 
