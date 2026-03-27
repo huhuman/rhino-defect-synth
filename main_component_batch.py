@@ -834,6 +834,7 @@ def run(
 
     try:
         log_file, stdout_backup, stderr_backup = _start_batch_logging(batch_log_path)
+        print(f"Loaded config: {config_name}")
         print(f"Batch output directory: {batch_output_dir}")
         print(f"Batch log path: {batch_log_path}")
         print(f"Batch state path: {batch_state_path}")

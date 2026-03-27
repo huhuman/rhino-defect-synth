@@ -68,7 +68,7 @@ def _clear_all_layers(base_layer_name="__reset__"):
             continue
 
         deleted = False
-        for delete_fn in (rs.DeleteLayer, rs.PurgeLayer):
+        for delete_fn in (rs.PurgeLayer, rs.DeleteLayer):
             try:
                 deleted = bool(delete_fn(layer_name))
             except Exception:
@@ -77,7 +77,7 @@ def _clear_all_layers(base_layer_name="__reset__"):
                 break
 
     if base_layer_name != "Default" and rs.IsLayer("Default"):
-        for delete_fn in (rs.DeleteLayer, rs.PurgeLayer):
+        for delete_fn in (rs.PurgeLayer, rs.DeleteLayer):
             try:
                 if bool(delete_fn("Default")):
                     break
@@ -299,25 +299,25 @@ if __name__ == "__main__":
 
     # run(
     #     config_name="cube.local.yaml",
-    #     stages=["preparation", "rendering"],
+    #     stages=["reset", "load_config", "preparation", "view_setup", "modeling"],
     #     skip=[],
     #     start_face_index=0,
     #     show_cameras=False,
     #     print_timings=True,
     # )
 
-    # run(
-    #     config_name="component.local.yaml",
-    #     stages=["reset", "load_config", "preparation", "view_setup", "modeling"],
-    #     skip=[],
-    #     show_cameras=False,
-    #     print_timings=True,
-    # )
-
     run(
         config_name="component.local.yaml",
-        stages=["rendering"],
+        stages=["reset", "load_config", "preparation", "view_setup", "modeling"],
         skip=[],
         show_cameras=False,
         print_timings=True,
     )
+
+    # run(
+    #     config_name="component.local.yaml",
+    #     stages=["rendering"],
+    #     skip=[],
+    #     show_cameras=False,
+    #     print_timings=True,
+    # )
