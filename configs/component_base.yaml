@@ -327,8 +327,8 @@ preparation:
     "component::bearing": AliceBlue
     "component::pier": Brown
     "debug::normal": Cyan
-    "debug::normal::component": Cyan
-    "debug::normal::component::slab": Cyan
+    "debug::normal::component": Turquoise
+    "debug::normal::component::slab": Teal
     "debug::normal::component::parapet": DeepSkyBlue
     "debug::normal::component::beam": SpringGreen
     "debug::normal::component::bearing": YellowGreen
@@ -338,16 +338,16 @@ preparation:
     "defect::crack::CS2": Yellow
     "defect::crack::CS3": OrangeRed
     "defect::efflore::CS2": LightSkyBlue
-    "defect::efflore::CS3::inner": LightSkyBlue
-    "defect::efflore::CS3::outer": DeepSkyBlue
+    "defect::efflore::CS3::inner": LightBlue
+    "defect::efflore::CS3::outer": DodgerBlue
     "defect::spalling::CS2": Gold
     "defect::spalling::CS3": DarkOrange
-    "defect::exposed_rebar::CS2::spalling": Gold
+    "defect::exposed_rebar::CS2::spalling": Goldenrod
     "defect::exposed_rebar::CS2::rebar": Silver
-    "defect::exposed_rebar::CS3::spalling": DarkOrange
+    "defect::exposed_rebar::CS3::spalling": Chocolate
     "defect::exposed_rebar::CS3::rebar": Gray
     "debug::reference_points": LawnGreen
-    "debug::seed": White
-    "debug::seed::crack": Red
-    "debug::seed::efflore": DeepSkyBlue
-    "debug::seed::spalling": Gold
+    "debug::seed": Ivory
+    "debug::seed::crack": Crimson
+    "debug::seed::efflore": RoyalBlue
+    "debug::seed::spalling": Khaki
