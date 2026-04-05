@@ -162,6 +162,25 @@ def _save_bitmap(bitmap, out_path):
                 pass
 
 
+def _capture_bitmap_reuse(rhino_view, capture_obj, width, height):
+    """Capture using a pre-configured ViewCapture object (avoids re-allocation)."""
+    capture_obj.Width = int(width)
+    capture_obj.Height = int(height)
+    bitmap = capture_obj.CaptureToBitmap(rhino_view)
+    if bitmap is None:
+        raise RuntimeError("View capture failed to produce a bitmap.")
+    return bitmap
+
+
+def _save_bitmap_to(bitmap, out_path):
+    """Save bitmap to PNG. Caller is responsible for disposal."""
+    if not out_path:
+        raise ValueError("An output path is required to save a capture.")
+    _ensure_out_dir(out_path)
+    bitmap.Save(out_path, Imaging.ImageFormat.Png)
+    return out_path
+
+
 def _write_pfm(out_path, width, height, channel_count, data):
     """
     Minimal PFM (Portable Float Map) writer for float32 channel data.
@@ -542,6 +561,12 @@ def render_all_outputs(
 ):
     """
     Convenience helper to render color, depth, normal, and mask in one call.
+
+    Optimized to minimize Rhino view redraws and reuse ViewCapture objects.
+    Previous implementation called individual render functions that each
+    saved/restored display modes and triggered separate redraws (~11 per frame).
+    This version inlines the capture logic to reduce redraws to ~5 per frame
+    and reuses a single ViewCapture object for all bitmap captures.
     """
     if not out_dir:
         raise ValueError("out_dir is required to save renders.")
@@ -562,15 +587,15 @@ def render_all_outputs(
         _ensure_out_dir(path)
 
     render_view = sc.doc.Views.ActiveView if view is None else sc.doc.Views.Find(view, False)
-    mode = Rhino.Display.DisplayModeDescription.FindByName("Rendered")
-    render_view.ActiveViewport.DisplayMode = mode
+    rendered_mode = Rhino.Display.DisplayModeDescription.FindByName("Rendered")
+    render_view.ActiveViewport.DisplayMode = rendered_mode
 
     prev_wallpaper_file = render_view.ActiveViewport.WallpaperFilename
     layer_visibility_snapshot = _snapshot_layer_visibility()
-    render_view.Redraw()
     log_timings = bool(log_timings)
     total_start = perf_counter()
     step_timings = {}
+
     global _TIMING_LOG_STATUS_EMITTED
     if not _TIMING_LOG_STATUS_EMITTED:
         enabled_channels = [
@@ -587,7 +612,10 @@ def render_all_outputs(
         if log_timings:
             step_timings[name] = perf_counter() - start_time
 
+    capture_obj = None
+
     try:
+        # --- Resolve capture dimensions once ---
         capture_width, capture_height = _resolve_capture_size(
             rhino_view=render_view,
             width=width,
@@ -610,35 +638,52 @@ def render_all_outputs(
                 if changed:
                     print(
                         "Info: auto-adjusted output size to match viewport aspect "
-                        f"(view={view_size.Width}x{view_size.Height}, requested={capture_width}x{capture_height}, "
+                        f"(view={view_size.Width}x{view_size.Height}, "
+                        f"requested={capture_width}x{capture_height}, "
                         f"adjusted={adjusted_w}x{adjusted_h})."
                     )
                     capture_width, capture_height = adjusted_w, adjusted_h
             else:
                 print(
                     "Warning: viewport/output aspect mismatch may cause buffer FOV mismatch "
-                    f"(view={view_size.Width}x{view_size.Height}, out={capture_width}x{capture_height})."
+                    f"(view={view_size.Width}x{view_size.Height}, "
+                    f"out={capture_width}x{capture_height})."
                 )
 
-        if any(channel_flags[name] for name in ("color", "depth", "normal", "depth_buffer", "normal_buffer")):
+        # --- Scene channels: color, depth, normal, buffers ---
+        need_scene = any(
+            channel_flags[n]
+            for n in ("color", "depth", "normal", "depth_buffer", "normal_buffer")
+        )
+        if need_scene:
             step_start = perf_counter()
             _apply_scene_layer_visibility(
                 scene_only_layers=scene_only_layers,
                 scene_hide_layers=scene_hide_layers,
             )
-            render_view.Redraw()
+            render_view.ActiveViewport.DisplayMode = rendered_mode
+            render_view.Redraw()  # REDRAW 1: scene visibility + rendered mode
+            _rhino_idle_wait(wait_ms=5)
             _record_timing("scene_visibility", step_start)
 
+        # Create one ViewCapture for all bitmap captures in this frame.
+        capture_obj = Rhino.Display.ViewCapture()
+        _try_set_attr(capture_obj, "ScaleScreenItems", False)
+        _try_set_attr(capture_obj, "DrawAxes", False)
+        _try_set_attr(capture_obj, "DrawGrid", False)
+        _try_set_attr(capture_obj, "DrawGridAxes", False)
+
+        # --- Color (already in Rendered mode after REDRAW 1) ---
         if channel_flags["color"]:
             step_start = perf_counter()
-            render_image(
-                rhino_view=render_view,
-                out_path=outputs["color"],
-                width=capture_width,
-                height=capture_height,
+            bitmap = _capture_bitmap_reuse(
+                render_view, capture_obj, capture_width, capture_height
             )
+            _save_bitmap_to(bitmap, outputs["color"])
+            _dispose_if_possible(bitmap)
             _record_timing("color", step_start)
 
+        # --- Buffer channels (plugin command, does its own internal capture) ---
         if channel_flags["depth_buffer"] or channel_flags["normal_buffer"]:
             step_start = perf_counter()
             _capture_selected_render_channels(
@@ -650,27 +695,40 @@ def render_all_outputs(
             )
             _record_timing("buffer_channels", step_start)
 
+        # --- Depth (toggle ShowZBuffer, capture, toggle back) ---
         if channel_flags["depth"]:
             step_start = perf_counter()
-            render_depth(
-                rhino_view=render_view,
-                out_path=outputs["depth"],
-                width=capture_width,
-                height=capture_height,
+            rs.Command("-ShowZBuffer _Enter", echo=False)
+            render_view.Redraw()  # REDRAW 2: ZBuffer mode
+            _rhino_idle_wait(wait_ms=5)
+            bitmap = _capture_bitmap_reuse(
+                render_view, capture_obj, capture_width, capture_height
             )
+            _save_bitmap_to(bitmap, outputs["depth"])
+            _dispose_if_possible(bitmap)
+            rs.Command("-ShowZBuffer _Enter", echo=False)
             _record_timing("depth", step_start)
 
+        # --- Normal (toggle TestShowNormalMap, capture, toggle back) ---
         if channel_flags["normal"]:
             step_start = perf_counter()
             render_view.ActiveViewport.SetWallpaper("", False)
-            render_normal(
-                rhino_view=render_view,
-                out_path=outputs["normal"],
-                width=capture_width,
-                height=capture_height,
+            rs.Command("-TestShowNormalMap _Enter", echo=False)
+            render_view.Redraw()  # REDRAW 3: normal map mode
+            _rhino_idle_wait(wait_ms=5)
+            bitmap = _capture_bitmap_reuse(
+                render_view, capture_obj, capture_width, capture_height
             )
+            _save_bitmap_to(bitmap, outputs["normal"])
+            _dispose_if_possible(bitmap)
+            rs.Command("-TestShowNormalMap _Enter", echo=False)
             _record_timing("normal", step_start)
 
+        # --- Restore to rendered mode after depth/normal toggles ---
+        if channel_flags["depth"] or channel_flags["normal"]:
+            render_view.ActiveViewport.DisplayMode = rendered_mode
+
+        # --- Mask (separate layer visibility) ---
         if channel_flags["mask"]:
             step_start = perf_counter()
             _restore_layer_visibility(layer_visibility_snapshot)
@@ -678,7 +736,7 @@ def render_all_outputs(
                 mask_only_layers=mask_only_layers,
                 mask_hide_layers=mask_hide_layers,
             )
-            render_view.Redraw()
+            render_view.Redraw()  # REDRAW 4: mask visibility
             _record_timing("mask_visibility", step_start)
             step_start = perf_counter()
             render_mask(
@@ -690,7 +748,9 @@ def render_all_outputs(
             _record_timing("mask", step_start)
 
         if log_timings:
-            timing_parts = [f"{name}={duration:.2f}s" for name, duration in step_timings.items()]
+            timing_parts = [
+                f"{name}={duration:.2f}s" for name, duration in step_timings.items()
+            ]
             total_duration = perf_counter() - total_start
             print(
                 f"[timing] frame={basename} total={total_duration:.2f}s "
@@ -699,12 +759,13 @@ def render_all_outputs(
 
         return outputs
     finally:
+        _dispose_if_possible(capture_obj)
         _restore_layer_visibility(layer_visibility_snapshot)
         try:
             render_view.ActiveViewport.SetWallpaper(prev_wallpaper_file, False)
         except Exception:
             pass
         try:
-            render_view.Redraw()
+            render_view.Redraw()  # REDRAW 5: final restore
         except Exception:
             pass
