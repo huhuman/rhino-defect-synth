@@ -1,6 +1,5 @@
 """Render stage helpers used by the pipeline orchestrator."""
 
-import gc
 import math
 import os
 import random
@@ -9,6 +8,7 @@ import Rhino
 import rhinoscriptsyntax as rs
 import scriptcontext as sc
 
+from utils_loc.batch_utils import to_non_negative_int, run_gc
 from utils_loc.camera import (
     generate_box_camera_spherical,
     generate_box_camera_grid,
@@ -32,33 +32,9 @@ _COMPONENT_RENDER_LAYER_PREFIXES = ("component", "defect")
 _HELPER_LIGHT_PREFIXES = ("face_light", "defect_light")
 
 
-def _to_non_negative_int(value, default=0):
-    try:
-        parsed = int(value)
-    except Exception:
-        parsed = int(default)
-    return max(0, parsed)
-
-
-def _run_capture_gc():
-    try:
-        gc.collect()
-    except Exception:
-        pass
-    try:
-        import System
-
-        System.GC.Collect()
-        wait_fn = getattr(System.GC, "WaitForPendingFinalizers", None)
-        if callable(wait_fn):
-            wait_fn()
-    except Exception:
-        pass
-
-
 def _stabilize_after_capture_frame(frame_idx_1based, context):
-    wait_after_frame_ms = _to_non_negative_int(context.get("capture_wait_after_frame_ms", 0))
-    gc_every_frames = _to_non_negative_int(context.get("capture_gc_every_frames", 0))
+    wait_after_frame_ms = to_non_negative_int(context.get("capture_wait_after_frame_ms", 0))
+    gc_every_frames = to_non_negative_int(context.get("capture_gc_every_frames", 0))
 
     try:
         Rhino.RhinoApp.Wait()
@@ -67,7 +43,7 @@ def _stabilize_after_capture_frame(frame_idx_1based, context):
     if wait_after_frame_ms > 0:
         rs.Sleep(wait_after_frame_ms)
     if gc_every_frames > 0 and int(frame_idx_1based) % gc_every_frames == 0:
-        _run_capture_gc()
+        run_gc()
 
 
 def _setup_render_environment(params):
@@ -395,10 +371,10 @@ def _build_render_context(params):
         "mask_hide_layers": mask_cfg.get("hide_layers"),
         "channels": dict(channel_cfg) if isinstance(channel_cfg, dict) else {},
         "log_output_timings": bool(params.get("log_output_timings", False)),
-        "capture_gc_every_frames": _to_non_negative_int(
+        "capture_gc_every_frames": to_non_negative_int(
             params.get("capture_gc_every_frames", 0)
         ),
-        "capture_wait_after_frame_ms": _to_non_negative_int(
+        "capture_wait_after_frame_ms": to_non_negative_int(
             params.get("capture_wait_after_frame_ms", 0)
         ),
     }
