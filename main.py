@@ -6,6 +6,7 @@ import scriptcontext as sc
 import rhinoscriptsyntax as rs
 
 from utils_loc.config import load_config
+from utils_loc.layer_utils import normalize_layer_name_set, layer_matches
 from utils_loc.logging_utils import install_timestamped_print
 from utils_loc.materials import clear_imported_materials_from_doc
 from utils_loc.pipeline import create_model, prepare, run_render
@@ -85,32 +86,6 @@ def _clear_all_layers(base_layer_name="__reset__"):
                 continue
 
 
-def _normalize_layer_name_set(layer_names):
-    if layer_names is None:
-        return None
-    if isinstance(layer_names, (str, bytes)):
-        return {str(layer_names)}
-    return {str(name) for name in layer_names if str(name).strip()}
-
-
-def _layer_matches(layer, names):
-    if not names:
-        return False
-    layer_name = getattr(layer, "Name", None)
-    full_path = getattr(layer, "FullPath", None)
-    if layer_name in names or full_path in names:
-        return True
-    if full_path:
-        for name in names:
-            if full_path.startswith(f"{name}::"):
-                return True
-    if full_path:
-        tail = full_path.split("::")[-1]
-        if tail in names:
-            return True
-    return False
-
-
 def setup_render_view(cfg=None):
     """Set active view mode and configure layer visibility from config."""
     render_view = sc.doc.Views.ActiveView
@@ -120,8 +95,8 @@ def setup_render_view(cfg=None):
 
     cfg = cfg or {}
     view_setup_cfg = cfg.get("view_setup") or {}
-    only_set = _normalize_layer_name_set(view_setup_cfg.get("only_layers"))
-    hide_set = _normalize_layer_name_set(view_setup_cfg.get("hide_layers"))
+    only_set = normalize_layer_name_set(view_setup_cfg.get("only_layers"))
+    hide_set = normalize_layer_name_set(view_setup_cfg.get("hide_layers"))
     if not only_set and not hide_set:
         return
 
@@ -129,10 +104,10 @@ def setup_render_view(cfg=None):
         if not layer.Name:
             continue
         if only_set:
-            layer.IsVisible = _layer_matches(layer, only_set)
+            layer.IsVisible = layer_matches(layer, only_set)
         else:
             layer.IsVisible = True
-        if hide_set and _layer_matches(layer, hide_set):
+        if hide_set and layer_matches(layer, hide_set):
             layer.IsVisible = False
 
 

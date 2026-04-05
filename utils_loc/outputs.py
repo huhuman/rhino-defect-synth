@@ -10,6 +10,8 @@ import System.Drawing as Drawing
 import System.Drawing.Imaging as Imaging
 import System.IO as IO
 
+from utils_loc.layer_utils import normalize_layer_name_set, layer_matches
+
 _TIMING_LOG_STATUS_EMITTED = False
 
 
@@ -438,35 +440,9 @@ def render_mask(rhino_view, out_path=None, width=None, height=None, max_length=N
         rhino_view.Redraw()
 
 
-def _normalize_layer_name_set(layer_names):
-    if layer_names is None:
-        return None
-    if isinstance(layer_names, (str, bytes)):
-        return {str(layer_names)}
-    return {str(name) for name in layer_names if str(name).strip()}
-
-
-def _layer_matches(layer, names):
-    if not names:
-        return False
-    layer_name = getattr(layer, "Name", None)
-    full_path = getattr(layer, "FullPath", None)
-    if layer_name in names or full_path in names:
-        return True
-    if full_path:
-        for name in names:
-            if full_path.startswith(f"{name}::"):
-                return True
-    if full_path:
-        tail = full_path.split("::")[-1]
-        if tail in names:
-            return True
-    return False
-
-
 def _apply_scene_layer_visibility(scene_only_layers=None, scene_hide_layers=None):
-    only_set = _normalize_layer_name_set(scene_only_layers)
-    hide_set = _normalize_layer_name_set(scene_hide_layers)
+    only_set = normalize_layer_name_set(scene_only_layers)
+    hide_set = normalize_layer_name_set(scene_hide_layers)
     if not only_set and not hide_set:
         return
 
@@ -474,16 +450,16 @@ def _apply_scene_layer_visibility(scene_only_layers=None, scene_hide_layers=None
         if not layer.Name:
             continue
         if only_set:
-            layer.IsVisible = _layer_matches(layer, only_set)
+            layer.IsVisible = layer_matches(layer, only_set)
         else:
             layer.IsVisible = True
-        if hide_set and _layer_matches(layer, hide_set):
+        if hide_set and layer_matches(layer, hide_set):
             layer.IsVisible = False
 
 
 def _apply_mask_layer_visibility(mask_only_layers=None, mask_hide_layers=None):
-    only_set = _normalize_layer_name_set(mask_only_layers)
-    hide_set = _normalize_layer_name_set(mask_hide_layers)
+    only_set = normalize_layer_name_set(mask_only_layers)
+    hide_set = normalize_layer_name_set(mask_hide_layers)
     if not only_set and not hide_set:
         return
 
@@ -491,10 +467,10 @@ def _apply_mask_layer_visibility(mask_only_layers=None, mask_hide_layers=None):
         if not layer.Name:
             continue
         if only_set:
-            layer.IsVisible = _layer_matches(layer, only_set)
+            layer.IsVisible = layer_matches(layer, only_set)
         else:
             layer.IsVisible = True
-        if hide_set and _layer_matches(layer, hide_set):
+        if hide_set and layer_matches(layer, hide_set):
             layer.IsVisible = False
 
 
