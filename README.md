@@ -11,7 +11,7 @@
 This repository provides a parametric 3D defect modeling and multi-pass rendering pipeline for generating synthetic concrete inspection data. Defect shapes are derived from real inspection images and transformed into controllable 3D models with configurable scale, orientation, depth, and placement. The pipeline renders aligned RGB, depth, surface-normal, and mask outputs from Rhino, supporting both close-range crack inspection and structural-scale bridge defect scenarios.
 
 <p align="center">
-  <img src="docs/static/images/overview.jpg" alt="Pipeline Overview" width="800"/>
+  <img src="docs/static/images/overview.png" alt="Pipeline Overview" width="800"/>
 </p>
 
 ## Modeling Strategies
