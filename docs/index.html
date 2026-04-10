@@ -92,8 +92,7 @@
   <div class="container is-max-desktop">
     <div class="hero-body">
       <div class="teaser-container has-text-centered">
-        <!-- Replace with your pipeline overview figure or GIF -->
-        <img src="static/images/placeholder.svg" alt="Pipeline overview: 2D defect shapes to 3D parametric models to multi-pass rendered outputs">
+        <img src="static/images/overview.jpg" alt="Pipeline overview: 2D defect shapes to 3D parametric models to multi-pass rendered outputs">
         <p class="teaser-caption">
           Overview of the geometry-informed synthetic data generation pipeline. Real 2D defect shapes are transformed into parametric 3D models and rendered with domain randomization to produce aligned RGB, depth, normal, and mask outputs.
         </p>
@@ -135,8 +134,7 @@
           For close-range crack inspection, a six-surface cube serves as the carrier. Crack masks from a curated real-image database are placed on cube faces with parameterized scale, orientation, and position. Pixel-to-metric conversion combined with FHWA thresholds assigns crack severity (insignificant, moderate, wide), and crack geometry is modeled with configurable width, erosion depth, and overall depth for 3D realism.
         </p>
         <figure class="method-figure">
-          <!-- Replace: GIF of cube modeling process in Rhino -->
-          <img src="static/images/placeholder.svg" alt="Cube-based crack modeling process">
+          <img src="static/images/method_cube.jpg" alt="Cube-based crack modeling process">
           <figcaption>Cube-based crack modeling: crack masks placed on cube surfaces, converted to 3D geometry with severity assignment.</figcaption>
         </figure>
 
@@ -145,8 +143,7 @@
           For structural-scale bridge inspection, parameterized bridge elements (deck, pier, girder, parapet, bearing) are generated from road centerlines and structural guidelines. Defect masks for crack, spalling, corrosion, and efflorescence are instantiated on component surfaces. Category-specific 3D operations model surface erosion (spalling), exposed reinforcement (corrosion), and extruded deposits (efflorescence), integrating defect and structural geometry in a unified process.
         </p>
         <figure class="method-figure">
-          <!-- Replace: GIF of component modeling + domain randomization -->
-          <img src="static/images/placeholder.svg" alt="Component-based bridge defect modeling">
+          <img src="static/images/method_component.jpg" alt="Component-based bridge defect modeling">
           <figcaption>Component-based bridge modeling with defect placement and domain randomization for rendering.</figcaption>
         </figure>
 
@@ -191,7 +188,7 @@
               <td></td>
               <td class="checkmark">&#10003;</td>
               <td>Baseline cube-based crack dataset (Unreal Engine)</td>
-              <td><a href="#" class="btn-download">Download</a></td>
+              <td><a href="https://drive.google.com/file/d/1GFyQyNLw3Y7Qob-9uSbFTI0EfKJnBjpp/view?usp=sharing" target="_blank" class="btn-download">Download</a></td>
             </tr>
             <tr>
               <td class="dataset-name">SynthCrack-72k</td>
@@ -201,7 +198,7 @@
               <td></td>
               <td class="checkmark">&#10003;</td>
               <td>Extended crack shapes + updated geometric parameterization</td>
-              <td><a href="#" class="btn-download">Download</a></td>
+              <td><a href="https://drive.google.com/file/d/1Rcjdk8jVy-8KQ1VIYXatUmWe_ZfOTx_3/view?usp=sharing" target="_blank" class="btn-download">Download</a></td>
             </tr>
             <tr>
               <td class="dataset-name">SynthCrack-ONE</td>
@@ -211,7 +208,7 @@
               <td class="checkmark">&#10003;</td>
               <td class="checkmark">&#10003;</td>
               <td>Rhino-generated with refined crack-shape library</td>
-              <td><a href="#" class="btn-download">Download</a></td>
+              <td><a href="https://drive.google.com/file/d/1_HUhw3TwORQEO-hbxrYxrBlWnlyGBpYs/view?usp=sharing" target="_blank" class="btn-download">Download</a></td>
             </tr>
             <tr>
               <td class="dataset-name">SynthDefect-Bridge</td>
@@ -221,7 +218,7 @@
               <td class="checkmark">&#10003;</td>
               <td class="checkmark">&#10003;</td>
               <td>Bridge-scale multi-defect: crack, spalling, corrosion, efflorescence</td>
-              <td><a href="#" class="btn-download">Download</a></td>
+              <td><a href="https://drive.google.com/file/d/1umZxzBGUBRo36vlRug52WZgzZxE9gegZ/view?usp=sharing" target="_blank" class="btn-download">Download</a></td>
             </tr>
             <tr>
               <td class="dataset-name">RealDefect-Bridge</td>
@@ -231,7 +228,7 @@
               <td></td>
               <td class="checkmark">&#10003;</td>
               <td>Real bridge inspection images for evaluation</td>
-              <td><a href="#" class="btn-download">Download</a></td>
+              <td><span class="btn-download" style="background: var(--text-light); cursor: default;">Coming soon</span></td>
             </tr>
           </tbody>
         </table>
@@ -256,61 +253,50 @@
         <p style="color: var(--text-secondary); margin-bottom: 1rem;">
           Each scene produces aligned color, depth, surface normal, and defect mask outputs from the same camera pose.
         </p>
-        <!-- Replace: 4 images side by side (color, depth, normal, mask) -->
         <div class="gallery-row">
           <div style="flex:1; text-align:center;">
-            <img src="static/images/placeholder.svg" alt="Color output">
+            <img src="static/gifs/color.gif" alt="Color output">
             <p class="gallery-label">Color</p>
           </div>
           <div style="flex:1; text-align:center;">
-            <img src="static/images/placeholder.svg" alt="Depth output">
+            <img src="static/gifs/depth.gif" alt="Depth output">
             <p class="gallery-label">Depth</p>
           </div>
           <div style="flex:1; text-align:center;">
-            <img src="static/images/placeholder.svg" alt="Normal output">
+            <img src="static/gifs/normal.gif" alt="Normal output">
             <p class="gallery-label">Normal</p>
           </div>
           <div style="flex:1; text-align:center;">
-            <img src="static/images/placeholder.svg" alt="Mask output">
+            <img src="static/gifs/mask.gif" alt="Mask output">
             <p class="gallery-label">Mask</p>
           </div>
         </div>
 
         <h3 class="title is-4" style="margin-top: 2.5rem;">Realism Enhancement</h3>
         <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-          Unpaired image-to-image translation reduces the appearance gap between synthetic and real inspection imagery.
+          Unpaired image-to-image translation (CycleGAN, CycleGAN-Turbo, CUT) reduces the appearance gap between synthetic and real inspection imagery.
         </p>
-        <!-- Replace: 3 images (synthetic, CycleGAN-enhanced, real reference) -->
-        <div class="gallery-row">
-          <div style="flex:1; text-align:center;">
-            <img src="static/images/placeholder.svg" alt="Original synthetic">
-            <p class="gallery-label">Synthetic</p>
-          </div>
-          <div style="flex:1; text-align:center;">
-            <img src="static/images/placeholder.svg" alt="CycleGAN enhanced">
-            <p class="gallery-label">CycleGAN Enhanced</p>
-          </div>
-          <div style="flex:1; text-align:center;">
-            <img src="static/images/placeholder.svg" alt="Real reference">
-            <p class="gallery-label">Real</p>
-          </div>
-        </div>
+        <figure class="method-figure">
+          <img src="static/images/results_realism_crack.jpg" alt="Qualitative comparison of realism enhancement methods for close-range crack imagery">
+          <figcaption>Realism enhancement comparison for close-range crack imagery.</figcaption>
+        </figure>
+        <figure class="method-figure">
+          <img src="static/images/results_realism_bridge.jpg" alt="Qualitative comparison of realism enhancement methods for structural-scale defect scenes">
+          <figcaption>Realism enhancement comparison for structural-scale bridge defect scenes.</figcaption>
+        </figure>
 
         <h3 class="title is-4" style="margin-top: 2.5rem;">Defect Predictions on Real Images</h3>
         <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-          Models trained on synthetic data transfer to real inspection imagery for crack segmentation and multi-defect recognition.
+          Models trained on synthetic data transfer to real inspection imagery for crack severity prediction and multi-defect semantic segmentation.
         </p>
-        <!-- Replace: prediction examples (input image, prediction overlay) -->
-        <div class="gallery-row">
-          <div style="flex:1; text-align:center;">
-            <img src="static/images/placeholder.svg" alt="Real image input">
-            <p class="gallery-label">Input</p>
-          </div>
-          <div style="flex:1; text-align:center;">
-            <img src="static/images/placeholder.svg" alt="Model prediction">
-            <p class="gallery-label">Prediction</p>
-          </div>
-        </div>
+        <figure class="method-figure">
+          <img src="static/images/results_preds_crack.png" alt="Crack severity predictions on real images">
+          <figcaption>Crack segmentation with class-conditioned severity prediction on real images.</figcaption>
+        </figure>
+        <figure class="method-figure">
+          <img src="static/images/results_preds_bridge.png" alt="Bridge defect semantic segmentation predictions on real images">
+          <figcaption>Multi-defect semantic segmentation on real bridge inspection images.</figcaption>
+        </figure>
 
       </div>
     </div>
@@ -330,8 +316,9 @@
     <pre id="bibtex-code"><code>@article{hsu2026defectsynth,
   title={Beyond Cracks: Synthetic Image and Geometry Generation for Computer Vision Detection and Severity Assessment of Diverse Concrete Surface Defects},
   author={Hsu, Shun-Hsiang and Golparvar-Fard, Mani},
-  journal={Preprint},
+  journal={Automation in Construction},
   year={2026},
+  note={Preprint},
   url={https://huhuman.github.io/rhino-defect-synth/}
 }</code></pre>
   </div>

@@ -11,7 +11,7 @@
 This repository provides a parametric 3D defect modeling and multi-pass rendering pipeline for generating synthetic concrete inspection data. Defect shapes are derived from real inspection images and transformed into controllable 3D models with configurable scale, orientation, depth, and placement. The pipeline renders aligned RGB, depth, surface-normal, and mask outputs from Rhino, supporting both close-range crack inspection and structural-scale bridge defect scenarios.
 
 <p align="center">
-  <img src="docs/static/images/placeholder.svg" alt="Pipeline Overview" width="800"/>
+  <img src="docs/static/images/overview.jpg" alt="Pipeline Overview" width="800"/>
 </p>
 
 ## Modeling Strategies
@@ -28,11 +28,11 @@ Parameterized bridge elements (deck, pier, girder, parapet, bearing) are generat
 
 | Dataset | Images | RGB | Depth | Normal | Mask | Description |
 |---------|-------:|:---:|:-----:|:------:|:----:|-------------|
-| [SynthCrack-42k](#) | 42,165 | ✓ | | | ✓ | Baseline cube-based crack dataset (Unreal Engine) |
-| [SynthCrack-72k](#) | 71,860 | ✓ | | | ✓ | Extended crack shapes + updated geometric parameterization |
-| [SynthCrack-ONE](#) | 23,485 | ✓ | ✓ | ✓ | ✓ | Rhino-generated with refined crack-shape library |
-| [SynthDefect-Bridge](#) | 2,291 | ✓ | ✓ | ✓ | ✓ | Bridge-scale multi-defect: crack, spalling, corrosion, efflorescence |
-| [RealDefect-Bridge](#) | TBD | ✓ | | | ✓ | Real bridge inspection images for evaluation |
+| [SynthCrack-42k](https://drive.google.com/file/d/1GFyQyNLw3Y7Qob-9uSbFTI0EfKJnBjpp/view?usp=sharing) | 42,165 | ✓ | | | ✓ | Baseline cube-based crack dataset (Unreal Engine) |
+| [SynthCrack-72k](https://drive.google.com/file/d/1Rcjdk8jVy-8KQ1VIYXatUmWe_ZfOTx_3/view?usp=sharing) | 71,860 | ✓ | | | ✓ | Extended crack shapes + updated geometric parameterization |
+| [SynthCrack-ONE](https://drive.google.com/file/d/1_HUhw3TwORQEO-hbxrYxrBlWnlyGBpYs/view?usp=sharing) | 23,485 | ✓ | ✓ | ✓ | ✓ | Rhino-generated with refined crack-shape library |
+| [SynthDefect-Bridge](https://drive.google.com/file/d/1umZxzBGUBRo36vlRug52WZgzZxE9gegZ/view?usp=sharing) | 2,291 | ✓ | ✓ | ✓ | ✓ | Bridge-scale multi-defect: crack, spalling, corrosion, efflorescence |
+| RealDefect-Bridge | TBD | ✓ | | | ✓ | Real bridge inspection images for evaluation (coming soon) |
 
 > SynthCrack-ONE and SynthDefect-Bridge include aligned depth and surface-normal channels.
 
@@ -76,8 +76,9 @@ The feasibility of the generated data was validated through cross-dataset defect
 @article{hsu2026defectsynth,
   title={Beyond Cracks: Synthetic Image and Geometry Generation for Computer Vision Detection and Severity Assessment of Diverse Concrete Surface Defects},
   author={Hsu, Shun-Hsiang and Golparvar-Fard, Mani},
-  journal={Preprint},
-  year={2026}
+  journal={Automation in Construction},
+  year={2026},
+  note={Preprint}
 }
 ```
 
