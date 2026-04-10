@@ -1,6 +1,6 @@
 # rhino-defect-synth
 
-[English](README.md) | [繁體中文](README.zh-TW.md)
+[English](PIPELINE.md) | [繁體中文](PIPELINE.zh-TW.md)
 
 Rhino Python workflow for synthetic defect generation and multi-pass rendering.
 

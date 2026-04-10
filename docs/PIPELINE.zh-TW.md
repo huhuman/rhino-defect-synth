@@ -1,6 +1,6 @@
 # rhino-defect-synth
 
-[English](README.md) | [繁體中文](README.zh-TW.md)
+[English](PIPELINE.md) | [繁體中文](PIPELINE.zh-TW.md)
 
 這是一套在 Rhino Python 中執行的合成損害建模與多通道渲染流程。
 
