@@ -32,7 +32,7 @@ Parameterized bridge elements (deck, pier, girder, parapet, bearing) are generat
 | [SynthCrack-72k](https://drive.google.com/file/d/1Rcjdk8jVy-8KQ1VIYXatUmWe_ZfOTx_3/view?usp=sharing) | 71,860 | ✓ | | | ✓ | Extended crack shapes + updated geometric parameterization |
 | [SynthCrack-ONE](https://drive.google.com/file/d/1_HUhw3TwORQEO-hbxrYxrBlWnlyGBpYs/view?usp=sharing) | 23,485 | ✓ | ✓ | ✓ | ✓ | Rhino-generated with refined crack-shape library |
 | [SynthDefect-Bridge](https://drive.google.com/file/d/1umZxzBGUBRo36vlRug52WZgzZxE9gegZ/view?usp=sharing) | 2,291 | ✓ | ✓ | ✓ | ✓ | Bridge-scale multi-defect: crack, spalling, corrosion, efflorescence |
-| RealDefect-Bridge | TBD | ✓ | | | ✓ | Real bridge inspection images for evaluation (coming soon) |
+| [RealDefect-Bridge](https://drive.google.com/file/d/1yGId3XvFaqOXPe1tdY0n-V00tv_6aGYW/view?usp=sharing) | 2,420 | ✓ | | | ✓ | Real bridge inspection images for evaluation |
 
 > SynthCrack-ONE and SynthDefect-Bridge include aligned depth and surface-normal channels.
 
