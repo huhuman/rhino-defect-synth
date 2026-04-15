@@ -2,7 +2,7 @@
 
 **Geometry-Informed Synthetic Data Generation for Concrete Defect Inspection**
 
-[Paper (coming soon)](#) | [Project Page](https://huhuman.github.io/rhino-defect-synth/) | [Datasets](#datasets)
+[Paper (under review)](#) | [Project Page](https://huhuman.github.io/rhino-defect-synth/) | [Datasets](#datasets)
 
 ---
 
@@ -78,7 +78,7 @@ The feasibility of the generated data was validated through cross-dataset defect
   author={Hsu, Shun-Hsiang and Golparvar-Fard, Mani},
   journal={Automation in Construction},
   year={2026},
-  note={Preprint}
+  note={Under Review}
 }
 ```
 

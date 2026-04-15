@@ -56,7 +56,7 @@
             </span>
           </div>
           <div class="is-size-6 publication-authors" style="margin-top: 0.5rem;">
-            <span class="author-block" style="color: var(--text-light);">Preprint, 2026</span>
+            <span class="author-block" style="color: var(--text-light);">Under Review, Automation in Construction, 2026</span>
           </div>
 
           <div class="column has-text-centered">
@@ -109,7 +109,7 @@
         <h2 class="title is-3 section-title">Abstract</h2>
         <div class="content has-text-justified">
           <p>
-            Computer vision-based concrete condition assessment has largely focused on crack detection, primarily because publicly available datasets rarely capture diverse defect types and detailed severity-relevant annotations. This paper presents a geometry-informed synthetic generation framework for concrete defects, in which defect shapes are derived from real images and transformed into parametric 3D models for scalable, automatically annotated data generation. Two complementary modeling strategies are developed: a cube-based representation for dense crack patterns in close-range inspections, and a component-based representation for spalling, corrosion, and efflorescence under structural-scale bridge inspection settings. We further introduce a geometry-informed learning framework that uses RGB as the deployment modality while leveraging depth and surface-normal cues during training to improve defect segmentation and severity-oriented defect understanding. Cross-dataset experiments show improved generalization, including gains of 0.18 in IoU-crack for crack segmentation and 0.10 in mIoU for multi-defect segmentation.
+            Computer vision-based concrete condition assessment has largely focused on crack detection, as existing datasets lack multi-defect coverage and geometry-grounded severity labels. A two-fold contribution is presented. First, a geometry-informed synthetic image generation pipeline is developed to convert real defect shapes into parametric 3D models, supporting scalable rendering of diverse defects with paired RGB, depth, and surface-normal modalities. The pipeline is extensible and supports future modeling needs beyond the defect classes considered in this work. Second, a large-scale synthetic dataset with automatic annotations is established, jointly encoding semantic defect categories and geometry-informed cues, facilitating severity-aware training and evaluation across cracks, spalling, corrosion, and efflorescence. Building on this data, this paper proposes a geometry-informed teacher--student framework that leverages geometric modalities during training while maintaining RGB-only inference, allowing the application to both close-range crack inspection and structural-scale assessment. To our knowledge, this represents the first scalable framework to unify real-shape-grounded synthetic generation, geometry-informed learning, and severity-oriented concrete condition assessment, while enabling systematic training and benchmarking for non-crack defects.
           </p>
         </div>
       </div>
@@ -318,7 +318,7 @@
   author={Hsu, Shun-Hsiang and Golparvar-Fard, Mani},
   journal={Automation in Construction},
   year={2026},
-  note={Preprint},
+  note={Under Review},
   url={https://huhuman.github.io/rhino-defect-synth/}
 }</code></pre>
   </div>

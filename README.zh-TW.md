@@ -2,7 +2,7 @@
 
 **基於幾何資訊的合成資料生成 — 混凝土損害檢測**
 
-[論文 (即將公開)](#) | [專案頁面](https://huhuman.github.io/rhino-defect-synth/) | [資料集](#資料集)
+[論文 (審查中)](#) | [專案頁面](https://huhuman.github.io/rhino-defect-synth/) | [資料集](#資料集)
 
 ---
 
@@ -78,7 +78,7 @@ main_cube_batch.run(
   author={Hsu, Shun-Hsiang and Golparvar-Fard, Mani},
   journal={Automation in Construction},
   year={2026},
-  note={Preprint}
+  note={Under Review}
 }
 ```
 
