@@ -84,6 +84,7 @@ rendering:
     depth_buffer: true
     normal_buffer: true
     mask: true
+    camera: true
   outputs:
     scene:
       hide_layers:

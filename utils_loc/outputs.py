@@ -1,4 +1,5 @@
 """Rendering outputs for color, depth, normal, and masks."""
+import json
 import os
 import struct
 from time import perf_counter
@@ -535,6 +536,7 @@ def _normalize_channel_flags(channels):
         "depth_buffer": True,
         "normal_buffer": True,
         "mask": True,
+        "camera": True,
     }
     if not isinstance(channels, dict):
         return defaults
@@ -542,6 +544,81 @@ def _normalize_channel_flags(channels):
         if key in channels:
             defaults[key] = _coerce_bool(channels.get(key))
     return defaults
+
+
+def _vec3_to_list(vec):
+    return [float(vec.X), float(vec.Y), float(vec.Z)]
+
+
+def _query_viewport_frustum(viewport):
+    try:
+        result = viewport.GetFrustum()
+    except Exception:
+        return None
+    if not result:
+        return None
+    if isinstance(result, (list, tuple)) and len(result) >= 7:
+        ok, left, right, bottom, top, near, far = result[:7]
+        if not ok:
+            return None
+        return {
+            "left": float(left),
+            "right": float(right),
+            "bottom": float(bottom),
+            "top": float(top),
+            "near": float(near),
+            "far": float(far),
+        }
+    return None
+
+
+def _pinhole_intrinsics_from_frustum(frustum, width, height):
+    if not frustum:
+        return None
+    near = frustum["near"]
+    frustum_w = frustum["right"] - frustum["left"]
+    frustum_h = frustum["top"] - frustum["bottom"]
+    if near == 0 or frustum_w == 0 or frustum_h == 0:
+        return None
+    fx = float(width) * near / frustum_w
+    fy = float(height) * near / frustum_h
+    cx = (float(width) - fx * (frustum["right"] + frustum["left"]) / near) / 2.0
+    cy = (float(height) - fy * (frustum["top"] + frustum["bottom"]) / near) / 2.0
+    return {"fx": fx, "fy": fy, "cx": cx, "cy": cy}
+
+
+def write_camera_pose_json(render_view, out_path, width, height, basename):
+    """Write ground-truth camera pose + intrinsics for the current viewport state."""
+    viewport = render_view.ActiveViewport
+    frustum = _query_viewport_frustum(viewport)
+    intrinsics = _pinhole_intrinsics_from_frustum(frustum, width, height)
+
+    lens_mm = None
+    try:
+        lens_mm = float(viewport.Camera35mmLensLength)
+    except Exception:
+        pass
+
+    payload = {
+        "basename": basename,
+        "image_width": int(width),
+        "image_height": int(height),
+        "camera": {
+            "location": _vec3_to_list(viewport.CameraLocation),
+            "target": _vec3_to_list(viewport.CameraTarget),
+            "direction": _vec3_to_list(viewport.CameraDirection),
+            "up": _vec3_to_list(viewport.CameraUp),
+            "right": _vec3_to_list(viewport.CameraX),
+        },
+        "lens_mm_35": lens_mm,
+        "frustum": frustum,
+        "intrinsics": intrinsics,
+    }
+
+    _ensure_out_dir(out_path)
+    with open(out_path, "w") as f:
+        json.dump(payload, f, indent=2)
+    return out_path
 
 
 def render_all_outputs(
@@ -578,6 +655,7 @@ def render_all_outputs(
         "depth_buffer": os.path.abspath(os.path.join(out_dir, f"depth_buffer/{basename}.pfm")),
         "normal_buffer": os.path.abspath(os.path.join(out_dir, f"normal_buffer/{basename}.pfm")),
         "mask": os.path.abspath(os.path.join(out_dir, f"mask/{basename}.png")),
+        "camera": os.path.abspath(os.path.join(out_dir, f"camera/{basename}.json")),
     }
     channel_flags = _normalize_channel_flags(channels)
     outputs = {
@@ -649,6 +727,18 @@ def render_all_outputs(
                     f"(view={view_size.Width}x{view_size.Height}, "
                     f"out={capture_width}x{capture_height})."
                 )
+
+        # --- Camera GT pose (cheap; independent of display mode / visibility) ---
+        if channel_flags.get("camera", True) and "camera" in outputs:
+            step_start = perf_counter()
+            write_camera_pose_json(
+                render_view=render_view,
+                out_path=outputs["camera"],
+                width=capture_width,
+                height=capture_height,
+                basename=basename,
+            )
+            _record_timing("camera_pose", step_start)
 
         # --- Scene channels: color, depth, normal, buffers ---
         need_scene = any(

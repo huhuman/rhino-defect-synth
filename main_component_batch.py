@@ -77,20 +77,10 @@ _DEFAULT_COMPONENT_PIER_PRESETS = [
 
 
 def _enabled_channel_names(channel_cfg):
+    all_names = ("color", "depth", "normal", "depth_buffer", "normal_buffer", "mask", "camera")
     if not isinstance(channel_cfg, dict):
-        return ["color", "depth", "normal", "depth_buffer", "normal_buffer", "mask"]
-    enabled = []
-    for name in (
-        "color",
-        "depth",
-        "normal",
-        "depth_buffer",
-        "normal_buffer",
-        "mask",
-    ):
-        if bool(channel_cfg.get(name, True)):
-            enabled.append(name)
-    return enabled
+        return list(all_names)
+    return [name for name in all_names if bool(channel_cfg.get(name, True))]
 
 
 
