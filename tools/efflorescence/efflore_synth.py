@@ -269,15 +269,56 @@ def contact_sheet(samples, cols=3, pad=6):
     return Image.fromarray(sheet, "RGB")
 
 
+def build_pipeline_library(out_dir, count=24, size=(1024, 1024), seed=0, prefix="efflore"):
+    """Emit texture sets named for the pipeline's suffix convention (texture_naming.MAP_SUFFIXES)
+    so the EXISTING texture-seed importer auto-wires albedo + opacity + roughness with no code change.
+
+    Per sample writes: <prefix>_NNN_color.png (albedo), _opacity.png (deposit coverage -> opacity;
+    transparent where bare concrete), _roughness.png, and _label.png (exact GT, for the Option-B
+    alpha-accurate mask). The config material option to list for an efflore layer is the stem
+    '<prefix>_NNN'. Run this ON the machine that has the Rhino texture_root, writing into it.
+    """
+    from PIL import Image
+
+    os.makedirs(out_dir, exist_ok=True)
+    names = []
+    for i in range(count):
+        s = generate_efflorescence(
+            size=size,
+            seed=seed + i,
+            coverage=0.35 + 0.40 * ((i * 3 % 5) / 4.0),
+            grain_strength=0.30 + 0.30 * ((i * 7 % 4) / 3.0),
+            hardness=(i % 3) / 2.0,
+            drips=(i % 2 == 0),
+        )
+        stem = "%s_%03d" % (prefix, i)
+        Image.fromarray(s["albedo"], "RGB").save(os.path.join(out_dir, stem + "_color.png"))
+        Image.fromarray(s["alpha"], "L").save(os.path.join(out_dir, stem + "_opacity.png"))
+        Image.fromarray(s["roughness"], "L").save(os.path.join(out_dir, stem + "_roughness.png"))
+        Image.fromarray(s["label"], "L").save(os.path.join(out_dir, stem + "_label.png"))
+        names.append(stem)
+    print("library: wrote %d efflore texture sets to %s" % (count, out_dir))
+    print("config material options (efflore layer lists) -> use these stems:")
+    print(names)
+    return names
+
+
 def main():
     import argparse
 
     ap = argparse.ArgumentParser(description="Generate procedural efflorescence samples.")
+    ap.add_argument("--mode", choices=["samples", "library"], default="samples",
+                    help="samples=preview contact sheet; library=pipeline-named texture sets")
     ap.add_argument("--out", default="tools/efflorescence/samples")
     ap.add_argument("--count", type=int, default=6)
     ap.add_argument("--size", type=int, default=512)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--prefix", default="efflore")
     args = ap.parse_args()
+
+    if args.mode == "library":
+        build_pipeline_library(args.out, args.count, (args.size, args.size), args.seed, args.prefix)
+        return
 
     samples = []
     for i in range(args.count):
