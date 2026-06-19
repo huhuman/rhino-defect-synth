@@ -6,7 +6,10 @@ import os
 import rhinoscriptsyntax as rs
 
 from utils_loc.crack_modeling import create_crack
-from utils_loc.materials import choose_and_import_layer_materials_with_metadata
+from utils_loc.materials import (
+    choose_and_import_layer_materials_with_metadata,
+    set_texture_downsampling,
+)
 from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
 from utils_loc.component_modeling import create_bridge_component
@@ -160,6 +163,14 @@ def prepare(params=None):
     material_choices = _filter_layer_map_by_prefix(params.get("materials", {}), exclude_layer_prefixes)
     texture_materials = params.get("texture_materials", {})
     builtin_cfg = params.get("builtin_material_library", {}) or {}
+
+    # Optional on-import texture downsampling (memory-leak mitigation). Off unless
+    # preparation.texture_materials.max_resolution is set > 0.
+    try:
+        _ds_max_res = int((texture_materials or {}).get("max_resolution", 0) or 0)
+    except Exception:
+        _ds_max_res = 0
+    set_texture_downsampling(_ds_max_res, (texture_materials or {}).get("downsample_cache_dir"))
 
     selected_materials = {}
     selected_material_metadata = {}

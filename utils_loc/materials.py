@@ -816,6 +816,100 @@ def _find_map_by_color_replacement(image_index, color_stem, target_kind):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Texture downsampling (memory-leak mitigation)
+# ---------------------------------------------------------------------------
+# Re-importing 2K-4K textures every iteration is the dominant batch memory leak:
+# Rhino decodes each texture into native memory that material-table cleanup never
+# releases. Downsampling on import cuts per-material memory by (max_res/orig)^2
+# (e.g. 4K->1K is ~16x less), greatly extending how many model-iters fit in RAM
+# before the graceful-stop guard trips. Disabled by default (max_resolution<=0);
+# enable via preparation.texture_materials.max_resolution. Runs only inside Rhino
+# (uses System.Drawing); any failure falls back to the original texture path.
+
+_TEXTURE_MAX_RES = 0
+_TEXTURE_CACHE_DIR = None
+
+
+def set_texture_downsampling(max_resolution, cache_dir=None):
+    """Configure on-import texture downsampling. max_resolution<=0 disables it."""
+    global _TEXTURE_MAX_RES, _TEXTURE_CACHE_DIR
+    try:
+        new_res = max(0, int(max_resolution or 0))
+    except Exception:
+        new_res = 0
+    new_dir = str(cache_dir) if cache_dir else None
+    changed = (new_res != _TEXTURE_MAX_RES) or (new_dir != _TEXTURE_CACHE_DIR)
+    _TEXTURE_MAX_RES = new_res
+    _TEXTURE_CACHE_DIR = new_dir
+    if changed and _TEXTURE_MAX_RES > 0:
+        print(
+            "[stability] texture downsampling enabled: max_resolution={}, cache_dir={}".format(
+                _TEXTURE_MAX_RES, _TEXTURE_CACHE_DIR or "<.ds_cache alongside source>"
+            )
+        )
+
+
+def _downsample_cache_path(src_path):
+    stem, ext = os.path.splitext(os.path.basename(src_path))
+    if ext.lower() not in (".png", ".jpg", ".jpeg"):
+        ext = ".png"
+    name = "{}_ds{}{}".format(stem, _TEXTURE_MAX_RES, ext)
+    base = _TEXTURE_CACHE_DIR or os.path.join(os.path.dirname(src_path), ".ds_cache")
+    return os.path.join(base, name)
+
+
+def _maybe_downsample_texture(path):
+    """Return a cached downsampled copy of `path` (longest edge <= max_res).
+
+    Returns the original path unchanged if downsampling is off, the image is
+    already small enough, or anything fails (so it can never break import).
+    """
+    if not path or _TEXTURE_MAX_RES <= 0 or not os.path.isfile(path):
+        return path
+    try:
+        out_path = _downsample_cache_path(path)
+        if os.path.isfile(out_path) and os.path.getmtime(out_path) >= os.path.getmtime(path):
+            return out_path
+
+        import System  # Rhino .NET only
+
+        img = System.Drawing.Image.FromFile(path)
+        try:
+            w, h = int(img.Width), int(img.Height)
+            longest = max(w, h)
+            if longest <= _TEXTURE_MAX_RES:
+                return path  # already small enough; never upscale
+            scale = float(_TEXTURE_MAX_RES) / float(longest)
+            nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+            out_dir = os.path.dirname(out_path)
+            if out_dir and not os.path.isdir(out_dir):
+                os.makedirs(out_dir)
+            bmp = System.Drawing.Bitmap(nw, nh)
+            try:
+                graphics = System.Drawing.Graphics.FromImage(bmp)
+                try:
+                    graphics.InterpolationMode = (
+                        System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic
+                    )
+                    graphics.DrawImage(img, 0, 0, nw, nh)
+                finally:
+                    graphics.Dispose()
+                bmp.Save(out_path)
+            finally:
+                bmp.Dispose()
+        finally:
+            img.Dispose()
+        return out_path
+    except Exception as exc:
+        print(
+            "[stability] texture downsample skipped for {}: {}".format(
+                os.path.basename(path), exc
+            )
+        )
+        return path
+
+
 def find_texture_bitmaps(texture_jpg_path):
     """Find companion bitmap maps next to a base texture path.
 
@@ -864,6 +958,11 @@ def find_texture_bitmaps(texture_jpg_path):
             bitmaps["albedo"] = image_index[root_key]
         else:
             bitmaps["albedo"] = _find_map_from_index(image_index, root_stem, _MAP_SUFFIXES["albedo"])
+
+    if _TEXTURE_MAX_RES > 0:
+        for kind in list(bitmaps.keys()):
+            if bitmaps.get(kind):
+                bitmaps[kind] = _maybe_downsample_texture(bitmaps[kind])
 
     bitmaps["root_stem"] = root_stem
     return bitmaps
