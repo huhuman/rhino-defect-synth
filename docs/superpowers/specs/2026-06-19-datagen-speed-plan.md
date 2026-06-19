@@ -15,7 +15,20 @@ Adjacent color-frame mean|Δ| (0–255) across the 49 frames: min 3.9, **median 
 opposite of the stated goal (max diverse angles/distances, as much data as possible). So the audit's
 nominal "biggest single lever" (fewer frames) is **rejected for this project.**
 
+## MEASURED per-channel cost (decisive — from log_output_timings, run 20260619_172416, 49 frames)
+Avg/frame ~6.8s: mask 1.91s (28%), buffer_channels(PFM) 1.29s (19%), depth-PNG 1.22s (18%),
+normal-PNG 0.83s (12%), color 0.79s (12%), scene_visibility 0.74s (11%), mask_visibility ~0.
+Implications: (a) the 8-bit PNG depth+normal previews = 2.05s/frame (~30%) — pure redundancy vs the
+PFM buffers; turning them off (done) ~1.6x's the run with zero info loss. (b) color is CHEAP (12%) —
+do NOT reduce render quality/realism. (c) after dropping PNGs, the MASK plugin (1.91s) is the single
+biggest channel; its per-frame mesh-rebuild is the top code lever (geometry static across a model's
+frames -> cacheable). (d) material import is in per-model setup (~58s), NOT the per-frame loop, so
+import-once is a minor speed win — value it for memory only (already handled by downsampling).
+
+## Constraint update: single machine, no multi-instance (user) -> parallelism is OUT. Per-image only.
+
 ## Priority for THIS goal (max diverse data, don't cut frames)
+### 0. DONE: dropped redundant 8-bit PNG depth+normal previews (kept PFM) -> ~30%/frame, ~1.6x, no info loss.
 
 ### 1. Multi-instance parallelism — the main lever (keeps all data)
 Rhino Python is single-threaded, but run N Rhino processes over **disjoint model ranges** writing to
