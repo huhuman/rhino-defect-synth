@@ -1,0 +1,3 @@
+# Generated samples are regeneratable; keep only the review contact sheet.
+samples/*
+!samples/_contact_sheet.png

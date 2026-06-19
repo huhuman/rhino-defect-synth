@@ -315,6 +315,36 @@ def private_memory_mb():
                 pass
 
 
+def working_set_mb():
+    """Total OS-resident memory (includes native/unmanaged allocations)."""
+    process = None
+    try:
+        import System
+
+        process = System.Diagnostics.Process.GetCurrentProcess()
+        return float(process.WorkingSet64) / (1024.0 * 1024.0)
+    except Exception:
+        return None
+    finally:
+        dispose = getattr(process, "Dispose", None)
+        if callable(dispose):
+            try:
+                dispose()
+            except Exception:
+                pass
+
+
+def managed_memory_mb():
+    """Managed .NET heap only. If this stays flat while private/working-set climb,
+    the leak is native (bitmaps, GDI handles, render cache), not managed objects."""
+    try:
+        import System
+
+        return float(System.GC.GetTotalMemory(False)) / (1024.0 * 1024.0)
+    except Exception:
+        return None
+
+
 def log_runtime_snapshot(label, enabled=False):
     if not enabled:
         return
@@ -331,9 +361,31 @@ def log_runtime_snapshot(label, enabled=False):
     basic_mat_count = table_count(getattr(sc.doc, "Materials", None))
     if basic_mat_count is not None:
         parts.append(f"basic_materials={basic_mat_count}")
+    # Tables the snapshot was previously blind to. Embedded bitmaps are the prime
+    # suspect for texture-driven growth that material-table cleanup does not touch.
+    bitmap_count = table_count(getattr(sc.doc, "Bitmaps", None))
+    if bitmap_count is not None:
+        parts.append(f"bitmaps={bitmap_count}")
+    idef_count = table_count(getattr(sc.doc, "InstanceDefinitions", None))
+    if idef_count is not None:
+        parts.append(f"instance_defs={idef_count}")
+    group_count = table_count(getattr(sc.doc, "Groups", None))
+    if group_count is not None:
+        parts.append(f"groups={group_count}")
+    named_view_count = table_count(getattr(sc.doc, "NamedViews", None))
+    if named_view_count is not None:
+        parts.append(f"named_views={named_view_count}")
+    # Memory split: managed flat + native climbing => native leak (bitmaps / GDI /
+    # render cache). Managed climbing => .NET/Python object leak.
+    managed_mb = managed_memory_mb()
+    if managed_mb is not None:
+        parts.append(f"managed_mem_mb={managed_mb:.1f}")
     memory_mb = private_memory_mb()
     if memory_mb is not None:
         parts.append(f"private_mem_mb={memory_mb:.1f}")
+    working_mb = working_set_mb()
+    if working_mb is not None:
+        parts.append(f"working_set_mb={working_mb:.1f}")
     if parts:
         print(f"[runtime] {label}: {', '.join(parts)}")
 
