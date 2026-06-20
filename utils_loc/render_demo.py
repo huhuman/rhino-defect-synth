@@ -773,6 +773,11 @@ def _run_camera_demo(base_out_dir, params):
 
     if camera_strategy == "component":
         component_path = _resolve_component_mid_slice_path(camera_cfg, camera_gizmo_layer)
+        # When include_bbox_path is False AND defect seeds are found, render ONLY the
+        # defect-focused poses (skip the whole-bridge orbit). Defaults True (legacy:
+        # orbit, plus defect poses appended when available). Falls back to the orbit
+        # if no defect seeds are found, so a run is never left with zero poses.
+        include_bbox_path = bool((camera_cfg.get("component") or {}).get("include_bbox_path", True))
         bbox_path_poses = list(component_path["poses"])
         poses = list(bbox_path_poses)
         lengths_for_gizmos = component_path["aabb"]["lengths"]
@@ -790,9 +795,13 @@ def _run_camera_demo(base_out_dir, params):
             capture_context = defect_render_context
             capture_context["smooth_path"] = False
             capture_context["transition_frames"] = 0
-            poses.extend(defect_poses)
-            if defect_poses:
-                strategy_tag = "component-aabb-mid-slice-plus-defects"
+            if defect_poses and not include_bbox_path:
+                poses = list(defect_poses)
+                strategy_tag = "component-defect-focused"
+            else:
+                poses.extend(defect_poses)
+                if defect_poses:
+                    strategy_tag = "component-aabb-mid-slice-plus-defects"
 
         if component_path["segment_transition_frames"]:
             print(
