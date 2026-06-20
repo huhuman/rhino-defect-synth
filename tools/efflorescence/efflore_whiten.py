@@ -82,12 +82,24 @@ def derive_opacity(rgb):
     return np.clip(cov * 255.0, 0, 255).astype(np.uint8)
 
 
+def boost_opacity(opa, gamma):
+    """Raise low/mid coverage so the deposit reads as white (the source drip alpha is too
+    sparse -> efflore blended with concrete). gamma<1 lifts coverage; near-zero stays clear."""
+    if gamma is None or gamma >= 1.0:
+        return opa
+    n = opa.astype(np.float32) / 255.0
+    out = np.where(n < 0.08, 0.0, np.clip(n ** float(gamma), 0.0, 1.0))
+    return np.clip(out * 255.0, 0, 255).astype(np.uint8)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Whiten drip efflore photos into deposit textures.")
     ap.add_argument("--texture-root", required=True)
     ap.add_argument("--out-subdir", default="efflore_white")
     ap.add_argument("--variations", type=int, default=2)
     ap.add_argument("--prefix", default="ewhite")
+    ap.add_argument("--opacity-gamma", type=float, default=0.5,
+                    help="<1 boosts deposit coverage so efflore reads as white (1=off)")
     args = ap.parse_args()
 
     root = args.texture_root
@@ -122,6 +134,7 @@ def main():
                 opa = None
         if opa is None:
             opa = derive_opacity(rgb)
+        opa = boost_opacity(opa, args.opacity_gamma)
         n_var = max(1, min(args.variations, len(VARIANTS)))
         for v in range(n_var):
             tint, lo, hi, keep, gamma = VARIANTS[v]

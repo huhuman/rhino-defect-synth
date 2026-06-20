@@ -286,9 +286,9 @@ def build_pipeline_library(out_dir, count=24, size=(1024, 1024), seed=0, prefix=
         s = generate_efflorescence(
             size=size,
             seed=seed + i,
-            coverage=0.35 + 0.40 * ((i * 3 % 5) / 4.0),
+            coverage=0.55 + 0.35 * ((i * 3 % 5) / 4.0),  # raised floor so deposit reads as white
             grain_strength=0.30 + 0.30 * ((i * 7 % 4) / 3.0),
-            hardness=(i % 3) / 2.0,
+            hardness=0.5 + 0.5 * ((i % 3) / 2.0),         # more opaque (chalky crust) on average
             drips=(i % 2 == 0),
         )
         stem = "%s_%03d" % (prefix, i)
