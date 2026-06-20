@@ -322,6 +322,8 @@ def generate_defect_camera_poses(
     distance_ranges: Mapping[str, Sequence[float]] = None,
     direction_jitter_degrees: float = 0.0,
     framing_factor: float = 0.0,
+    occlusion_test=None,
+    max_visible_attempts: int = 10,
 ) -> List[Mapping[str, Vec3]]:
     """
     Generate camera poses on the defect-normal hemisphere around each defect.
@@ -344,6 +346,7 @@ def generate_defect_camera_poses(
     jitter_deg = max(0.0, float(direction_jitter_degrees))
 
     poses = []
+    skipped_occluded = 0
     for defect_idx, defect in enumerate(defects):
         point = tuple(float(v) for v in defect["point"])
         normal = _normalize(defect["normal"])
@@ -360,8 +363,21 @@ def generate_defect_camera_poses(
         )
 
         for radius in distances:
-            out_dir = _direction_on_normal_hemisphere(normal, jitter_deg)
-            pos = tuple(point[i] + out_dir[i] * float(radius) for i in range(3))
+            # Resample the hemisphere direction until the camera->defect line of sight
+            # is unobstructed (occlusion_test returns False). Skip the pose if no clear
+            # view is found, so occluded defects don't produce junk frames.
+            attempts = max(1, int(max_visible_attempts)) if occlusion_test is not None else 1
+            out_dir = None
+            pos = None
+            for _attempt in range(attempts):
+                cand_dir = _direction_on_normal_hemisphere(normal, jitter_deg)
+                cand_pos = tuple(point[i] + cand_dir[i] * float(radius) for i in range(3))
+                if occlusion_test is None or not occlusion_test(cand_pos, point):
+                    out_dir, pos = cand_dir, cand_pos
+                    break
+            if pos is None:
+                skipped_occluded += 1
+                continue
             target = point
             dir_vec = _normalize(target[i] - pos[i] for i in range(3))
             poses.append(
@@ -378,6 +394,12 @@ def generate_defect_camera_poses(
                 }
             )
 
+    if occlusion_test is not None and skipped_occluded:
+        print(
+            "Component camera: skipped {} occluded poses (no clear line of sight); kept {}.".format(
+                skipped_occluded, len(poses)
+            )
+        )
     return poses
 
 

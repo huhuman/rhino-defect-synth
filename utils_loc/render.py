@@ -380,6 +380,94 @@ def _build_render_context(params):
     }
 
 
+def _mesh_geometry(geo, mp):
+    out = []
+    try:
+        G = Rhino.Geometry
+        if isinstance(geo, G.Mesh):
+            out.append(geo)
+        elif isinstance(geo, G.Brep):
+            for m in (G.Mesh.CreateFromBrep(geo, mp) or []):
+                out.append(m)
+        elif isinstance(geo, G.Extrusion):
+            brep = geo.ToBrep()
+            if brep:
+                for m in (G.Mesh.CreateFromBrep(brep, mp) or []):
+                    out.append(m)
+        elif isinstance(geo, G.Surface):
+            brep = G.Brep.CreateFromSurface(geo)
+            if brep:
+                for m in (G.Mesh.CreateFromBrep(brep, mp) or []):
+                    out.append(m)
+    except Exception:
+        pass
+    return out
+
+
+def _build_structure_occluder_mesh():
+    """Combined render mesh of the bridge structure (component:: layers) used for
+    camera-occlusion tests. Returns None on failure -> caller skips culling (fail-open)."""
+    try:
+        combined = Rhino.Geometry.Mesh()
+        layers = sc.doc.Layers
+        mp = Rhino.Geometry.MeshingParameters.FastRenderMesh
+        for obj in sc.doc.Objects:
+            try:
+                if obj is None or obj.IsDeleted:
+                    continue
+                layer_index = obj.Attributes.LayerIndex
+                if layer_index < 0 or layer_index >= layers.Count:
+                    continue
+                full = layers[layer_index].FullPath or ""
+                if not full.startswith("component::"):
+                    continue
+                added = False
+                render_meshes = obj.GetMeshes(Rhino.Geometry.MeshType.Render)
+                if render_meshes:
+                    for m in render_meshes:
+                        if m:
+                            combined.Append(m)
+                            added = True
+                if not added:
+                    for m in _mesh_geometry(obj.Geometry, mp):
+                        combined.Append(m)
+            except Exception:
+                continue
+        return combined if combined.Faces.Count > 0 else None
+    except Exception:
+        return None
+
+
+def _make_occlusion_test(occluder_mesh):
+    """Return blocked(pos, point) -> True when the bridge structure lies between the
+    defect and the camera. Fail-open: any error -> not blocked."""
+    G = Rhino.Geometry
+    mesh_ray = G.Intersect.Intersection.MeshRay
+
+    def blocked(pos, point):
+        try:
+            vx = pos[0] - point[0]
+            vy = pos[1] - point[1]
+            vz = pos[2] - point[2]
+            dist = math.sqrt(vx * vx + vy * vy + vz * vz)
+            if dist <= 1e-6:
+                return False
+            ux, uy, uz = vx / dist, vy / dist, vz / dist
+            off = max(2.0, dist * 0.01)
+            clear = max(2.0, dist * 0.01)
+            origin = G.Point3d(point[0] + ux * off, point[1] + uy * off, point[2] + uz * off)
+            ray = G.Ray3d(origin, G.Vector3d(ux, uy, uz))
+            hit_t = mesh_ray(occluder_mesh, ray)
+            if hit_t is None:
+                return False
+            hit_t = float(hit_t)
+            return 0.0 <= hit_t < (dist - off - clear)
+        except Exception:
+            return False
+
+    return blocked
+
+
 def _generate_render_poses(context):
     """Generate and order camera poses around the scene."""
     center = context["center"]
@@ -430,12 +518,26 @@ def _generate_render_poses(context):
 
     component_cfg = context["component_camera_cfg"]
     defects = context["defects"]
+    occlusion_test = None
+    if bool(component_cfg.get("occlusion_cull", False)):
+        occ_mesh = _build_structure_occluder_mesh()
+        if occ_mesh is not None:
+            occlusion_test = _make_occlusion_test(occ_mesh)
+            print(
+                "Component camera: occlusion cull enabled ({} structure faces).".format(
+                    occ_mesh.Faces.Count
+                )
+            )
+        else:
+            print("Component camera: occlusion cull requested but no structure mesh found; skipping cull.")
     poses = generate_defect_camera_poses(
         defects=defects,
         sample_count=int(component_cfg["sample_count"]),
         distance_ranges=component_cfg["distance_ranges"],
         direction_jitter_degrees=float(component_cfg.get("direction_jitter_degrees", 5.0)),
         framing_factor=float(component_cfg.get("framing_factor", 0.0) or 0.0),
+        occlusion_test=occlusion_test,
+        max_visible_attempts=int(component_cfg.get("occlusion_max_attempts", 10)),
     )
     return sort_poses_topdown_circular(poses, center=center)
 
