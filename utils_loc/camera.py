@@ -106,6 +106,30 @@ def _distance_samples_from_range(distance_range: Sequence[float], sample_count: 
     return [(edges[idx] + edges[idx + 1]) * 0.5 for idx in range(count)]
 
 
+def _distance_samples_for_defect(distance_range, sample_count, size_cm, framing_factor):
+    """Size-aware camera distance: bias samples toward framing_factor * defect_size,
+    clamped to the configured [min, max] range. So a large defect is shot from farther
+    (it won't overflow / be too close) and a small one from nearer, while never leaving
+    the configured bounds. Falls back to the full range when size/framing are unset."""
+    start = float(distance_range[0])
+    stop = float(distance_range[1])
+    if start > stop:
+        start, stop = stop, start
+    try:
+        size_cm = float(size_cm or 0.0)
+        framing_factor = float(framing_factor or 0.0)
+    except (TypeError, ValueError):
+        size_cm, framing_factor = 0.0, 0.0
+    if size_cm > 0.0 and framing_factor > 0.0:
+        center = min(stop, max(start, framing_factor * size_cm))
+        lo = max(start, center * 0.65)
+        hi = min(stop, center * 1.5)
+        if lo > hi:
+            lo, hi = hi, lo
+        return _distance_samples_from_range([lo, hi], sample_count)
+    return _distance_samples_from_range([start, stop], sample_count)
+
+
 def _direction_on_normal_hemisphere(normal: Sequence[float], max_jitter_degrees: float) -> Vec3:
     direction = _normalize(normal)
     if max_jitter_degrees > 0.0:
@@ -297,6 +321,7 @@ def generate_defect_camera_poses(
     sample_count: int = 1,
     distance_ranges: Mapping[str, Sequence[float]] = None,
     direction_jitter_degrees: float = 0.0,
+    framing_factor: float = 0.0,
 ) -> List[Mapping[str, Vec3]]:
     """
     Generate camera poses on the defect-normal hemisphere around each defect.
@@ -330,7 +355,9 @@ def generate_defect_camera_poses(
                     defect_type or "unknown"
                 )
             )
-        distances = _distance_samples_from_range(distance_range, count_per_defect)
+        distances = _distance_samples_for_defect(
+            distance_range, count_per_defect, defect.get("size_cm"), framing_factor
+        )
 
         for radius in distances:
             out_dir = _direction_on_normal_hemisphere(normal, jitter_deg)

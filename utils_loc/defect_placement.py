@@ -2157,6 +2157,7 @@ def _extract_camera_defects(records):
                 "normal": [float(normal[0]), float(normal[1]), float(normal[2])],
                 "defect_type": record.get("type"),
                 "instance_index": record.get("instance_index"),
+                "size_cm": record.get("target_metric_cm"),
             }
         )
     return defects

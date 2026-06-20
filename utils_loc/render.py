@@ -435,6 +435,7 @@ def _generate_render_poses(context):
         sample_count=int(component_cfg["sample_count"]),
         distance_ranges=component_cfg["distance_ranges"],
         direction_jitter_degrees=float(component_cfg.get("direction_jitter_degrees", 5.0)),
+        framing_factor=float(component_cfg.get("framing_factor", 0.0) or 0.0),
     )
     return sort_poses_topdown_circular(poses, center=center)
 

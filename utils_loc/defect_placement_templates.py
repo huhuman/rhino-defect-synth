@@ -544,10 +544,18 @@ def _load_shapes_from_overview_csv(runtime, defect_type, cfg, defect_cfg, count,
     if not csv_path:
         return []
 
-    rows = _load_overview_rows(csv_path)
+    # Accept a single path OR a list of paths (combine multiple shape libraries,
+    # e.g. dacl10k + s2ds). Each row keeps its own __overview_dir, so per-source
+    # polygon resolution stays correct after concatenation.
+    csv_paths = list(csv_path) if isinstance(csv_path, (list, tuple)) else [csv_path]
+    rows = []
+    for one_path in csv_paths:
+        rows.extend(_load_overview_rows(one_path))
     if not rows:
-        print("Defect {}: overview CSV has no rows: '{}'".format(defect_type, csv_path))
+        print("Defect {}: overview CSV has no rows: '{}'".format(defect_type, csv_paths))
         return []
+    if len(csv_paths) > 1:
+        print("Defect {}: loaded {} rows from {} shape libraries.".format(defect_type, len(rows), len(csv_paths)))
 
     requested = max(0, runtime._to_int(overview_cfg.get("sample_count"), count))
     shapes = []
