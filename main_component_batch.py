@@ -507,7 +507,8 @@ def run(
 
                 with suspend_view_updates():
                     set_batch_work_view()
-                    clear_imported_materials_from_doc()
+                    if not bool(preparation_params.get("material_reuse", False)):
+                        clear_imported_materials_from_doc()
                 render_prepare_params = _prepare_params_for_batch(preparation_params, rng)
                 print(f"Render preparation seed: {render_prepare_params.get('seed')}")
                 with suspend_view_updates():
@@ -602,7 +603,8 @@ def run(
 
                 with suspend_view_updates():
                     set_batch_work_view()
-                    clear_imported_materials_from_doc()
+                    if not bool(preparation_params.get("material_reuse", False)):
+                        clear_imported_materials_from_doc()
 
                 if (
                     stability_cfg["gc_every_render_passes"] > 0

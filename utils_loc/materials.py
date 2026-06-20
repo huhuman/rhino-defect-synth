@@ -829,6 +829,19 @@ def _find_map_by_color_replacement(image_index, color_stem, target_kind):
 
 _TEXTURE_MAX_RES = 0
 _TEXTURE_CACHE_DIR = None
+_MATERIAL_REUSE_ENABLED = False
+
+
+def set_material_reuse_enabled(enabled):
+    """When enabled: materials are reused across iterations by stable name (no unique
+    suffix) and the batch skips per-iteration material cleanup, so each unique material
+    is imported ONCE. Memory then plateaus at the texture union instead of being
+    re-leaked every iteration. Default off."""
+    global _MATERIAL_REUSE_ENABLED
+    new_val = bool(enabled)
+    if new_val != _MATERIAL_REUSE_ENABLED:
+        print("[stability] material reuse {}".format("enabled" if new_val else "disabled"))
+    _MATERIAL_REUSE_ENABLED = new_val
 
 
 def set_texture_downsampling(max_resolution, cache_dir=None):
@@ -1204,7 +1217,7 @@ def add_material_to_render_table(
 ):
     """Add a Rhino material into the current document render material table."""
     material_name = material_name or material.Name or "material_from_texture"
-    if make_unique:
+    if make_unique and not _MATERIAL_REUSE_ENABLED:
         material_name = _make_unique_material_name(material_name)
 
     try:

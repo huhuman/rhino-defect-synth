@@ -9,6 +9,7 @@ from utils_loc.crack_modeling import create_crack
 from utils_loc.materials import (
     choose_and_import_layer_materials_with_metadata,
     set_texture_downsampling,
+    set_material_reuse_enabled,
 )
 from utils_loc.layers import create_layers
 from utils_loc.cube_modeling import create_cube
@@ -171,6 +172,7 @@ def prepare(params=None):
     except Exception:
         _ds_max_res = 0
     set_texture_downsampling(_ds_max_res, (texture_materials or {}).get("downsample_cache_dir"))
+    set_material_reuse_enabled(bool(params.get("material_reuse", False)))
 
     selected_materials = {}
     selected_material_metadata = {}
