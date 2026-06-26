@@ -53,7 +53,8 @@ def make_variants(base, count=3, darker_factor=0.85, desaturate=0.15):
 # Host name -> texture file -> table
 # ---------------------------------------------------------------------------
 
-_COLOR_SUFFIXES = ("_Color", "_color", "_COL", "_albedo", "_Albedo", "_diffuse", "")
+_COLOR_SUFFIXES = ("_Color", "_color", "_BaseColor", "_basecolor", "_COLOR", "_COL",
+                   "_albedo", "_Albedo", "_diffuse", "")
 _IMG_EXTS = (".png", ".jpg", ".jpeg")
 
 
