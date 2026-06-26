@@ -538,6 +538,10 @@ def _generate_render_poses(context):
         framing_factor=float(component_cfg.get("framing_factor", 0.0) or 0.0),
         occlusion_test=occlusion_test,
         max_visible_attempts=int(component_cfg.get("occlusion_max_attempts", 10)),
+        min_visible_size_ratio=float(component_cfg.get("min_visible_size_ratio", 0.0) or 0.0),
+        framing_factor_by_type=component_cfg.get("framing_factor_by_type"),
+        oblique_angle_range=component_cfg.get("oblique_angle_range"),
+        head_on_fraction=float(component_cfg.get("head_on_fraction", 0.0) or 0.0),
     )
     return sort_poses_topdown_circular(poses, center=center)
 
