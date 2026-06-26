@@ -261,13 +261,36 @@ def _sanitize_reference_metric_px(runtime, defect_type, metric_px, row, polygon_
     return metric
 
 
+# Backstop: a source outline with thousands of vertices (e.g. crack_synth long_units_v2
+# polygons run ~2000-5300 pts vs v1's ~200) makes the per-point groove carve in create_crack
+# hang. Uniform-stride decimation caps the count while preserving the overall jagged shape;
+# it only triggers ABOVE this limit, so normal (<=~350-pt) library polygons are untouched.
+_MAX_POLYGON_POINTS = 500
+
+
+def _decimate_polygon(points, max_points=_MAX_POLYGON_POINTS):
+    pts = list(points or [])
+    n = len(pts)
+    if n <= max_points or n < 4:
+        return pts
+    stride = int(math.ceil(n / float(max_points)))
+    return pts[::stride]
+
+
 def _scale_payload_polygons(runtime, payload, metric_scale):
     polygons = []
+    decimated_from = 0
     for poly in (payload or {}).get("polygons") or []:
         centered = _center_polygon(poly, payload["width_px"], payload["height_px"])
         scaled = _scale_polygon(centered, metric_scale)
-        if len(scaled) >= 3:
-            polygons.append(scaled)
+        capped = _decimate_polygon(scaled)
+        if len(capped) < len(scaled):
+            decimated_from = max(decimated_from, len(scaled))
+        if len(capped) >= 3:
+            polygons.append(capped)
+    if decimated_from:
+        print("defect polygon decimated: {} -> <= {} pts (dense source; carve safeguard)".format(
+            decimated_from, _MAX_POLYGON_POINTS))
     polygons.sort(key=lambda pts: abs(runtime._polygon_area(pts)), reverse=True)
     return polygons
 
