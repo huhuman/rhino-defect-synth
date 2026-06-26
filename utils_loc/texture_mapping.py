@@ -509,17 +509,43 @@ def _apply_texture_mapping_to_layers(
 
 def apply_component_texture_mapping(component_cfg=None, layer_material_metadata=None):
     component_cfg = dict(component_cfg or {})
-    layer_names = [
+    layers = component_cfg.get("layers") or {}
+    map_cfg = component_cfg.get("texture_mapping") or {}
+    bearing_layer = str(layers.get("bearing") or "").strip()
+
+    # Large surfaces (slab/beam/parapet/pier) keep the big component world tile.
+    big_layers = [
         str(name)
-        for name in (component_cfg.get("layers") or {}).values()
-        if str(name or "").strip()
+        for name in layers.values()
+        if str(name or "").strip() and str(name) != bearing_layer
     ]
-    return _apply_texture_mapping_to_layers(
-        layer_names=layer_names,
-        mapping_cfg=component_cfg.get("texture_mapping") or {},
+    big = _apply_texture_mapping_to_layers(
+        layer_names=big_layers,
+        mapping_cfg=map_cfg,
         layer_material_metadata=layer_material_metadata,
         surface_mapping_mode="surface_frame",
     )
+    if not bearing_layer:
+        return big
+
+    # Bearings are small (~5 cm thick); the 300 cm component tile barely repeats across them,
+    # so the plastic albedo/normal map stretches into bands that read as teal stripes at
+    # oblique angles. Box-map the bearing at a small fixed world size so the texture tiles
+    # properly. bearing_world_size (cm) is configurable; defaults to 15 cm.
+    bearing = _apply_texture_mapping_to_layers(
+        layer_names=[bearing_layer],
+        mapping_cfg=_fixed_world_box_cfg(map_cfg.get("bearing_world_size", 15.0), map_cfg, 15.0),
+        layer_material_metadata=layer_material_metadata,
+        surface_mapping_mode="world_orthogonal",
+    )
+    return {
+        "enabled": bool(big.get("enabled") or bearing.get("enabled")),
+        "applied": big.get("applied", 0) + bearing.get("applied", 0),
+        "surface_objects": big.get("surface_objects", 0) + bearing.get("surface_objects", 0),
+        "solid_objects": big.get("solid_objects", 0) + bearing.get("solid_objects", 0),
+        "skipped": big.get("skipped", 0) + bearing.get("skipped", 0),
+        "layers": dict(list(big.get("layers", {}).items()) + list(bearing.get("layers", {}).items())),
+    }
 
 
 def apply_efflore_texture_mapping(defect_cfg=None, layer_material_metadata=None):
@@ -537,3 +563,79 @@ def apply_efflore_texture_mapping(defect_cfg=None, layer_material_metadata=None)
         layer_material_metadata=layer_material_metadata,
         surface_mapping_mode="world_orthogonal",
     )
+
+
+_SPALLING_CAVITY_LAYER_KEYS = (
+    "spall_cs2",
+    "spall_cs3",
+    "exposed_rebar_cs2_spalling",
+    "exposed_rebar_cs3_spalling",
+)
+_SPALLING_REBAR_LAYER_KEYS = (
+    "exposed_rebar_cs2_rebar",
+    "exposed_rebar_cs3_rebar",
+)
+
+
+def _empty_mapping_summary():
+    return {
+        "enabled": False,
+        "applied": 0,
+        "surface_objects": 0,
+        "solid_objects": 0,
+        "skipped": 0,
+        "layers": {},
+    }
+
+
+def _fixed_world_box_cfg(world_size, base_cfg, default_size):
+    """A fixed-scale box-mapping config: tiles the texture every `world_size` cm regardless
+    of object size (so rust grain stays a constant real-world size on the thin rods)."""
+    world = max(1e-6, _to_float(world_size, default_size))
+    return {
+        "enabled": True,
+        "texture_channel": (base_cfg or {}).get("texture_channel", 1),
+        "preserve_aspect_ratio": False,
+        "fit_to_object_bounds": False,
+        "world_size_u": world,
+        "world_size_v": world,
+        "world_size_z": world,
+    }
+
+
+def apply_spalling_texture_mapping(defect_cfg=None, layer_material_metadata=None):
+    """Map spall-cavity + exposed-rebar geometry. Without this pass the thin rebar rods
+    (capped pipes) fall back to default surface-parameter mapping that stretches the 2K
+    metal/rust texture along the bar and averages to flat near-white -> bare-looking rods.
+    Box-maps the rods at a small world size so the rust tiles and reads as corroded steel;
+    the cavity gets a coarser tile. Additive + config-gated; safe for long runs."""
+    defect_cfg = dict(defect_cfg or {})
+    sp_cfg = dict(defect_cfg.get("spalling") or {})
+    map_cfg = dict(sp_cfg.get("texture_mapping") or {})
+    if not bool(map_cfg.get("enabled", False)):
+        return _empty_mapping_summary()
+
+    geometry_layers = dict((defect_cfg.get("layers") or {}).get("geometry") or {})
+    cavity_world = map_cfg.get("cavity_world_size", map_cfg.get("world_size_v", 12.0))
+    rebar_world = map_cfg.get("rebar_world_size", 3.0)
+
+    cavity = _apply_texture_mapping_to_layers(
+        layer_names=[geometry_layers.get(k) for k in _SPALLING_CAVITY_LAYER_KEYS],
+        mapping_cfg=_fixed_world_box_cfg(cavity_world, map_cfg, 12.0),
+        layer_material_metadata=layer_material_metadata,
+        surface_mapping_mode="world_orthogonal",
+    )
+    rebar = _apply_texture_mapping_to_layers(
+        layer_names=[geometry_layers.get(k) for k in _SPALLING_REBAR_LAYER_KEYS],
+        mapping_cfg=_fixed_world_box_cfg(rebar_world, map_cfg, 3.0),
+        layer_material_metadata=layer_material_metadata,
+        surface_mapping_mode="world_orthogonal",
+    )
+    return {
+        "enabled": True,
+        "applied": cavity["applied"] + rebar["applied"],
+        "surface_objects": cavity["surface_objects"] + rebar["surface_objects"],
+        "solid_objects": cavity["solid_objects"] + rebar["solid_objects"],
+        "skipped": cavity["skipped"] + rebar["skipped"],
+        "layers": dict(list(cavity["layers"].items()) + list(rebar["layers"].items())),
+    }
