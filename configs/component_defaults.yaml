@@ -12,6 +12,10 @@ modeling:
       world_size_z: 300.0
       world_size_u: null
       aspect_ratio_fallback: 1.0
+      # Bearings are small (~5cm thick): the 300cm tile above barely repeats across them so
+      # the plastic albedo/normal stretches into teal-ish bands (obvious at oblique angles).
+      # The bearing layer is box-mapped separately at this small world tile. (2026-06-26)
+      bearing_world_size: 15.0
       texture_channel: 1
     centerline:
       span: 2133.6
