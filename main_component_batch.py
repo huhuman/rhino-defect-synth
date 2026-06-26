@@ -20,6 +20,7 @@ from utils_loc.pipeline import create_model, prepare, run_render_demo
 from utils_loc.texture_mapping import (
     apply_component_texture_mapping,
     apply_efflore_texture_mapping,
+    apply_spalling_texture_mapping,
 )
 from utils_loc.batch_utils import (
     start_batch_logging,
@@ -47,6 +48,7 @@ from utils_loc.batch_utils import (
     apply_batch_undo_policy,
     restore_batch_undo_policy,
     resolve_stability_cfg,
+    sample_mask_foreground,
 )
 
 install_timestamped_print()
@@ -245,6 +247,21 @@ def _reapply_texture_mapping(modeling_params, material_metadata):
             )
         )
 
+    spalling_result = apply_spalling_texture_mapping(
+        defect_cfg=defect_cfg,
+        layer_material_metadata=material_metadata,
+    )
+    if spalling_result.get("enabled"):
+        print(
+            "-------- Spalling/Rebar Texture Mapping Refresh ------- "
+            "(applied: {}, surfaces: {}, solids: {}, skipped: {})".format(
+                spalling_result.get("applied", 0),
+                spalling_result.get("surface_objects", 0),
+                spalling_result.get("solid_objects", 0),
+                spalling_result.get("skipped", 0),
+            )
+        )
+
     component_result = apply_component_texture_mapping(
         component_cfg=component_cfg,
         layer_material_metadata=material_metadata,
@@ -262,6 +279,7 @@ def _reapply_texture_mapping(modeling_params, material_metadata):
 
     return {
         "efflore": efflore_result,
+        "spalling": spalling_result,
         "component": component_result,
     }
 
@@ -333,6 +351,13 @@ def run(
         print(f"Batch log path: {batch_log_path}")
         print(f"Batch state path: {batch_state_path}")
 
+        # Keep the layer taxonomy across models so the Layers table doesn't accumulate
+        # tombstones (the progressive per-model slowdown). Set once, AFTER logging starts
+        # so the confirmation lands in batch_log.txt (not the pre-redirect console).
+        main_entry.set_reuse_layers(
+            bool(preparation_params.get("reuse_layers_across_models", False))
+        )
+
         global_random_state = random.getstate()
         if seed is None:
             seed = nested_cfg.get("seed")
@@ -358,6 +383,7 @@ def run(
         next_output_index = int(nested_cfg.get("output_index_start", 0))
         stop_after_preview = False
         stop_after_guard = False
+        mask_gate_failed = False
         render_pass_count = 0
 
         batch_state = {
@@ -579,6 +605,37 @@ def run(
                     f"next_view_id={next_output_index}"
                 )
 
+                # Mask-coverage gate: catch blank (all-white) mask captures early instead
+                # of generating hours of label-less frames. The classic trigger is the
+                # display sleeping/locking mid-run (DrawToBitmap loses its GL context while
+                # ViewCapture-based color/depth survive). Stops the run safely + resumably.
+                min_mask_fg = stability_cfg.get("min_mask_foreground_frac", 0.0)
+                if not show_cameras and min_mask_fg > 0.0 and captured_count > 0:
+                    pass_mask_paths = [
+                        entry.get("mask")
+                        for entry in (captured_paths or [])
+                        if isinstance(entry, dict) and entry.get("mask")
+                    ]
+                    mean_fg, n_sampled = sample_mask_foreground(pass_mask_paths)
+                    if mean_fg is not None:
+                        print(
+                            f"[maskgate] model_iter={model_iter} render_iter={render_iter}: "
+                            f"mean_mask_foreground={mean_fg * 100:.2f}% over {n_sampled} "
+                            f"frames (threshold={min_mask_fg * 100:.2f}%)"
+                        )
+                        if mean_fg < min_mask_fg:
+                            print(
+                                f"[maskgate] BLANK MASKS at model_iter={model_iter} "
+                                f"({mean_fg * 100:.2f}% < {min_mask_fg * 100:.2f}%). "
+                                "Stopping run safely. Likely the display slept/locked "
+                                "(DrawToBitmap GL-context loss) or the mask plugin drew "
+                                "nothing. Keep the screen awake and/or apply the ViewCapture "
+                                "plugin fix, then resume."
+                            )
+                            mask_gate_failed = True
+                            stop_after_guard = True
+                            break
+
                 model_history["renders"].append(
                     {
                         "render_iter": render_iter,
@@ -686,11 +743,13 @@ def run(
                 break
 
         if stop_after_guard:
-            batch_state["status"] = "stopped_by_guard"
+            batch_state["status"] = (
+                "failed_mask_gate" if mask_gate_failed else "stopped_by_guard"
+            )
             batch_state["current"] = {
                 "model_iter": current_model_iter,
                 "render_iter": current_render_iter,
-                "stage": "guard_stop",
+                "stage": "mask_gate_stop" if mask_gate_failed else "guard_stop",
             }
         elif stop_after_preview:
             batch_state["status"] = "preview_stopped"
