@@ -22,6 +22,18 @@ _DEFECT_MODELERS = {
     "spalling": defect_placement_spalling.model_spalling_instance,
 }
 
+# Last placement's RAW records (with geometry_ids intact). The records that go into the
+# returned/cached defect payload are run through _json_ready_records, which STRIPS every
+# *_geometry_ids key for serialization — so post-placement, in-session consumers that need
+# the actual spall objects (e.g. spalling host-colour) must read this instead.
+_LAST_PLACED_RECORDS = None
+
+
+def get_last_placed_records():
+    """Raw records (with geometry_ids) from the most recent apply_defect_pipeline call,
+    or None. Valid only within the same Rhino session/document as the placement."""
+    return _LAST_PLACED_RECORDS
+
 
 def _deep_merge(base, override):
     merged = copy.deepcopy(base)
@@ -1866,6 +1878,30 @@ def _build_instance_records_for_type(
     records = []
     used_candidate_keys = used_candidate_keys if used_candidate_keys is not None else set()
 
+    # Optional: balance placement across COMPONENT TYPES (slab/beam/pier/parapet/...) instead
+    # of the default area-weighted spread, where big surfaces (the slab) dominate and leave
+    # pier/beam under-sampled. Each new instance prefers the most under-represented type
+    # (counts/weight). Off by default; enable via modeling.defect.reference.
+    ref_cfg = cfg.get("reference") or {}
+    balance_by_type = bool(ref_cfg.get("balance_by_component_type", False))
+    placement_weights = {
+        str(k).strip().lower(): max(0.0, _to_float(v, 1.0))
+        for k, v in dict(ref_cfg.get("placement_type_weights") or {}).items()
+    }
+    type_counts = {}
+
+    def _candidate_component_type(candidate):
+        parts = [p for p in str(candidate.get("surface_layer") or "").split("::") if p]
+        if len(parts) >= 2 and parts[0].lower() == "component":
+            return parts[1].lower()
+        return parts[-1].lower() if parts else "other"
+
+    def _type_priority(component_type):
+        weight = placement_weights.get(component_type, 1.0)
+        if weight <= 0.0:
+            return float("inf")
+        return type_counts.get(component_type, 0) / weight
+
     for instance_idx in range(count):
         shape_template = shapes[instance_idx % len(shapes)]
         placed = None
@@ -1877,7 +1913,18 @@ def _build_instance_records_for_type(
             print("Defect {}: no unused reference points left.".format(defect_type))
             break
 
-        rng.shuffle(available)
+        if balance_by_type:
+            by_type = {}
+            for cand in available:
+                by_type.setdefault(_candidate_component_type(cand), []).append(cand)
+            ordered = []
+            for component_type in sorted(by_type.keys(), key=_type_priority):
+                group = by_type[component_type]
+                rng.shuffle(group)
+                ordered.extend(group)
+            available = ordered
+        else:
+            rng.shuffle(available)
         for candidate in available:
             shape = _fit_shape_profile_to_candidate(
                 defect_type,
@@ -1947,6 +1994,9 @@ def _build_instance_records_for_type(
                 placed["seed_id"] = str(seed_ids[0])
                 placed["seed_ids"] = _as_strings(seed_ids)
             records.append(placed)
+            if balance_by_type:
+                placed_type = _candidate_component_type(candidate)
+                type_counts[placed_type] = type_counts.get(placed_type, 0) + 1
             break
         if placed is None:
             print("Defect {}: failed to place one instance after evaluating all candidate points.".format(defect_type))
@@ -2272,6 +2322,11 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
         )
 
     subtraction = _apply_surface_group_subtractions(records, cfg, model_result)
+
+    # Keep the raw records (geometry_ids intact) for in-session consumers BEFORE the
+    # json-ready pass strips every *_geometry_ids key. See spalling_host_color.
+    global _LAST_PLACED_RECORDS
+    _LAST_PLACED_RECORDS = records
 
     json_ready = _json_ready_records(records)
     camera_defects = _extract_camera_defects(json_ready)

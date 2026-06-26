@@ -117,23 +117,17 @@ def _assign_object_material(obj_id, mat_index):
 
 
 def _load_defect_records():
-    """Prefer the in-memory model result (the exact object create_model built — no fragile
-    document user-text round-trip); fall back to the document-cached payload."""
+    """Raw placement records WITH geometry_ids — needed to find the actual spall objects.
+    The returned/cached defect payload runs through _json_ready_records, which STRIPS every
+    *_geometry_ids key, so we must read defect_placement's raw in-session stash instead."""
     try:
-        from utils_loc import pipeline
-        mr = getattr(pipeline, "_LAST_MODEL_RESULT", None)
-        if isinstance(mr, dict):
-            recs = (mr.get("defect") or {}).get("records")
-            if recs:
-                return recs
+        from utils_loc import defect_placement
+        recs = defect_placement.get_last_placed_records()
+        if recs:
+            return list(recs)
     except Exception:
         pass
-    try:
-        from utils_loc.defect_record_store import load_defect_record_payload_from_document
-        payload = load_defect_record_payload_from_document() or {}
-        return payload.get("records") or []
-    except Exception:
-        return []
+    return []
 
 
 def apply_spalling_host_color(selected_materials, cfg, rng):
