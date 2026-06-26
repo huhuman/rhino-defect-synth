@@ -21,10 +21,10 @@ import rhinoscriptsyntax as rs
 from utils_loc.materials import (
     build_material_from_texture_bitmaps,
     find_texture_bitmaps,
-    add_material_to_render_table,
 )
 
 _MATERIAL_CACHE = {}   # ("host", host_name) -> basic material index (per document/model)
+_DIAG_LOGGED = False
 
 _SPALL_RECORD_TYPES = ("spalling", "exposed_rebar")
 
@@ -32,31 +32,49 @@ _SPALL_RECORD_TYPES = ("spalling", "exposed_rebar")
 def reset_material_cache():
     """Clear the per-document material-index cache. Call after a doc reset (materials are
     cleared there, so cached indices would be stale)."""
+    global _DIAG_LOGGED
     _MATERIAL_CACHE.clear()
+    _DIAG_LOGGED = False
 
 
 def get_or_create_host_material(host_name, proc_dir):
     """Build/import the host's tinted-gravel material (textured: albedo + normal + roughness)
     and return its basic-material index. Shared per host per document; -1 on failure/missing."""
+    global _DIAG_LOGGED
     key = ("host", str(host_name))
     if key in _MATERIAL_CACHE:
         return _MATERIAL_CACHE[key]
     base_color = os.path.join(proc_dir or "", "spallhost_{}_BaseColor.png".format(host_name))
     if not proc_dir or not os.path.isfile(base_color):
+        if not _DIAG_LOGGED:
+            _DIAG_LOGGED = True
+            try:
+                listing = os.listdir(proc_dir)[:3] if proc_dir and os.path.isdir(proc_dir) else "<no dir>"
+            except Exception as exc:  # noqa: BLE001
+                listing = "<listdir err: {}>".format(exc)
+            print("spalling host-color DIAG: host={!r} proc_dir={!r} isdir={} base={!r} "
+                  "isfile={} sample={}".format(
+                      host_name, proc_dir, os.path.isdir(proc_dir or ""),
+                      base_color, os.path.isfile(base_color), listing))
         return -1
     name = "spall_host_{}".format(host_name)
     idx = sc.doc.Materials.Find(name, True)
     if idx < 0:
         try:
             bitmaps = find_texture_bitmaps(base_color)
-            mat, status = build_material_from_texture_bitmaps(bitmaps, name)
-            add_material_to_render_table(
-                mat, material_name=name, make_unique=True,
-                texture_bitmaps=bitmaps, channel_status=status,
-            )
-            idx = sc.doc.Materials.Find(name, True)
+            mat, _status = build_material_from_texture_bitmaps(bitmaps, name)
+            mat.Name = name
+            # Add as a BASIC material directly (like the proven flat-colour path) so we get a
+            # real doc.Materials index to assign per-object — add_material_to_render_table made
+            # a RenderMaterial whose backing basic wasn't findable by name (silent -1 -> fallback).
+            idx = sc.doc.Materials.Add(mat)
         except Exception as exc:  # noqa: BLE001
             print("spalling host-color: tinted-gravel material failed for {} ({})".format(name, exc))
+            return -1
+        if idx is None or idx < 0:
+            if not _DIAG_LOGGED:
+                _DIAG_LOGGED = True
+                print("spalling host-color DIAG: Materials.Add returned {!r} for {}".format(idx, name))
             return -1
     _MATERIAL_CACHE[key] = idx
     return idx
