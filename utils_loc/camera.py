@@ -132,15 +132,6 @@ def _distance_samples_for_defect(distance_range, sample_count, size_cm, framing_
     return _distance_samples_from_range([start, stop], sample_count)
 
 
-def _direction_on_normal_hemisphere(normal: Sequence[float], max_jitter_degrees: float) -> Vec3:
-    direction = _normalize(normal)
-    if max_jitter_degrees > 0.0:
-        direction = _jitter_unit_vector(direction, max_jitter_degrees)
-    if _dot(direction, normal) < 0.0:
-        direction = _normalize(normal)
-    return direction
-
-
 def _jitter_unit_vector(direction: Sequence[float], max_angle_degrees: float) -> Vec3:
     """Perturb a unit direction vector by up to a given angle."""
     base = _normalize(direction)

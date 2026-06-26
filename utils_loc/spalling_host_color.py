@@ -37,13 +37,29 @@ def reset_material_cache():
     _DIAG_LOGGED = False
 
 
+def _basic_index_valid(idx, name):
+    """A cached basic-material index goes stale if the Materials table was cleared/reindexed
+    since it was cached (e.g. a per-render clear_imported_materials_from_doc when
+    material_reuse is off). Confirm the slot still holds our named material before reusing it."""
+    try:
+        if idx is None or idx < 0 or idx >= sc.doc.Materials.Count:
+            return False
+        mat = sc.doc.Materials[idx]
+        return mat is not None and not getattr(mat, "IsDeleted", False) and mat.Name == name
+    except Exception:
+        return False
+
+
 def get_or_create_host_material(host_name, proc_dir):
     """Build/import the host's tinted-gravel material (textured: albedo + normal + roughness)
     and return its basic-material index. Shared per host per document; -1 on failure/missing."""
     global _DIAG_LOGGED
+    name = "spall_host_{}".format(host_name)
     key = ("host", str(host_name))
-    if key in _MATERIAL_CACHE:
-        return _MATERIAL_CACHE[key]
+    cached = _MATERIAL_CACHE.get(key)
+    if cached is not None and _basic_index_valid(cached, name):
+        return cached
+    _MATERIAL_CACHE.pop(key, None)  # stale (table cleared/reindexed) -> rebuild below
     base_color = os.path.join(proc_dir or "", "spallhost_{}_BaseColor.png".format(host_name))
     if not proc_dir or not os.path.isfile(base_color):
         if not _DIAG_LOGGED:
@@ -57,7 +73,6 @@ def get_or_create_host_material(host_name, proc_dir):
                       host_name, proc_dir, os.path.isdir(proc_dir or ""),
                       base_color, os.path.isfile(base_color), listing))
         return -1
-    name = "spall_host_{}".format(host_name)
     idx = sc.doc.Materials.Find(name, True)
     if idx < 0:
         try:

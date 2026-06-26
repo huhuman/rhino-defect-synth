@@ -8,7 +8,6 @@ host they broke out of. Pure numpy/PIL/yaml — runs in WSL, no Rhino.
 See docs/superpowers/specs/2026-06-25-spalling-host-color-design.md
     docs/superpowers/plans/2026-06-26-spalling-host-color.md
 """
-import glob  # noqa: F401  (kept for ad-hoc use; os.walk is the primary scanner)
 import os
 
 import numpy as np
