@@ -61,7 +61,8 @@ def _sample_rows(rows, count, rng):
 def _crack_row_tokens(row):
     row = row or {}
     tokens = set()
-    for key in ("instance_id", "instance_mask_path", "polygon_json_path", "polygon_path"):
+    for key in ("instance_id", "instance_mask_path", "polygon_json_path", "polygon_path",
+                "instance_polygon_path"):
         raw = row.get(key)
         if raw is None:
             continue
@@ -76,6 +77,13 @@ def _crack_row_tokens(row):
 
 
 def _classify_crack_row_condition_state(row):
+    # Prefer an explicit `cs` column (crack_synth long_units-style libraries, where each row is
+    # one crack tagged CS1/CS2/CS3). Fall back to the dacl10k-style filename variants
+    # (_skeleton=CS1, _erodex1=CS2, raw=CS3) when no usable cs column is present. dacl10k's cs
+    # column already matches its filename tokens, so this is backward-compatible.
+    cs = str((row or {}).get("cs") or "").strip().upper()
+    if cs in ("CS1", "CS2", "CS3"):
+        return cs
     tokens = _crack_row_tokens(row)
     if "skeleton" in tokens:
         return "CS1"
@@ -112,7 +120,8 @@ def _to_polygon_json_path(instance_mask_path):
 def _resolve_polygon_path_from_row(row):
     row = row or {}
     base_dir = row.get("__overview_dir")
-    direct = row.get("polygon_json_path") or row.get("polygon_path")
+    direct = (row.get("polygon_json_path") or row.get("polygon_path")
+              or row.get("instance_polygon_path"))
     if direct:
         return _resolve_path_with_base(direct, base_dir=base_dir)
     polygon_path = _to_polygon_json_path(row.get("instance_mask_path"))
@@ -196,7 +205,12 @@ def _resolve_reference_metric_px(runtime, defect_type, row, polygon_payload):
     polygon_payload = polygon_payload or {}
 
     if defect_type == "crack":
+        # width_px is the crack WIDTH in px. long_units_v1 named it width_px; long_units_v2
+        # names it ref_width_px (and the polygon JSON's width_px is the long SPAN, not the
+        # crack width) -> prefer the row's explicit crack-width column under either name.
         ref = runtime._to_optional_float(row.get("width_px"))
+        if not (ref and ref > 0.0):
+            ref = runtime._to_optional_float(row.get("ref_width_px"))
         if ref and ref > 0.0:
             return ref
     elif defect_type == "spalling":
@@ -348,7 +362,9 @@ def _sample_crack_profile(runtime, defect_cfg, rng):
     elif cs_level == "CS2":
         width_cm = runtime._uniform_sample(rng, t1, t2)
     else:
-        width_cm = runtime._uniform_sample(rng, t2, 20.0 * t2)
+        # CS3 upper bound 20*t2 -> 5*t2 (2026-06-24): with the long-crack library a wide CS3
+        # started reading like a spall; 5*t2 keeps it crack-like. t1/t2 themselves unchanged.
+        width_cm = runtime._uniform_sample(rng, t2, 5.0 * t2)
     return {
         "condition_state": cs_level,
         "target_metric_cm": max(1e-6, float(width_cm)),
