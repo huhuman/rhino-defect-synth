@@ -7,6 +7,8 @@ from typing import Iterable, List, Mapping, Sequence, Tuple
 import rhinoscriptsyntax as rs
 import scriptcontext as sc
 
+from utils_loc.camera_geometry import sample_view_direction
+
 Vec3 = Tuple[float, float, float]
 
 
@@ -324,6 +326,10 @@ def generate_defect_camera_poses(
     framing_factor: float = 0.0,
     occlusion_test=None,
     max_visible_attempts: int = 10,
+    min_visible_size_ratio: float = 0.0,
+    framing_factor_by_type: Mapping[str, float] = None,
+    oblique_angle_range: Sequence[float] = None,
+    head_on_fraction: float = 0.0,
 ) -> List[Mapping[str, Vec3]]:
     """
     Generate camera poses on the defect-normal hemisphere around each defect.
@@ -344,9 +350,25 @@ def generate_defect_camera_poses(
     if not range_map:
         raise ValueError("Component camera distance_ranges is required.")
     jitter_deg = max(0.0, float(direction_jitter_degrees))
+    oblique = None
+    if oblique_angle_range and len(list(oblique_angle_range)) == 2:
+        lo, hi = float(oblique_angle_range[0]), float(oblique_angle_range[1])
+        if hi > 0.0:
+            oblique = (max(0.0, min(lo, hi)), max(lo, hi))
+    head_on_frac = min(1.0, max(0.0, float(head_on_fraction or 0.0)))
+    # Per-type framing_factor: lets cracks use a much larger factor (≈ fx/target_px) so the
+    # camera distance ≈ constant apparent WIDTH -> thin cracks shot close, wide ones farther,
+    # while efflore/spalling keep the small global factor. Falls back to framing_factor.
+    ff_by_type = {
+        str(key or "").strip().lower(): float(value)
+        for key, value in dict(framing_factor_by_type or {}).items()
+        if str(key or "").strip()
+    }
 
     poses = []
     skipped_occluded = 0
+    skipped_too_small = 0
+    min_vis_ratio = max(0.0, float(min_visible_size_ratio or 0.0))
     for defect_idx, defect in enumerate(defects):
         point = tuple(float(v) for v in defect["point"])
         normal = _normalize(defect["normal"])
@@ -358,10 +380,17 @@ def generate_defect_camera_poses(
                     defect_type or "unknown"
                 )
             )
+        ff = ff_by_type.get(defect_type, framing_factor)
         distances = _distance_samples_for_defect(
-            distance_range, count_per_defect, defect.get("size_cm"), framing_factor
+            distance_range, count_per_defect, defect.get("size_cm"), ff
         )
 
+        try:
+            size_cm = float(defect.get("size_cm")) if defect.get("size_cm") is not None else None
+        except (TypeError, ValueError):
+            size_cm = None
+
+        defect_poses = []  # list of (visibility_ratio_or_None, pose)
         for radius in distances:
             # Resample the hemisphere direction until the camera->defect line of sight
             # is unobstructed (occlusion_test returns False). Skip the pose if no clear
@@ -370,7 +399,9 @@ def generate_defect_camera_poses(
             out_dir = None
             pos = None
             for _attempt in range(attempts):
-                cand_dir = _direction_on_normal_hemisphere(normal, jitter_deg)
+                cand_dir = sample_view_direction(
+                    normal, oblique, head_on_frac, jitter_deg
+                )
                 cand_pos = tuple(point[i] + cand_dir[i] * float(radius) for i in range(3))
                 if occlusion_test is None or not occlusion_test(cand_pos, point):
                     out_dir, pos = cand_dir, cand_pos
@@ -380,24 +411,54 @@ def generate_defect_camera_poses(
                 continue
             target = point
             dir_vec = _normalize(target[i] - pos[i] for i in range(3))
-            poses.append(
-                {
-                    "position": pos,
-                    "target": target,
-                    "direction": dir_vec,
-                    "defect_index": defect_idx,
-                    "defect_point": point,
-                    "defect_normal": normal,
-                    "defect_type": defect.get("defect_type"),
-                    "instance_index": defect.get("instance_index"),
-                    "distance": float(radius),
-                }
+            vis_ratio = (
+                size_cm / float(radius)
+                if (size_cm is not None and size_cm > 0.0 and radius > 0.0)
+                else None
             )
+            defect_poses.append(
+                (
+                    vis_ratio,
+                    {
+                        "position": pos,
+                        "target": target,
+                        "direction": dir_vec,
+                        "defect_index": defect_idx,
+                        "defect_point": point,
+                        "defect_normal": normal,
+                        "defect_type": defect.get("defect_type"),
+                        "instance_index": defect.get("instance_index"),
+                        "distance": float(radius),
+                    },
+                )
+            )
+
+        # Drop poses where the defect projects too small to read (e.g. hairline cracks that
+        # stay sub-pixel even at the closest allowed distance -> empty/near-blank frames).
+        # Hard filter: a defect whose every pose is below threshold contributes NO frames, so
+        # invisible cracks don't waste renders. size_cm is the visibility-limiting dimension
+        # (crack WIDTH); ratio = size_cm / distance. Lower the threshold to keep finer cracks.
+        # (Large defects -- efflore/spalling -- always clear the threshold, so models never
+        # come up empty.)
+        if min_vis_ratio > 0.0 and defect_poses:
+            kept = [rp for rp in defect_poses if rp[0] is None or rp[0] >= min_vis_ratio]
+            skipped_too_small += len(defect_poses) - len(kept)
+            defect_poses = kept
+
+        for _ratio, pose in defect_poses:
+            poses.append(pose)
 
     if occlusion_test is not None and skipped_occluded:
         print(
             "Component camera: skipped {} occluded poses (no clear line of sight); kept {}.".format(
                 skipped_occluded, len(poses)
+            )
+        )
+    if min_vis_ratio > 0.0 and skipped_too_small:
+        print(
+            "Component camera: skipped {} poses below min_visible_size_ratio={} "
+            "(defect too small in frame; sub-threshold defects produce no frames); kept {}.".format(
+                skipped_too_small, min_vis_ratio, len(poses)
             )
         )
     return poses
