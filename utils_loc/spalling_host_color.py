@@ -1,104 +1,62 @@
-"""Assign host-derived pure-colour materials to spall cavities (render-only).
+"""Assign host-tinted gravel materials to spall cavities (render-only).
 
-Spall cavities keep their `defect::spalling` / `defect::exposed_rebar::*::spalling` layer
-(the mask plugin paints the flat LAYER colour, so labels are unchanged) but get a per-OBJECT
-material whose colour is derived from the host surface's selected material — so a spall reads
-as the same concrete broken open instead of a clashing random gravel texture.
+Spall cavities keep their `defect::spalling` / `defect::exposed_rebar::*::spalling` layer (the
+mask plugin paints the flat LAYER colour, so labels are unchanged) but get a per-OBJECT
+material: a gravel PBR texture (its normal/roughness relief preserved) whose albedo is tinted
+toward the host surface's selected material — so a spall reads as the same concrete broken
+open, with aggregate texture + depth, instead of a clashing random gravel OR a flat colour patch.
 
-Materials are BASIC materials (DiffuseColor + PBR base colour, matte), shared by colour and
-assigned via object material source/index. Only a handful (one per distinct host colour) are
-created per model; they are cleared at reset like other materials (call reset_material_cache
-after each reset). Pure-colour route — no texture files.
+The tinted-gravel texture sets are generated offline by `tools/spalling/tinted_gravel.py` into
+`proc_texture_dir` as `spallhost_<hostName>_BaseColor/_Normal/_Roughness…`. Only a handful of
+materials (one per distinct host) are imported per model; they are cleared at reset like other
+materials (call reset_material_cache after each reset).
 
-See docs/superpowers/specs/2026-06-25-spalling-host-color-design.md
+See docs/superpowers/specs/2026-06-26-depth-realism-oblique-camera-tinted-gravel-design.md
 """
-import json
 import os
 
-import System
-import Rhino
 import scriptcontext as sc
 import rhinoscriptsyntax as rs
 
-from utils_loc.materials import _enable_physically_based_material
+from utils_loc.materials import (
+    build_material_from_texture_bitmaps,
+    find_texture_bitmaps,
+    add_material_to_render_table,
+)
 
-_COLOR_TABLE = None
-_COLOR_TABLE_PATH = None
-_MATERIAL_CACHE = {}   # (r,g,b,roughness) -> basic material index (per document/model)
+_MATERIAL_CACHE = {}   # ("host", host_name) -> basic material index (per document/model)
 
 _SPALL_RECORD_TYPES = ("spalling", "exposed_rebar")
 
 
-def _resolve_table_path(path):
-    """Rhino's CWD is not the repo root, so a relative color_table_path fails. Resolve it
-    relative to the repo root (this module is <repo>/utils_loc/spalling_host_color.py)."""
-    if os.path.isfile(path):
-        return path
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidate = os.path.join(repo_root, path)
-    if os.path.isfile(candidate):
-        return candidate
-    return path  # fall through so open() raises a clear message with the original path
-
-
-def load_color_table(path):
-    """Load + cache the {material_name: [[r,g,b],...]} table. Returns {} on failure (but
-    does NOT cache the failure, so a later good path/file still loads)."""
-    global _COLOR_TABLE, _COLOR_TABLE_PATH
-    if _COLOR_TABLE and _COLOR_TABLE_PATH == path:
-        return _COLOR_TABLE
-    try:
-        with open(_resolve_table_path(path)) as fh:
-            _COLOR_TABLE = json.load(fh)
-        _COLOR_TABLE_PATH = path
-    except Exception as exc:  # noqa: BLE001
-        print("spalling host-color: could not load table {} ({})".format(path, exc))
-        return {}
-    return _COLOR_TABLE
-
-
 def reset_material_cache():
-    """Clear the per-document colour-material index cache. Call after a doc reset
-    (materials are cleared there, so cached indices would be stale)."""
+    """Clear the per-document material-index cache. Call after a doc reset (materials are
+    cleared there, so cached indices would be stale)."""
     _MATERIAL_CACHE.clear()
 
 
-def _color_material_name(rgb, roughness):
-    return "spall_host_{:02x}{:02x}{:02x}_r{:02d}".format(
-        int(rgb[0]), int(rgb[1]), int(rgb[2]), int(round(roughness * 10)))
-
-
-def get_or_create_color_material(rgb, roughness):
-    """Return a basic-material INDEX (doc.Materials) for (rgb, roughness), created once
-    per colour per document. DiffuseColor + matte + PBR base colour so it renders in
-    'Rendered'/ViewCapture. Returns -1 on failure."""
-    key = (int(rgb[0]), int(rgb[1]), int(rgb[2]), round(float(roughness), 2))
+def get_or_create_host_material(host_name, proc_dir):
+    """Build/import the host's tinted-gravel material (textured: albedo + normal + roughness)
+    and return its basic-material index. Shared per host per document; -1 on failure/missing."""
+    key = ("host", str(host_name))
     if key in _MATERIAL_CACHE:
         return _MATERIAL_CACHE[key]
-    name = _color_material_name(rgb, roughness)
+    base_color = os.path.join(proc_dir or "", "spallhost_{}_BaseColor.png".format(host_name))
+    if not proc_dir or not os.path.isfile(base_color):
+        return -1
+    name = "spall_host_{}".format(host_name)
     idx = sc.doc.Materials.Find(name, True)
     if idx < 0:
         try:
-            col = System.Drawing.Color.FromArgb(255, int(rgb[0]), int(rgb[1]), int(rgb[2]))
-            mat = Rhino.DocObjects.Material()
-            mat.Name = name
-            mat.DiffuseColor = col          # legacy display path
-            mat.SpecularColor = System.Drawing.Color.FromArgb(255, 255, 255, 255)
-            mat.Shine = 0.0                 # matte concrete
-            mat.Reflectivity = 0.0
-            _enable_physically_based_material(mat)
-            try:
-                pbr = getattr(mat, "PhysicallyBased", None)
-                if pbr is not None:
-                    pbr.BaseColor = Rhino.Display.Color4f(
-                        rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0, 1.0)
-                    pbr.Roughness = float(roughness)
-                    pbr.Metallic = 0.0
-            except Exception:               # PBR optional; DiffuseColor still applies
-                pass
-            idx = sc.doc.Materials.Add(mat)
+            bitmaps = find_texture_bitmaps(base_color)
+            mat, status = build_material_from_texture_bitmaps(bitmaps, name)
+            add_material_to_render_table(
+                mat, material_name=name, make_unique=True,
+                texture_bitmaps=bitmaps, channel_status=status,
+            )
+            idx = sc.doc.Materials.Find(name, True)
         except Exception as exc:  # noqa: BLE001
-            print("spalling host-color: material create failed for {} ({})".format(name, exc))
+            print("spalling host-color: tinted-gravel material failed for {} ({})".format(name, exc))
             return -1
     _MATERIAL_CACHE[key] = idx
     return idx
@@ -130,14 +88,13 @@ def _load_defect_records():
     return []
 
 
-def apply_spalling_host_color(selected_materials, cfg, rng):
-    """Colour each spall cavity from its host surface's selected material. Render-only;
-    layers/masks untouched. Never raises."""
+def apply_spalling_host_color(selected_materials, cfg, rng=None):
+    """Give each spall cavity its host's tinted-gravel material. Render-only; layers/masks
+    untouched. Never raises. (rng kept for signature compatibility; unused.)"""
     if not cfg or not cfg.get("enabled"):
         return {"enabled": False}
 
-    table = load_color_table(cfg.get("color_table_path", "configs/spalling_host_colors.json"))
-    roughness = float(cfg.get("roughness", 0.9))
+    proc_dir = cfg.get("proc_texture_dir", "")
     selected_materials = dict(selected_materials or {})
 
     records = _load_defect_records()
@@ -152,12 +109,7 @@ def apply_spalling_host_color(selected_materials, cfg, rng):
         if not spall_ids:
             continue
         host_mat = selected_materials.get(rec.get("surface_layer"))
-        variants = table.get(host_mat) if host_mat else None
-        if not variants:
-            fell_back += 1
-            continue
-        rgb = variants[rng.randint(0, len(variants) - 1)]
-        mat_index = get_or_create_color_material(rgb, roughness)
+        mat_index = get_or_create_host_material(host_mat, proc_dir) if host_mat else -1
         if mat_index < 0:
             fell_back += 1
             continue
