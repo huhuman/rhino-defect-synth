@@ -57,9 +57,9 @@ def _timestamp_prefix():
 def _timestamped_print(*args, **kwargs):
     if args:
         prefix = _timestamp_prefix() + " "
-        _ORIGINAL_PRINT(prefix, *args, sep=kwargs.get("sep", " "), end=kwargs.get("end", "\n"), file=kwargs.get("file"), flush=kwargs.get("flush", False))
+        _ORIGINAL_PRINT(prefix, *args, sep=kwargs.get("sep", " "), end=kwargs.get("end", "\n"), file=kwargs.get("file"), flush=kwargs.get("flush", True))
         return
-    _ORIGINAL_PRINT(_timestamp_prefix(), end=kwargs.get("end", "\n"), file=kwargs.get("file"), flush=kwargs.get("flush", False))
+    _ORIGINAL_PRINT(_timestamp_prefix(), end=kwargs.get("end", "\n"), file=kwargs.get("file"), flush=kwargs.get("flush", True))
 
 
 def install_timestamped_print():

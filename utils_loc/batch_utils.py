@@ -43,7 +43,10 @@ class TeeWriter:
 
 
 def start_batch_logging(log_path):
-    log_file = open(log_path, "w", encoding="utf-8")
+    # Line-buffered (buffering=1) so each logged line hits disk immediately. Without this the
+    # batch_log stays empty while a model churns, so a hang (e.g. a pathological defect carve)
+    # is invisible/undiagnosable -- which is exactly what happened in run 20260626_183434.
+    log_file = open(log_path, "w", encoding="utf-8", buffering=1)
     stdout_backup = sys.stdout
     stderr_backup = sys.stderr
     sys.stdout = TeeWriter(stdout_backup, log_file)
@@ -591,6 +594,13 @@ def resolve_stability_cfg(nested_cfg):
             raw.get("max_render_passes_per_run", 0)
         ),
         "max_basic_materials": to_non_negative_int(raw.get("max_basic_materials", 0)),
+        # Per-model mask-coverage gate: if a render pass's masks are >this-fraction blank
+        # (mean non-background pixels below threshold), stop the run safely instead of
+        # generating hours of label-less frames. 0 disables. See the 2026-06-20 blank-mask
+        # root cause (DrawToBitmap GL-context loss when the display sleeps overnight).
+        "min_mask_foreground_frac": to_non_negative_float(
+            raw.get("min_mask_foreground_frac", 0.0)
+        ),
         "log_memory": bool(raw.get("log_memory", True)),
     }
 
@@ -612,8 +622,66 @@ def resolve_stability_cfg(nested_cfg):
                 "max_private_memory_mb": 0.0,
                 "max_render_passes_per_run": 0,
                 "max_basic_materials": 0,
+                "min_mask_foreground_frac": 0.0,
                 "log_memory": False,
             }
         )
 
     return cfg
+
+
+def mask_foreground_fraction(mask_path, grid_step=24):
+    """Fraction of non-background (non-white) pixels in a mask PNG, sampled on a coarse
+    grid via System.Drawing (always present in Rhino's .NET runtime). The mask plugin
+    paints visible component/defect objects with their layer colour on a white background,
+    so a healthy frame is mostly non-white and a blank (all-white) capture reads ~0.0.
+    Returns None if the file is missing/unreadable."""
+    if not mask_path or not os.path.isfile(mask_path):
+        return None
+    try:
+        from System.Drawing import Bitmap
+    except Exception:
+        return None
+    bmp = None
+    try:
+        bmp = Bitmap(mask_path)
+        w, h = bmp.Width, bmp.Height
+        if w <= 0 or h <= 0:
+            return None
+        total = 0
+        fg = 0
+        y = 0
+        while y < h:
+            x = 0
+            while x < w:
+                c = bmp.GetPixel(x, y)
+                total += 1
+                if not (c.R >= 250 and c.G >= 250 and c.B >= 250):
+                    fg += 1
+                x += grid_step
+            y += grid_step
+        return (float(fg) / total) if total else None
+    except Exception:
+        return None
+    finally:
+        if bmp is not None:
+            try:
+                bmp.Dispose()
+            except Exception:
+                pass
+
+
+def sample_mask_foreground(mask_paths, max_samples=6):
+    """Mean mask foreground fraction across a sample of mask file paths.
+    Returns (mean_fraction, n_sampled); (None, 0) when no readable masks exist."""
+    paths = [p for p in (mask_paths or []) if p]
+    if not paths:
+        return (None, 0)
+    step = max(1, len(paths) // max_samples)
+    sampled = paths[::step][:max_samples]
+    fracs = [
+        f for f in (mask_foreground_fraction(p) for p in sampled) if f is not None
+    ]
+    if not fracs:
+        return (None, 0)
+    return (sum(fracs) / len(fracs), len(fracs))
