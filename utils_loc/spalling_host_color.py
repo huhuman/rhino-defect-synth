@@ -116,25 +116,44 @@ def _assign_object_material(obj_id, mat_index):
         return False
 
 
+def _load_defect_records():
+    """Prefer the in-memory model result (the exact object create_model built — no fragile
+    document user-text round-trip); fall back to the document-cached payload."""
+    try:
+        from utils_loc import pipeline
+        mr = getattr(pipeline, "_LAST_MODEL_RESULT", None)
+        if isinstance(mr, dict):
+            recs = (mr.get("defect") or {}).get("records")
+            if recs:
+                return recs
+    except Exception:
+        pass
+    try:
+        from utils_loc.defect_record_store import load_defect_record_payload_from_document
+        payload = load_defect_record_payload_from_document() or {}
+        return payload.get("records") or []
+    except Exception:
+        return []
+
+
 def apply_spalling_host_color(selected_materials, cfg, rng):
-    """Colour each spall cavity from its host surface's selected material. Reads the cached
-    defect records from the document. Render-only; layers/masks untouched. Never raises."""
+    """Colour each spall cavity from its host surface's selected material. Render-only;
+    layers/masks untouched. Never raises."""
     if not cfg or not cfg.get("enabled"):
         return {"enabled": False}
-
-    from utils_loc.defect_record_store import load_defect_record_payload_from_document
 
     table = load_color_table(cfg.get("color_table_path", "configs/spalling_host_colors.json"))
     roughness = float(cfg.get("roughness", 0.9))
     selected_materials = dict(selected_materials or {})
 
-    payload = load_defect_record_payload_from_document() or {}
-    records = payload.get("records") or []
+    records = _load_defect_records()
     recoloured = 0
     fell_back = 0
+    spall_seen = 0
     for rec in records:
         if not isinstance(rec, dict) or rec.get("type") not in _SPALL_RECORD_TYPES:
             continue
+        spall_seen += 1
         spall_ids = rec.get("spall_geometry_ids") or rec.get("geometry_ids") or []
         if not spall_ids:
             continue
@@ -151,6 +170,8 @@ def apply_spalling_host_color(selected_materials, cfg, rng):
         for oid in spall_ids:
             if _assign_object_material(oid, mat_index):
                 recoloured += 1
-    print("spalling host-color: {} cavities recoloured, {} fell back".format(
-        recoloured, fell_back))
-    return {"enabled": True, "recoloured": recoloured, "fell_back": fell_back}
+    print("spalling host-color: {} cavities recoloured, {} fell back "
+          "({} spall recs / {} total)".format(
+              recoloured, fell_back, spall_seen, len(records)))
+    return {"enabled": True, "recoloured": recoloured, "fell_back": fell_back,
+            "spall_records": spall_seen, "total_records": len(records)}
