@@ -13,6 +13,7 @@ after each reset). Pure-colour route — no texture files.
 See docs/superpowers/specs/2026-06-25-spalling-host-color-design.md
 """
 import json
+import os
 
 import System
 import Rhino
@@ -28,18 +29,31 @@ _MATERIAL_CACHE = {}   # (r,g,b,roughness) -> basic material index (per document
 _SPALL_RECORD_TYPES = ("spalling", "exposed_rebar")
 
 
+def _resolve_table_path(path):
+    """Rhino's CWD is not the repo root, so a relative color_table_path fails. Resolve it
+    relative to the repo root (this module is <repo>/utils_loc/spalling_host_color.py)."""
+    if os.path.isfile(path):
+        return path
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate = os.path.join(repo_root, path)
+    if os.path.isfile(candidate):
+        return candidate
+    return path  # fall through so open() raises a clear message with the original path
+
+
 def load_color_table(path):
-    """Load + cache the {material_name: [[r,g,b],...]} table. Returns {} on failure."""
+    """Load + cache the {material_name: [[r,g,b],...]} table. Returns {} on failure (but
+    does NOT cache the failure, so a later good path/file still loads)."""
     global _COLOR_TABLE, _COLOR_TABLE_PATH
-    if _COLOR_TABLE is not None and _COLOR_TABLE_PATH == path:
+    if _COLOR_TABLE and _COLOR_TABLE_PATH == path:
         return _COLOR_TABLE
     try:
-        with open(path) as fh:
+        with open(_resolve_table_path(path)) as fh:
             _COLOR_TABLE = json.load(fh)
+        _COLOR_TABLE_PATH = path
     except Exception as exc:  # noqa: BLE001
         print("spalling host-color: could not load table {} ({})".format(path, exc))
-        _COLOR_TABLE = {}
-    _COLOR_TABLE_PATH = path
+        return {}
     return _COLOR_TABLE
 
 
