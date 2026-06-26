@@ -491,6 +491,12 @@ def run(
             with suspend_view_updates():
                 set_batch_work_view()
                 main_entry.reset()
+            # reset() clears materials, so drop cached spall-colour material indices.
+            try:
+                from utils_loc.spalling_host_color import reset_material_cache
+                reset_material_cache()
+            except Exception:
+                pass
             stability_wait(
                 wait_ms=stability_cfg["wait_after_reset_ms"],
                 redraw=True,
@@ -557,6 +563,20 @@ def run(
                             "selected_material_metadata"
                         ),
                     )
+
+                # Host-aware spall colour: recolour spall cavities to match the host
+                # surface's selected material (render-only; layers/masks unchanged).
+                host_color_cfg = preparation_params.get("spalling_host_color")
+                if host_color_cfg and host_color_cfg.get("enabled"):
+                    try:
+                        from utils_loc.spalling_host_color import apply_spalling_host_color
+                        apply_spalling_host_color(
+                            prepare_result.get("selected_materials"),
+                            host_color_cfg,
+                            rng,
+                        )
+                    except Exception as exc:  # never break the render loop
+                        print("spalling host-color: skipped ({})".format(exc))
 
                 render_params = sample_rendering_params(
                     base_rendering=base_rendering,
