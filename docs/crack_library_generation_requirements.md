@@ -7,11 +7,11 @@ fix it **at the source** so the pipeline runs cleanly. (The pipeline also has a 
 backstop, but the library should not rely on it.)
 
 ## 1. Point count per polygon — THE root fix
-- **Cap each crack outline at ≤ 300 vertices** (v1 ran ~200, max 334, and was fine).
+- **Cap each crack outline at ≤ 500 vertices** (v1 ran ~200, max 334, and was fine).
 - Decimate at generation with **Douglas–Peucker** (shape-preserving), tolerance ≈ 0.3–0.5 × the
   crack width in px — this drops the dense collinear points along the length while keeping the
   jagged turns. Do NOT uniform-subsample so aggressively that corners round off.
-- Target ~150–300 pts; hard ceiling 300.
+- Target ~350–450 pts; hard ceiling 500. (long_units_v2 after fix: med 440, max 500 — good.)
 
 ## 2. Length / aspect — second root fix
 - The pipeline's rendered crack **length = (config crack width) × aspect**, where
@@ -49,7 +49,7 @@ Polygon JSON: `{"polygons": [[[x,y],[x,y],...]], "width_px": <int>, "height_px":
   add CS1 instances (thin, short).
 
 ## Quick acceptance check before handing over a new library
-- `max vertices over all polygons ≤ 300`
+- `max vertices over all polygons ≤ 500`
 - `max aspect ≤ 2000`
 - all `instance_polygon_path` resolve + every polygon is closed & simple
 - spot-render 5 cracks: jagged, correct width, length ≤ ~2.5 m, no carve hang.
