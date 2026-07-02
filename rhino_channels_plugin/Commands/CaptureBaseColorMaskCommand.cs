@@ -51,6 +51,7 @@ namespace RhinoChannelsPlugin.Commands
         private sealed class MaskCaptureConduit : DisplayConduit
         {
             private readonly Guid _viewportId;
+            private readonly string _viewportName;
             private readonly IReadOnlyList<MaskObjectEntry> _entries;
             private readonly HashSet<Guid> _objectIds;
             private readonly Color _backgroundColor;
@@ -58,6 +59,7 @@ namespace RhinoChannelsPlugin.Commands
             public MaskCaptureConduit(RhinoView view, IReadOnlyList<MaskObjectEntry> entries, Color backgroundColor)
             {
                 _viewportId = view.ActiveViewport.Id;
+                _viewportName = view.ActiveViewport.Name;
                 _entries = entries;
                 _backgroundColor = backgroundColor;
                 _objectIds = new HashSet<Guid>();
@@ -67,7 +69,19 @@ namespace RhinoChannelsPlugin.Commands
 
             private bool IsTargetViewport(RhinoViewport viewport)
             {
-                return viewport != null && viewport.Id == _viewportId;
+                if (viewport == null)
+                    return false;
+                if (viewport.Id == _viewportId)
+                    return true;
+                // ViewCapture renders through a CLONED viewport whose Id differs from the
+                // live one, so an Id-only match would skip the conduit and yield a blank
+                // mask. Match the clone via its parent view or viewport name so the false
+                // colours still draw off-screen (the path that survives display sleep/lock).
+                var parent = viewport.ParentView;
+                if (parent != null && parent.ActiveViewportID == _viewportId)
+                    return true;
+                return !string.IsNullOrEmpty(_viewportName)
+                    && string.Equals(viewport.Name, _viewportName, StringComparison.Ordinal);
             }
 
             protected override void ObjectCulling(CullObjectEventArgs e)
@@ -264,9 +278,27 @@ namespace RhinoChannelsPlugin.Commands
 
         private static Bitmap CaptureMaskBitmap(RhinoView view, int width, int height)
         {
-            var bitmap = DisplayPipeline.DrawToBitmap(view.ActiveViewport, width, height);
+            // Use ViewCapture (off-screen pipeline) instead of DisplayPipeline.DrawToBitmap.
+            // DrawToBitmap renders through the live window's GL context, which returns a blank
+            // (all-white) frame once the display sleeps/locks during an unattended overnight
+            // run -- observed 2026-06-20: masks went 100% white the moment the screen slept,
+            // while ViewCapture-based color and ZBufferCapture depth/normal kept rendering.
+            // ViewCapture executes display conduits, so the mask conduit still paints the
+            // false colours; the conduit's IsTargetViewport tolerates ViewCapture's clone.
+            var capture = new ViewCapture
+            {
+                Width = width,
+                Height = height,
+                ScaleScreenItems = false,
+                DrawAxes = false,
+                DrawGrid = false,
+                DrawGridAxes = false,
+                TransparentBackground = false,
+            };
+
+            var bitmap = capture.CaptureToBitmap(view);
             if (bitmap == null)
-                throw new InvalidOperationException("DisplayPipeline.DrawToBitmap returned no bitmap.");
+                throw new InvalidOperationException("ViewCapture.CaptureToBitmap returned no bitmap.");
             return bitmap;
         }
 

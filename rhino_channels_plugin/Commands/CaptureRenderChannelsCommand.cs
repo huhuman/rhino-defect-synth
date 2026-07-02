@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 using Rhino;
 using Rhino.Commands;
@@ -154,8 +155,8 @@ namespace RhinoChannelsPlugin.Commands
                 LogMinMax("Depth", depth);
                 LogMinMax("Normal", normal);
 
-                WritePfm(depthPath, outWidth, outHeight, 1, depth);
-                WritePfm(normalPath, outWidth, outHeight, 3, normal);
+                WriteNpz(depthPath, outWidth, outHeight, 1, depth);
+                WriteNpz(normalPath, outWidth, outHeight, 3, normal);
 
                 LogVerbose($"CaptureRenderChannels: wrote '{depthPath}' and '{normalPath}'.");
                 return Result.Success;
@@ -377,22 +378,54 @@ namespace RhinoChannelsPlugin.Commands
             return mapped;
         }
 
-        private static void WritePfm(string path, int width, int height, int channels, float[] data)
+        // Write the buffer as a compressed .npz (numpy) instead of raw 32-bit PFM, so the
+        // dataset is small at the source (no transient 500 GB / no post-process). The .npz
+        // contains one deflate-compressed .npy entry named "depth" or "normal". Depth stays
+        // float32 (lossless; avoids fp16 overflow->inf for far-background depth > 65504 cm),
+        // normal is float16 (unit vectors, ~2e-4 error). Data order is C-order top-to-bottom
+        // (same as the old PFM byte order), so np.load(path)["depth"|"normal"] matches the
+        // image/label rasters with no flip. Downstream: np.load(path)[key].
+        private static void WriteNpz(string path, int width, int height, int channels, float[] data)
         {
             var dir = Path.GetDirectoryName(path);
-            if (string.IsNullOrEmpty(dir))
-                dir = ".";
-            Directory.CreateDirectory(dir);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
 
-            var header = channels == 3
-                ? string.Format(CultureInfo.InvariantCulture, "PF\n{0} {1}\n-1.0\n", width, height)
-                : string.Format(CultureInfo.InvariantCulture, "Pf\n{0} {1}\n-1.0\n", width, height);
+            bool asHalf = channels == 3;                       // normal -> fp16, depth -> fp32
+            string key = channels == 3 ? "normal" : "depth";
+            string shape = channels == 3
+                ? string.Format(CultureInfo.InvariantCulture, "({0}, {1}, {2})", height, width, channels)
+                : string.Format(CultureInfo.InvariantCulture, "({0}, {1})", height, width);
+            string dict = string.Format(
+                CultureInfo.InvariantCulture,
+                "{{'descr': '{0}', 'fortran_order': False, 'shape': {1}, }}",
+                asHalf ? "<f2" : "<f4",
+                shape);
+            // npy v1.0: 10-byte preamble + header string; pad header so total is a multiple of 64.
+            int pad = (64 - ((10 + dict.Length + 1) % 64)) % 64;
+            byte[] headerBytes = Encoding.ASCII.GetBytes(dict + new string(' ', pad) + "\n");
 
             using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
-            using var bw = new BinaryWriter(fs, Encoding.ASCII, false);
-            bw.Write(Encoding.ASCII.GetBytes(header));
-            for (var i = 0; i < data.Length; i++)
-                bw.Write(data[i]);
+            using var zip = new ZipArchive(fs, ZipArchiveMode.Create);
+            var entry = zip.CreateEntry(key + ".npy", CompressionLevel.Optimal);
+            using var es = entry.Open();
+            using var bw = new BinaryWriter(es);
+            bw.Write((byte)0x93);
+            bw.Write(Encoding.ASCII.GetBytes("NUMPY"));
+            bw.Write((byte)1);
+            bw.Write((byte)0);
+            bw.Write((ushort)headerBytes.Length);
+            bw.Write(headerBytes);
+            if (asHalf)
+            {
+                for (var i = 0; i < data.Length; i++)
+                    bw.Write(BitConverter.HalfToInt16Bits((Half)data[i]));   // 2 bytes LE per value
+            }
+            else
+            {
+                for (var i = 0; i < data.Length; i++)
+                    bw.Write(data[i]);                                       // 4 bytes LE per value
+            }
         }
 
         private static void LogMinMax(string label, float[] data)
