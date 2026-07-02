@@ -12,12 +12,17 @@ from utils_loc.materials import (
     set_material_reuse_enabled,
 )
 from utils_loc.layers import create_layers
+from utils_loc.environment import ensure_document_environment
 from utils_loc.cube_modeling import create_cube
 from utils_loc.component_modeling import create_bridge_component
 from utils_loc.defect_placement import apply_defect_pipeline, get_active_defect_requests
 from utils_loc.defect_record_store import store_defect_record_payload
 from utils_loc.plugin_autoload import ensure_plugin_commands
-from utils_loc.texture_mapping import apply_component_texture_mapping, apply_efflore_texture_mapping
+from utils_loc.texture_mapping import (
+    apply_component_texture_mapping,
+    apply_efflore_texture_mapping,
+    apply_spalling_texture_mapping,
+)
 
 import importlib
 render = importlib.import_module("utils_loc.render")
@@ -82,6 +87,8 @@ def _summarize_defect_record_for_log(record):
         "target_metric_cm": _round_if_number(record.get("target_metric_cm")),
         "metric_scale": _round_if_number(record.get("metric_scale")),
         "has_exposed_rebar": bool(record.get("has_exposed_rebar", False)),
+        # crack_tangent presence proves the azimuth-aware placement code is loaded (debug aid).
+        "crack_tangent": _round_vec3(record.get("crack_tangent")) if record.get("crack_tangent") else None,
     }
 
     for metric_key in ("crack_metrics", "efflore_metrics", "spall_metrics", "rebar_metrics"):
@@ -213,12 +220,155 @@ def prepare(params=None):
     }
 
 
+def _apply_document_environment(params, strategy):
+    """Set document tolerance/units from config before building geometry.
+
+    Reads ``tolerance_mm`` / ``units`` from the active strategy's config block, falling
+    back to the modeling-level keys. Absent keys leave the document untouched, so this is
+    a no-op (and thus safe for existing runs) unless the config opts in. Per-strategy so
+    a large component model and a small cube model can each pick their own tolerance.
+    """
+    strat_cfg = params.get(strategy)
+    strat_cfg = strat_cfg if isinstance(strat_cfg, dict) else {}
+    tolerance_mm = strat_cfg.get("tolerance_mm", params.get("tolerance_mm"))
+    units = strat_cfg.get("units", params.get("units"))
+    if tolerance_mm is None and units is None:
+        return
+    try:
+        applied = ensure_document_environment(
+            units=units,
+            tolerances={"absolute": tolerance_mm} if tolerance_mm is not None else None,
+        )
+    except Exception as exc:
+        print("Document environment setup skipped ({}): {}".format(strategy, exc))
+        return
+    if applied:
+        print("Document environment applied for {}: {}".format(strategy, applied))
+
+
+def _audit_component_surface_normals():
+    """DEBUG (modeling-only): verify component surface normals point OUTWARD — independent of defects.
+
+    Component faces are built as LOOSE planar surfaces (not joined solids), but each component's
+    surfaces still enclose a closed shell. We build ONE combined mesh from every component:: surface,
+    then for each surface evaluate the RAW normal (the SAME one defect placement consumes via
+    rs.SurfaceNormal — no orientation correction) at mid-uv, offset a test point a hair along it, and
+    parity-count ray intersections with the combined shell. ODD => the test point is inside the
+    structure => the surface normal points INWARD (a winding bug — a defect here grows into the
+    structure / camera renders the interior). Per-layer inward counts localise the mis-oriented part.
+    (Caveat: faces flush against a NEIGHBOUR component can read as inward — but free, visible faces,
+    e.g. piers, are unaffected, so a high pier count is a real orientation bug.)"""
+    try:
+        import Rhino
+        import scriptcontext as sc
+        from collections import defaultdict
+
+        layers = sc.doc.Layers
+        struct = Rhino.Geometry.Mesh()
+        comp_objs = []
+
+        def _mesh_geo(geo):
+            meshes = []
+            try:
+                brep = None
+                if isinstance(geo, Rhino.Geometry.Brep):
+                    brep = geo
+                elif isinstance(geo, Rhino.Geometry.Extrusion):
+                    brep = geo.ToBrep()
+                elif isinstance(geo, Rhino.Geometry.Surface):
+                    brep = geo.ToBrep()
+                if brep is not None:
+                    meshes = list(Rhino.Geometry.Mesh.CreateFromBrep(brep, Rhino.Geometry.MeshingParameters.Default) or [])
+            except Exception:
+                meshes = []
+            return [m for m in meshes if m]
+
+        def _faces(geo):
+            try:
+                if isinstance(geo, Rhino.Geometry.Brep):
+                    return list(geo.Faces)
+                if isinstance(geo, Rhino.Geometry.Extrusion):
+                    b = geo.ToBrep()
+                    return list(b.Faces) if b else []
+                if isinstance(geo, Rhino.Geometry.Surface):
+                    return [geo]
+            except Exception:
+                pass
+            return []
+
+        for obj in sc.doc.Objects:
+            try:
+                li = obj.Attributes.LayerIndex
+                if li < 0 or li >= layers.Count:
+                    continue
+                lp = str(layers[li].FullPath or "")
+                if not lp.startswith("component::"):
+                    continue
+                added = False
+                for m in (obj.GetMeshes(Rhino.Geometry.MeshType.Render) or []):
+                    if m:
+                        struct.Append(m)
+                        added = True
+                if not added:
+                    for m in _mesh_geo(obj.Geometry):
+                        struct.Append(m)
+                comp_objs.append((obj, lp))
+            except Exception:
+                continue
+        if struct.Faces.Count == 0 or not comp_objs:
+            print("COMPONENT NORMAL AUDIT: no component meshes found; skipping")
+            return
+
+        mesh_line = Rhino.Geometry.Intersect.Intersection.MeshLine
+        by_layer = defaultdict(lambda: [0, 0])  # layer -> [inward_faces, total_faces]
+        samples = []
+        FAR = 1.0e5
+
+        for obj, lp in comp_objs:
+            lay = lp.split("::")[-1]
+            for f in _faces(obj.Geometry):
+                try:
+                    u = f.Domain(0).Mid
+                    v = f.Domain(1).Mid
+                    pt = f.PointAt(u, v)
+                    nrm = f.NormalAt(u, v)  # RAW surface normal (matches rs.SurfaceNormal / defect path)
+                    if not nrm.Unitize():
+                        continue
+                    by_layer[lay][1] += 1
+                    test = Rhino.Geometry.Point3d(pt.X + nrm.X * 0.02, pt.Y + nrm.Y * 0.02, pt.Z + nrm.Z * 0.02)
+                    end = Rhino.Geometry.Point3d(test.X + nrm.X * FAR, test.Y + nrm.Y * FAR, test.Z + nrm.Z * FAR)
+                    hits = mesh_line(struct, Rhino.Geometry.Line(test, end))
+                    npts = 0
+                    if hits is not None:
+                        try:
+                            npts = len(hits)
+                        except Exception:
+                            try:
+                                npts = len(hits[0])
+                            except Exception:
+                                npts = 0
+                    if npts % 2 == 1:  # test point inside the structure => raw normal points inward
+                        by_layer[lay][0] += 1
+                        if len(samples) < 4:
+                            samples.append("{}[{:.2f},{:.2f},{:.2f}]@({:.0f},{:.0f},{:.0f})".format(
+                                lay, nrm.X, nrm.Y, nrm.Z, pt.X, pt.Y, pt.Z))
+                except Exception:
+                    continue
+
+        summary = ", ".join("{}={}/{}".format(k, v[0], v[1]) for k, v in sorted(by_layer.items()))
+        print("COMPONENT NORMAL AUDIT (odd parity = INWARD-facing surface normal): {}{}".format(
+            summary, (" | inward=" + ", ".join(samples)) if samples else " | all outward"))
+    except Exception as exc:  # noqa: BLE001
+        print("COMPONENT NORMAL AUDIT failed: {}".format(exc))
+
+
 def create_model(params):
     """Create the model based on the provided parameters.
     Args:
         params (dict): Dictionary containing modeling parameters.
     """
     strategy = params["strategy"]
+    _apply_document_environment(params, strategy)
 
     global _LAST_MODEL_RESULT
 
@@ -254,6 +404,7 @@ def create_model(params):
                         item.get("offset_poly"),
                         item.get("diff_polys"),
                         inward_dir=inward,
+                        wall_slope_deg=cube_cfg.get("wall_slope_deg"),
                         layer_crack_extrusion=item.get("crack_layer") or "crack::CS1",
                         layer_erosion=item.get("crack_layer") or "crack::CS1",
                         layer_parent_surface="cube::face",
@@ -276,6 +427,8 @@ def create_model(params):
             raise ValueError("modeling.component is required when modeling.strategy='component'.")
 
         result = create_bridge_component(component_cfg, debug_cfg=debug_cfg)
+        if dict(debug_cfg or {}).get("audit_surface_normals", True):
+            _audit_component_surface_normals()
         defect_cfg = params.get("defect") or {}
         if get_active_defect_requests(defect_cfg):
             print("-------- Start Defect Placement -------")
@@ -306,6 +459,21 @@ def create_model(params):
                     efflore_texture_mapping_result.get("applied", 0),
                     efflore_texture_mapping_result.get("surface_objects", 0),
                     efflore_texture_mapping_result.get("skipped", 0),
+                )
+            )
+        spalling_texture_mapping_result = apply_spalling_texture_mapping(
+            defect_cfg=defect_cfg,
+            layer_material_metadata=_LAST_PREPARATION_LAYER_METADATA,
+        )
+        result["spalling_texture_mapping"] = spalling_texture_mapping_result
+        if spalling_texture_mapping_result.get("enabled"):
+            print(
+                "-------- Spalling/Rebar Texture Mapping ------- "
+                "(applied: {}, surfaces: {}, solids: {}, skipped: {})".format(
+                    spalling_texture_mapping_result.get("applied", 0),
+                    spalling_texture_mapping_result.get("surface_objects", 0),
+                    spalling_texture_mapping_result.get("solid_objects", 0),
+                    spalling_texture_mapping_result.get("skipped", 0),
                 )
             )
         texture_mapping_result = apply_component_texture_mapping(

@@ -767,12 +767,18 @@ def _build_single_hammerhead_pier(result, cfg, anchor_pt, road_dir, norm_dir):
 
     section1 = _hammerhead_section(anchor_pt, road_dir, norm_dir, -W / 2.0, H, V, hcfg)
     section2 = _hammerhead_section(anchor_pt, road_dir, norm_dir, W / 2.0, H, V, hcfg)
-    _add_polygon(result, "pier", pier_layer, list(reversed(section1)), cfg)
-    _add_polygon(result, "pier", pier_layer, section2, cfg)
+    # Winding fix: the previous point order produced surfaces whose underlying normal (what defect
+    # placement reads via rs.SurfaceNormal) pointed INWARD for every hammerhead face (confirmed 10/10
+    # per pier by the normal-audit parity test) — defects grew into the pier / the camera rendered the
+    # interior. Reversing each face's point order negates its planar normal, so all faces now point
+    # OUTWARD. (rs.FlipSurface only toggles brep-face OrientationIsReversed, which rs.SurfaceNormal
+    # ignores, so it could NOT fix this — the winding must be correct at construction.)
+    _add_polygon(result, "pier", pier_layer, section1, cfg)
+    _add_polygon(result, "pier", pier_layer, list(reversed(section2)), cfg)
 
     edge_count = min(len(section1), len(section2)) - 1
     for edge_idx in range(max(0, edge_count)):
-        quad = [section1[edge_idx], section1[edge_idx + 1], section2[edge_idx + 1], section2[edge_idx]]
+        quad = [section2[edge_idx], section2[edge_idx + 1], section1[edge_idx + 1], section1[edge_idx]]
         _add_polygon(result, "pier", pier_layer, quad, cfg)
 
 
