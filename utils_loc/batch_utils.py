@@ -398,16 +398,39 @@ def log_runtime_snapshot(label, enabled=False):
 # ---------------------------------------------------------------------------
 
 def memory_guard_triggered(stability_cfg, label=""):
+    """Stop-the-run guard on process memory.
+
+    `max_private_memory_mb` is the limit. `guard_metric` picks WHAT it limits:
+      - "private" (default): PrivateMemorySize64 — committed/reserved virtual bytes. Conservative:
+        this can sit far above resident RAM (e.g. 27 GB private while only ~7 GB is actually resident
+        during a high-res render spike), so it can stop a run that is NOT near physical-RAM OOM.
+      - "working_set": WorkingSet64 — physical RAM actually resident. The real OOM constraint; lets a
+        run keep going while reserved-but-not-resident virtual memory is high (e.g. 2048 textures).
+      - "max": trips on whichever of the two is higher (strictest).
+    Default stays "private" so existing runs are unchanged. Always logs BOTH so the gap is visible.
+    """
     limit_mb = float(stability_cfg.get("max_private_memory_mb") or 0.0)
     if limit_mb <= 0.0:
         return False
-    current_mb = private_memory_mb()
+    metric = str(stability_cfg.get("guard_metric") or "private").strip().lower()
+    private_mb = private_memory_mb()
+    ws_mb = working_set_mb()
+    if metric == "working_set":
+        current_mb = ws_mb
+    elif metric == "max":
+        vals = [v for v in (private_mb, ws_mb) if v is not None]
+        current_mb = max(vals) if vals else None
+    else:
+        metric = "private"
+        current_mb = private_mb
     if current_mb is None or current_mb < limit_mb:
         return False
     label = str(label or "runtime")
     print(
-        f"[stability] memory_guard_triggered at {label}: "
-        f"private_mem_mb={current_mb:.1f}, limit_mb={limit_mb:.1f}"
+        f"[stability] memory_guard_triggered at {label}: metric={metric} "
+        f"current_mb={current_mb:.1f}, limit_mb={limit_mb:.1f} "
+        f"(private_mb={private_mb if private_mb is None else round(private_mb,1)}, "
+        f"working_set_mb={ws_mb if ws_mb is None else round(ws_mb,1)})"
     )
     return True
 

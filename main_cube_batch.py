@@ -43,6 +43,7 @@ from utils_loc.batch_utils import (
     apply_batch_undo_policy,
     restore_batch_undo_policy,
     resolve_stability_cfg,
+    sample_mask_foreground,
 )
 
 install_timestamped_print()
@@ -346,6 +347,7 @@ def run(
         safe_resume_output_index = int(next_output_index)
         stop_after_preview = False
         stop_after_guard = False
+        mask_gate_failed = False
         render_pass_count = 0
         current_face_idx = None
         current_model_iter = None
@@ -422,7 +424,12 @@ def run(
             )
             with suspend_view_updates():
                 set_batch_work_view()
-                clear_imported_materials_from_doc()
+                # Materials-half memory fix (mirrors main_component_batch): when material_reuse is on,
+                # KEEP imported materials across models so textures decode once (the import path reuses
+                # by name) instead of re-decoding every model — the native-texture-cache leak that
+                # trips the memory guard. Off -> original per-model clear.
+                if not bool(preparation_params.get("material_reuse", False)):
+                    clear_imported_materials_from_doc()
                 model_prepare_params = dict(preparation_params)
                 if preparation_scope != "model_iter":
                     model_prepare_params["_import_materials"] = False
@@ -457,7 +464,8 @@ def run(
                     if should_prepare:
                         with suspend_view_updates():
                             set_batch_work_view()
-                            clear_imported_materials_from_doc()
+                            if not bool(preparation_params.get("material_reuse", False)):
+                                clear_imported_materials_from_doc()
                             prepare(dict(preparation_params))
                         prepared_for_render_iter = True
                         stability_wait(
@@ -503,6 +511,11 @@ def run(
                         camera_cfg["cube"] = cube_cfg
                         render_params["camera"] = camera_cfg
 
+                    mask_dir = os.path.join(batch_output_dir, "mask")
+                    pre_mask_files = (
+                        set(os.listdir(mask_dir)) if os.path.isdir(mask_dir) else set()
+                    )
+
                     captured_count, preview_used = _run_render_with_retry(
                         params=render_params,
                         show_cameras=show_cameras,
@@ -515,6 +528,42 @@ def run(
                             f"render_iter={render_iter}, arrangement={arrangement_label}: "
                             f"captured_views={captured_count}, next_view_id={next_output_index}"
                         )
+
+                    # Mask-coverage gate: stop safely if this pass's masks came back blank
+                    # (see component batch + the 2026-06-20 DrawToBitmap-on-display-sleep RCA).
+                    min_mask_fg = stability_cfg.get("min_mask_foreground_frac", 0.0)
+                    if (
+                        not show_cameras
+                        and min_mask_fg > 0.0
+                        and captured_count > 0
+                        and os.path.isdir(mask_dir)
+                    ):
+                        new_masks = sorted(
+                            os.path.join(mask_dir, f)
+                            for f in (set(os.listdir(mask_dir)) - pre_mask_files)
+                            if f.lower().endswith(".png")
+                        )
+                        mean_fg, n_sampled = sample_mask_foreground(new_masks)
+                        if mean_fg is not None:
+                            print(
+                                f"[maskgate] model_iter={model_iter} render_iter={render_iter} "
+                                f"arrangement={arrangement_label}: mean_mask_foreground="
+                                f"{mean_fg * 100:.2f}% over {n_sampled} frames "
+                                f"(threshold={min_mask_fg * 100:.2f}%)"
+                            )
+                            if mean_fg < min_mask_fg:
+                                print(
+                                    f"[maskgate] BLANK MASKS at model_iter={model_iter} "
+                                    f"({mean_fg * 100:.2f}% < {min_mask_fg * 100:.2f}%). "
+                                    "Stopping run safely. Likely the display slept/locked "
+                                    "(DrawToBitmap GL-context loss) or the mask plugin drew "
+                                    "nothing. Keep the screen awake and/or apply the "
+                                    "ViewCapture plugin fix, then resume."
+                                )
+                                mask_gate_failed = True
+                                stop_after_guard = True
+                                break
+
                     stage_times.append(
                         (
                             f"preparation->rendering[{model_iter},{render_iter},{arrangement_label}]",
@@ -541,7 +590,8 @@ def run(
                     if preparation_scope != "model_iter":
                         with suspend_view_updates():
                             set_batch_work_view()
-                            clear_imported_materials_from_doc()
+                            if not bool(preparation_params.get("material_reuse", False)):
+                                clear_imported_materials_from_doc()
                     if (
                         stability_cfg["gc_every_render_passes"] > 0
                         and render_pass_count % stability_cfg["gc_every_render_passes"] == 0
@@ -645,13 +695,15 @@ def run(
                 break
 
         if stop_after_guard:
-            batch_state["status"] = "stopped_by_guard"
+            batch_state["status"] = (
+                "failed_mask_gate" if mask_gate_failed else "stopped_by_guard"
+            )
             batch_state["current"] = {
                 "model_iter": current_model_iter,
                 "start_face_index": current_face_idx,
                 "render_iter": current_render_iter,
                 "arrangement": current_arrangement_label,
-                "stage": "guard_stop",
+                "stage": "mask_gate_stop" if mask_gate_failed else "guard_stop",
             }
             batch_state["progress"]["render_pass_count"] = render_pass_count
             batch_state["progress"]["next_output_index"] = next_output_index

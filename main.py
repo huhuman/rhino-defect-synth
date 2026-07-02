@@ -29,8 +29,54 @@ STAGE_DEPENDENCIES = {
 }
 
 
+# When True, reset() keeps the (bounded, fixed-taxonomy) layer table across models
+# instead of deleting+recreating it every iteration. Rhino's Layers table never truly
+# shrinks at runtime: PurgeLayer fails for layers still pinned by undo records / material
+# refs, so it falls back to DeleteLayer, which only marks a tombstone that Layers.Count
+# still includes. Over a long batch this grows unbounded (47 -> 3000+ over ~90 models),
+# and every redraw/ViewCapture/mask pass that walks the layer table slows in lockstep
+# (the "getting slower" symptom, distinct from the native-texture memory leak). Because
+# create_single_layer/ensure_layer are already idempotent (reuse by full path) and the
+# defect/component layer names are a fixed taxonomy, simply NOT deleting them keeps the
+# table flat at the union with zero churn. Objects are still deleted every model; only the
+# empty layer shells persist to be reused. Toggle via preparation.reuse_layers_across_models.
+_REUSE_LAYERS = False
+_REUSE_MATERIALS = False
+
+
+def set_reuse_layers(enabled):
+    """Keep the layer taxonomy across model iterations (avoids tombstone growth)."""
+    global _REUSE_LAYERS
+    new_val = bool(enabled)
+    if new_val != _REUSE_LAYERS:
+        print("[stability] layer reuse across models {}".format(
+            "enabled" if new_val else "disabled"
+        ))
+    _REUSE_LAYERS = new_val
+
+
+def set_reuse_materials(enabled):
+    """Keep imported materials across model iterations (the materials-half memory fix).
+
+    reset()'s per-model clear_imported_materials_from_doc() removes only the table ENTRIES, not
+    Rhino's native decoded-bitmap/render cache, so re-importing the textures next model re-decodes
+    them and that native cache grows unbounded (~the dominant batch memory leak; worse at higher
+    max_resolution). The import path (_load_material_from_selection) already short-circuits on a
+    material that already exists by name, so KEEPING materials across models means each texture is
+    decoded once and the working set converges to the (bounded) sampled-material library instead of
+    growing every model. Toggle via preparation.material_reuse (same flag that disables the
+    per-render clear in the batch driver)."""
+    global _REUSE_MATERIALS
+    new_val = bool(enabled)
+    if new_val != _REUSE_MATERIALS:
+        print("[stability] material reuse across models (reset-clear skipped) {}".format(
+            "enabled" if new_val else "disabled"
+        ))
+    _REUSE_MATERIALS = new_val
+
+
 def reset():
-    """Delete all objects, layers, and imported materials from the active document."""
+    """Delete all objects (and, unless reusing layers/materials, layers + imported materials)."""
     objs = rs.AllObjects(
         select=False,
         include_lights=True,
@@ -38,8 +84,16 @@ def reset():
     )
     if objs:
         rs.DeleteObjects(objs)
-    _clear_all_layers(base_layer_name="__reset__")
-    clear_imported_materials_from_doc()
+    if not _REUSE_LAYERS:
+        _clear_all_layers(base_layer_name="__reset__")
+    # The per-model material clear removes only table entries, NOT Rhino's native decoded-texture
+    # cache, so re-importing next model re-decodes and the native cache grows unbounded (the batch
+    # memory leak; tripped the 24 GB guard at model 75 of run 20260628_030245 at max_resolution
+    # 2048). When material reuse is on we KEEP materials across models: the import path reuses any
+    # material already present by name (_load_material_from_selection), so textures decode once and
+    # memory converges to the bounded sampled-material library. Off -> original per-model clear.
+    if not _REUSE_MATERIALS:
+        clear_imported_materials_from_doc()
 
 
 def _clear_all_layers(base_layer_name="__reset__"):
@@ -94,6 +148,14 @@ def setup_render_view(cfg=None):
         render_view.ActiveViewport.DisplayMode = mode
 
     cfg = cfg or {}
+    # Enable skylight (soft, omni-directional) shadows on the Rendered mode so narrow crack
+    # grooves SELF-SHADOW and read dark from ANY camera angle (acts like ambient occlusion).
+    try:
+        from utils_loc.lighting import enable_display_shadows
+        sky_q = int(((cfg.get("rendering") or cfg).get("lighting") or {}).get("skylight_shadow_quality", 8))
+        enable_display_shadows("Rendered", skylight_shadow_quality=sky_q)
+    except Exception as exc:
+        print("setup_render_view: enable_display_shadows skipped ({})".format(exc))
     view_setup_cfg = cfg.get("view_setup") or {}
     only_set = normalize_layer_name_set(view_setup_cfg.get("only_layers"))
     hide_set = normalize_layer_name_set(view_setup_cfg.get("hide_layers"))

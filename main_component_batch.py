@@ -357,6 +357,13 @@ def run(
         main_entry.set_reuse_layers(
             bool(preparation_params.get("reuse_layers_across_models", False))
         )
+        # Materials-half memory fix: when material_reuse is on, reset() KEEPS imported materials
+        # across models (the import path reuses by name) so textures decode once instead of every
+        # model — stops the native-texture-cache leak that tripped the 24 GB guard. Pairs with the
+        # per-render clear already gated on the same flag below.
+        main_entry.set_reuse_materials(
+            bool(preparation_params.get("material_reuse", False))
+        )
 
         global_random_state = random.getstate()
         if seed is None:
@@ -461,6 +468,14 @@ def run(
                 component_sampler=component_sampler,
                 rng=rng,
             )
+            # Normal-audit sweep: deterministically cycle through EVERY pier preset (one per model_iter)
+            # so the COMPONENT NORMAL AUDIT covers all pier types instead of relying on random sampling.
+            if bool(nested_cfg.get("audit_pier_sweep", False)) and sampled_component_cfg.get("pier") is not None:
+                preset = _DEFAULT_COMPONENT_PIER_PRESETS[model_iter % len(_DEFAULT_COMPONENT_PIER_PRESETS)]
+                pier_cfg = dict(sampled_component_cfg.get("pier") or {})
+                pier_cfg.update(preset)
+                sampled_component_cfg["pier"] = pier_cfg
+                print("[audit_pier_sweep] model_iter={} forced pier preset: {}".format(model_iter, preset))
             sampled_component_seed = _assign_missing_seed(sampled_component_cfg, rng)
 
             sampled_modeling_params = copy.deepcopy(modeling_params_base)
@@ -495,6 +510,16 @@ def run(
             try:
                 from utils_loc.spalling_host_color import reset_material_cache
                 reset_material_cache()
+            except Exception:
+                pass
+            try:
+                from utils_loc.flat_matte import reset_material_cache as reset_flat_matte_cache
+                reset_flat_matte_cache()
+            except Exception:
+                pass
+            try:
+                from utils_loc.crack_dark_color import reset_material_cache as reset_crack_dark_cache
+                reset_crack_dark_cache()
             except Exception:
                 pass
             stability_wait(
@@ -577,6 +602,40 @@ def run(
                         )
                     except Exception as exc:  # never break the render loop
                         print("spalling host-color: skipped ({})".format(exc))
+
+                # Bearing flat matte (render-only): glossy rubber reflected the skylight teal at
+                # grazing angles -> a flat dark-grey matte block. Per-object, layers/masks unchanged.
+                try:
+                    from utils_loc.flat_matte import apply_flat_matte_to_layers
+                    comp_layers = (sampled_modeling_params.get("component") or {}).get("layers") or {}
+                    fm_cfg = preparation_params.get("flat_matte") or {}
+                    bearing_layer = comp_layers.get("bearing")
+                    if bearing_layer and fm_cfg.get("bearing_enabled", True):
+                        apply_flat_matte_to_layers(
+                            [bearing_layer],
+                            fm_cfg.get("bearing_rgb", [38, 38, 40]),
+                            fm_cfg.get("bearing_roughness", 0.9),
+                            "bearing_matte", label="bearing matte",
+                        )
+                except Exception as exc:  # never break the render loop
+                    print("bearing matte: skipped ({})".format(exc))
+
+                # Per-host darkened crack material: a crack is a dark recess of the SAME concrete
+                # as its host surface. Darkens the host material (texture preserved) per-object on
+                # the crack groove; mask unaffected (flat CS layer colour). The shallow groove (A)
+                # carries the mask trace + adds depth shadow.
+                try:
+                    from utils_loc.crack_dark_color import apply_crack_host_dark
+                    crack_cfg = (
+                        (sampled_modeling_params.get("defect") or {}).get("crack") or {}
+                    )
+                    apply_crack_host_dark(
+                        prepare_result.get("selected_material_metadata"),
+                        crack_cfg,
+                        dark_factor=float(crack_cfg.get("dark_factor", 0.35)),
+                    )
+                except Exception as exc:  # never break the render loop
+                    print("crack dark: skipped ({})".format(exc))
 
                 render_params = sample_rendering_params(
                     base_rendering=base_rendering,
