@@ -1263,6 +1263,88 @@ def _scaled_shape_copy(shape, scale, defect_type, defect_cfg):
     return scaled
 
 
+def _crack_principal_axis_2d(polygons):
+    """2D unit length-axis + centroid of a crack via PCA (covariance major eigenvector).
+
+    PCA, not a corner-to-corner diameter: the diameter is slightly tilted off the true long axis,
+    and scaling anisotropically along a tilted axis distorts the WIDTH. The major eigenvector is
+    the true principal direction so length-only scaling keeps the width exactly."""
+    pts = []
+    for poly in polygons or []:
+        for p in poly or []:
+            if isinstance(p, (list, tuple)) and len(p) >= 2:
+                pts.append((float(p[0]), float(p[1])))
+    if len(pts) < 2:
+        return None, None
+    n = len(pts)
+    cx = sum(p[0] for p in pts) / n
+    cy = sum(p[1] for p in pts) / n
+    sxx = syy = sxy = 0.0
+    for x, y in pts:
+        dx, dy = x - cx, y - cy
+        sxx += dx * dx
+        syy += dy * dy
+        sxy += dx * dy
+    if (sxx + syy) <= 1e-12:
+        return None, (cx, cy)
+    theta = 0.5 * math.atan2(2.0 * sxy, sxx - syy)
+    return (math.cos(theta), math.sin(theta)), (cx, cy)
+
+
+def _scale_points_anisotropic(points, factor, axis, centroid):
+    """Scale points by `factor` ALONG `axis` only (perpendicular unchanged), about `centroid`."""
+    ex, ey = axis
+    cx, cy = centroid
+    wx, wy = -ey, ex
+    out = []
+    for p in points or []:
+        if not isinstance(p, (list, tuple)) or len(p) < 2:
+            continue
+        rx, ry = float(p[0]) - cx, float(p[1]) - cy
+        along = (rx * ex + ry * ey) * factor
+        perp = rx * wx + ry * wy
+        out.append((cx + ex * along + wx * perp, cy + ey * along + wy * perp))
+    return out
+
+
+def _scale_crack_length_geometry(shape, factor, axis, centroid):
+    poly_keys = ("primary_poly", "secondary_poly", "offset_poly", "base_poly")
+    list_keys = ("polygons", "crack_polys", "inside_polys", "diff_polys")
+    for key in poly_keys:
+        value = shape.get(key)
+        if isinstance(value, (list, tuple)) and value and isinstance(value[0], (list, tuple)):
+            shape[key] = _scale_points_anisotropic(value, factor, axis, centroid)
+    for key in list_keys:
+        value = shape.get(key)
+        if not isinstance(value, (list, tuple)):
+            continue
+        shape[key] = [
+            _scale_points_anisotropic(poly, factor, axis, centroid)
+            for poly in value if isinstance(poly, (list, tuple))
+        ]
+
+
+def _scaled_crack_length_copy(shape, factor, defect_cfg):
+    """Like _scaled_shape_copy but for cracks: shrink the LENGTH axis only and KEEP the width
+    (metric_scale / target_metric_cm untouched) so a long crack on a small face is shortened to
+    fit instead of being uniformly shrunk into a sub-pixel hairline (which loses its CS width).
+    Returns None if the principal axis is degenerate (caller falls back to uniform)."""
+    if not isinstance(shape, dict):
+        return None
+    factor = float(factor)
+    if factor <= 1e-9:
+        return None
+    scaled = copy.deepcopy(shape)
+    if abs(factor - 1.0) > 1e-12:
+        axis, centroid = _crack_principal_axis_2d(_shape_fit_polygons_2d("crack", scaled))
+        if axis is None or centroid is None:
+            return None
+        _scale_crack_length_geometry(scaled, factor, axis, centroid)
+        # width (metric_scale / target_metric_cm) intentionally preserved -> CS unchanged
+    _refresh_shape_severity(scaled, "crack", defect_cfg)
+    return scaled
+
+
 def _shape_projects_inside_surface(defect_type, shape, candidate, transform):
     surface_id = (candidate or {}).get("surface_id")
     if not surface_id or not rs.IsObject(surface_id):
@@ -1306,7 +1388,14 @@ def _fit_shape_to_candidate_transform(defect_type, shape, defect_cfg, random_cfg
     if axis_scale_limit <= 1e-9:
         return None
 
-    best_shape = _scaled_shape_copy(shape, min(1.0, axis_scale_limit), defect_type, defect_cfg)
+    fit_scale = min(1.0, axis_scale_limit)
+    # NOTE: B2 (anisotropic length-only scaling for cracks via _scaled_crack_length_copy) was
+    # REVERTED 2026-06-27 — it distorted real jagged crack polygons into degenerate/self-
+    # intersecting loops, so the carve produced fragments ("dot" cracks, mask px collapsed
+    # 15840 -> ~400 in run 025820). Cracks use UNIFORM fit scaling (proven-good geometry); the
+    # hairline-on-small-face tradeoff is accepted, B1 still prevents blown faces, and the
+    # azimuth-aware camera makes properly-carved cracks visible. The helpers are kept dormant.
+    best_shape = _scaled_shape_copy(shape, fit_scale, defect_type, defect_cfg)
     if best_shape is None:
         return None
     if _shape_projects_inside_surface(defect_type, best_shape, candidate, transform):
@@ -2097,6 +2186,8 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
     cutters = 0
     targets = 0
     resolved_records = 0
+    crack_cut_ok = 0      # DEBUG: crack records whose host slit was actually opened
+    crack_cut_fail = []   # DEBUG: crack records whose host subtraction produced nothing
     for group in by_target_records.values():
         current_target_ids = [group.get("target_id")] if rs.IsObject(group.get("target_id")) else []
         if not current_target_ids:
@@ -2153,6 +2244,7 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
                 if not cutter_ids:
                     continue
 
+                before_area = debug_geometry_metrics(current_target_ids)[1]
                 try:
                     split_ids = subtract_surface(
                         cutter_ids,
@@ -2172,9 +2264,31 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
 
                 split_ids = [sid for sid in _coerce_ids(split_ids) if sid and rs.IsObject(sid)]
                 if split_ids:
+                    after_area = debug_geometry_metrics(split_ids)[1]
                     current_target_ids = _dedupe_ids(split_ids)
                     _assign_layer(current_target_ids, layer_name)
                     applied_any = True
+                    if record.get("type") == "crack":
+                        # A REAL hole removes the crack-shaped sliver -> host area drops. If the area
+                        # is ~unchanged the "split" was a no-op (just re-split into pieces that still
+                        # cover the groove) -> groove stays buried -> blank frames.
+                        removed = before_area - after_area
+                        if removed > 0.5:
+                            crack_cut_ok += 1
+                        else:
+                            nsolid = 0
+                            for _c in cutter_ids:
+                                try:
+                                    _b = rs.coercebrep(_c)
+                                    if _b and _b.IsSolid:
+                                        nsolid += 1
+                                except Exception:
+                                    pass
+                            crack_cut_fail.append("{}(noop d={:.1f} cutters={} solid={} pieces={} extr={:.1f})".format(
+                                record.get("instance_id") or record.get("instance_index"),
+                                removed, len(cutter_ids), nsolid, len(split_ids), extrude_distance))
+                elif record.get("type") == "crack":
+                    crack_cut_fail.append(str(record.get("instance_id") or record.get("instance_index")))
                 group_cutters += len(cutter_ids)
             finally:
                 _delete_objects(helper_ids)
@@ -2185,13 +2299,110 @@ def _apply_surface_group_subtractions(records, cfg, model_result):
             cutters += group_cutters
             targets += 1
 
+    if crack_cut_ok or crack_cut_fail:
+        print("Surface subtraction (crack host-slit): {} opened OK, {} FAILED (groove buried -> "
+              "blank frames){}".format(
+                  crack_cut_ok, len(crack_cut_fail),
+                  "; failed=" + ",".join(crack_cut_fail[:30]) if crack_cut_fail else ""))
+
     return {
         "groups": groups,
         "cutters": cutters,
         "targets": targets,
         "resolved_records": resolved_records,
         "skipped_records": skipped_records,
+        "crack_cut_ok": crack_cut_ok,
+        "crack_cut_failed": len(crack_cut_fail),
     }
+
+
+def debug_geometry_metrics(obj_ids):
+    """DEBUG: (object_count, total_surface_area_cm2, max_bbox_span_cm) for a set of geometry ids.
+    A crack whose groove renders blank should show ~0 area / tiny span -> degenerate carve."""
+    ids = [g for g in (obj_ids or []) if g and rs.IsObject(g)]
+    area = 0.0
+    for gid in ids:
+        try:
+            a = rs.SurfaceArea(gid)
+            if a:
+                area += abs(float(a[0]))
+        except Exception:
+            pass
+    span = 0.0
+    try:
+        bb = rs.BoundingBox(ids)
+        if bb:
+            xs = [p.X for p in bb]; ys = [p.Y for p in bb]; zs = [p.Z for p in bb]
+            span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+    except Exception:
+        pass
+    return len(ids), area, span
+
+
+def _inward_normal_audit(records):
+    """DEBUG: flag defects whose stored outward-normal actually points INTO the structure (so the
+    defect grows on an inward-facing face and the camera renders the interior — the pier-face issue).
+    Test: cast a ray from just off the surface along +normal; if it hits the structure mesh within a
+    few cm, +normal goes INTO the solid => the normal is inward. Logs counts per surface layer."""
+    try:
+        import Rhino
+        import scriptcontext as sc
+        mesh = Rhino.Geometry.Mesh()
+        layers = sc.doc.Layers
+
+        def _mesh_geo(geo):
+            try:
+                brep = geo if isinstance(geo, Rhino.Geometry.Brep) else (
+                    geo.ToBrep() if isinstance(geo, (Rhino.Geometry.Surface, Rhino.Geometry.Extrusion)) else None)
+                if brep is not None:
+                    return [m for m in (Rhino.Geometry.Mesh.CreateFromBrep(
+                        brep, Rhino.Geometry.MeshingParameters.Default) or []) if m]
+            except Exception:
+                pass
+            return []
+
+        for obj in sc.doc.Objects:
+            try:
+                li = obj.Attributes.LayerIndex
+                if li < 0 or li >= layers.Count:
+                    continue
+                if not str(layers[li].FullPath or "").startswith("component::"):
+                    continue
+                added = False
+                for m in (obj.GetMeshes(Rhino.Geometry.MeshType.Render) or []):
+                    if m:
+                        mesh.Append(m)
+                        added = True
+                if not added:  # render meshes are lazy; at placement time they usually don't exist yet
+                    for m in _mesh_geo(obj.Geometry):
+                        mesh.Append(m)
+            except Exception:
+                continue
+        if mesh.Faces.Count == 0:
+            print("INWARD-NORMAL AUDIT: no structure mesh (skipped)")
+            return
+        mesh_ray = Rhino.Geometry.Intersect.Intersection.MeshRay
+        from collections import defaultdict
+        by_layer = defaultdict(lambda: [0, 0])
+        samples = []
+        for r in records:
+            p = r.get("point"); n = r.get("normal")
+            if not p or not n:
+                continue
+            lay = str(r.get("surface_layer") or "?").split("::")[-1]
+            by_layer[lay][1] += 1
+            origin = Rhino.Geometry.Point3d(p[0] + n[0] * 0.05, p[1] + n[1] * 0.05, p[2] + n[2] * 0.05)
+            ray = Rhino.Geometry.Ray3d(origin, Rhino.Geometry.Vector3d(n[0], n[1], n[2]))
+            t = mesh_ray(mesh, ray)
+            if t is not None and 0.0 <= float(t) < 5.0:  # +normal hits structure within 5cm => inward
+                by_layer[lay][0] += 1
+                if len(samples) < 15:
+                    samples.append("{}:{}".format(lay, r.get("instance_id")))
+        summary = ", ".join("{}={}/{}".format(k, v[0], v[1]) for k, v in sorted(by_layer.items()))
+        print("INWARD-NORMAL AUDIT (+normal hits structure <5cm = inward): {}{}".format(
+            summary, (" | inward=" + ", ".join(samples)) if samples else " | none inward"))
+    except Exception as exc:  # noqa: BLE001
+        print("inward-normal audit failed: {}".format(exc))
 
 
 def _extract_camera_defects(records):
@@ -2201,15 +2412,18 @@ def _extract_camera_defects(records):
         normal = record.get("normal")
         if not point or not normal:
             continue
-        defects.append(
-            {
-                "point": [float(point[0]), float(point[1]), float(point[2])],
-                "normal": [float(normal[0]), float(normal[1]), float(normal[2])],
-                "defect_type": record.get("type"),
-                "instance_index": record.get("instance_index"),
-                "size_cm": record.get("target_metric_cm"),
-            }
-        )
+        seed = {
+            "point": [float(point[0]), float(point[1]), float(point[2])],
+            "normal": [float(normal[0]), float(normal[1]), float(normal[2])],
+            "defect_type": record.get("type"),
+            "instance_index": record.get("instance_index"),
+            "size_cm": record.get("target_metric_cm"),
+        }
+        tangent = record.get("crack_tangent")
+        if tangent and len(tangent) == 3:
+            # crack length direction -> camera views ACROSS the crack (see camera_geometry)
+            seed["tangent"] = [float(tangent[0]), float(tangent[1]), float(tangent[2])]
+        defects.append(seed)
     return defects
 
 
@@ -2327,6 +2541,8 @@ def apply_defect_pipeline(params=None, model_result=None, debug_cfg=None):
     # json-ready pass strips every *_geometry_ids key. See spalling_host_color.
     global _LAST_PLACED_RECORDS
     _LAST_PLACED_RECORDS = records
+
+    _inward_normal_audit(records)
 
     json_ready = _json_ready_records(records)
     camera_defects = _extract_camera_defects(json_ready)

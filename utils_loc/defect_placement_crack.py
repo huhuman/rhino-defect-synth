@@ -1,6 +1,35 @@
 """Crack-specific geometry modeling helpers for defect placement."""
 
 
+def _crack_tangent_3d(points):
+    """Approximate the crack's LENGTH direction (unit 3D vector) from its surface-cut points via a
+    2-pass diameter (point farthest from centroid -> farthest from that). Currently only used for a
+    load-status diagnostic counter. Returns None when degenerate."""
+    pts = []
+    for p in points or []:
+        if p is None:
+            continue
+        try:
+            pts.append((float(p[0]), float(p[1]), float(p[2])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    if len(pts) < 2:
+        return None
+    n = len(pts)
+    c = (sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n, sum(p[2] for p in pts) / n)
+
+    def _d2(a, b):
+        return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+
+    p1 = max(pts, key=lambda p: _d2(p, c))
+    p2 = max(pts, key=lambda p: _d2(p, p1))
+    t = (p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2])
+    m = (t[0] ** 2 + t[1] ** 2 + t[2] ** 2) ** 0.5
+    if m < 1e-9:
+        return None
+    return [t[0] / m, t[1] / m, t[2] / m]
+
+
 def _resolve_crack_width_metrics(runtime, shape):
     width_px = runtime._to_optional_float((shape or {}).get("metric_px"))
     if width_px is None or width_px <= 0.0:
@@ -129,6 +158,7 @@ def model_crack_instance(runtime, candidate, shape, transform, cfg, layer_map, r
         inward_dir=runtime._candidate_inward_normal(candidate),
         d1_range=tuple(crack_cfg.get("d1_range", (0.5, 2.5))),
         delta_depth_range=tuple(crack_cfg.get("delta_depth_range", (10.0, 30.0))),
+        wall_slope_deg=crack_cfg.get("wall_slope_deg"),
         layer_crack_extrusion=crack_layer_initial,
         layer_parent_surface=candidate.get("surface_layer"),
         cleanup_inputs=True,
@@ -137,21 +167,25 @@ def model_crack_instance(runtime, candidate, shape, transform, cfg, layer_map, r
     outward_normal = runtime._candidate_outward_normal(candidate)
     runtime._orient_surfaces_to_normal(crack_created.get("extrusions") or [], outward_normal)
     runtime._orient_surfaces_to_normal(crack_created.get("bottom_caps") or [], outward_normal)
-    runtime._orient_surfaces_to_normal(crack_created.get("parent_fills") or [], outward_normal)
+    runtime._orient_surfaces_to_normal(crack_created.get("island_fills") or [], outward_normal)
     crack_geometry = runtime._coerce_ids(
         (crack_created.get("loft") or [])
         + (crack_created.get("extrusions") or [])
         + (crack_created.get("bottom_caps") or [])
     )
-    parent_fills = runtime._coerce_ids(crack_created.get("parent_fills") or [])
-    runtime._delete_objects(parent_fills)
+    # Keep the middle islands of closed-loop (annulus) cracks as intact surface geometry
+    # (already layered onto the parent surface); only discard the transition-band patches.
+    island_fills = runtime._coerce_ids(crack_created.get("island_fills") or [])
+    diff_fills = runtime._coerce_ids(crack_created.get("diff_fills") or [])
+    runtime._delete_objects(diff_fills)
     if not crack_geometry:
         runtime._delete_objects(
             crack_polys
             + inside_polys
             + diff_polys
             + [offset_curve, base_curve]
-            + parent_fills
+            + island_fills
+            + diff_fills
         )
         return None
 
@@ -174,6 +208,7 @@ def model_crack_instance(runtime, candidate, shape, transform, cfg, layer_map, r
     record["geometry_ids"] = runtime._as_strings(crack_geometry)
     record["mask_ids"] = []
     record["surface_cut_polygon"] = [list(runtime._vec3(pt)) for pt in runtime._ensure_closed(surface_cut_polygon)]
+    record["crack_tangent"] = _crack_tangent_3d(record["surface_cut_polygon"])
     record["surface_cut_polygons"] = [
         [list(runtime._vec3(pt)) for pt in runtime._ensure_closed(polygon)]
         for polygon in surface_cut_polygons

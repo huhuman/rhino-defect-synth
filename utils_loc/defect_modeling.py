@@ -335,15 +335,32 @@ def _filter_split_piece_ids_keep_outer(piece_ids, cutter_ids, tolerance, discard
         cutter_brep = rs.coercebrep(cutter_id)
         if cutter_brep is not None and getattr(cutter_brep, "IsSolid", False):
             solid_cutters.append(cutter_brep)
+
+    if solid_cutters:
+        kept = []
+        for obj_id in valid_ids:
+            point = _object_representative_point(obj_id)
+            if point is None or not any(_point_inside_solid_brep(cutter_brep, point, tolerance) for cutter_brep in solid_cutters):
+                kept.append(obj_id)
+        if len(kept) < len(valid_ids):
+            return kept  # inside-cutter test discarded the crack/cavity piece
+
+    # Thin-sliver fallback: a thin crack cutter is too narrow for the point/inside tests to
+    # identify the sliver, so NOTHING gets discarded -> the surface is split into two pieces that
+    # both stay -> no opening -> the groove is buried (blank). When discard_points were requested
+    # (crack "strip" / spalling "cavity") and the split made exactly two pieces with one a clear
+    # MINORITY, discard that small piece so the slit actually opens. The 0.35 cap means a near-
+    # equal split (which would be a blown face) is left intact (B1 guard also catches that).
+    if discard_points and len(valid_ids) == 2:
+        ranked = sorted(valid_ids, key=_surface_like_area)
+        small_a = _surface_like_area(ranked[0])
+        total = small_a + _surface_like_area(ranked[1])
+        if total > 0.0 and small_a <= 0.35 * total:
+            return [ranked[1]]  # keep the large piece, drop the thin crack sliver -> open slit
+
     if not solid_cutters:
         return None
-
-    kept = []
-    for obj_id in valid_ids:
-        point = _object_representative_point(obj_id)
-        if point is None or not any(_point_inside_solid_brep(cutter_brep, point, tolerance) for cutter_brep in solid_cutters):
-            kept.append(obj_id)
-    return kept
+    return valid_ids
 
 
 def _split_surface_keep_outer(target_id, cutter_ids, delete_input=False, discard_points=None):
@@ -408,6 +425,40 @@ def _split_surface_keep_outer(target_id, cutter_ids, delete_input=False, discard
 
     if not kept_ids:
         return None
+
+    # Runaway-split guard: a defect cut should remove ~its own cut area. When the cut
+    # polygon crosses the host face edge (e.g. a long crack on a small flange), Split divides the
+    # face into large pieces and keep-outer/keep-largest then discards a big chunk -> a hole in
+    # the surface ("blown" face). If the removed area is far larger than the cutter area,
+    # revert to the uncut original (the defect's own groove/cavity geometry is separate, so the
+    # defect still renders; we just don't punch a hole in the host).
+    try:
+        amp_o = Rhino.Geometry.AreaMassProperties.Compute(target_brep)
+        orig_area = float(amp_o.Area) if amp_o else 0.0
+        kept_area = 0.0
+        for kid in kept_ids:
+            kb = rs.coercebrep(kid)
+            if kb:
+                amp_k = Rhino.Geometry.AreaMassProperties.Compute(kb)
+                if amp_k:
+                    kept_area += abs(float(amp_k.Area))
+        cutter_area = 0.0
+        for cb in cutter_breps:
+            amp_c = Rhino.Geometry.AreaMassProperties.Compute(cb)
+            if amp_c:
+                cutter_area += abs(float(amp_c.Area))
+        removed = orig_area - kept_area
+        if orig_area > 0.0 and removed > max(cutter_area * 5.0, 1.0):
+            rs.DeleteObjects([kid for kid in kept_ids if rs.IsObject(kid)])
+            print(
+                "subtract_surface: reverted host cut (removed {:.0f} cm2 >> cutter {:.0f} cm2; "
+                "cut polygon likely crosses the face edge) - host face kept intact.".format(
+                    removed, cutter_area
+                )
+            )
+            return [target_id]
+    except Exception:
+        pass
 
     if delete_input and rs.IsObject(target_id):
         rs.DeleteObject(target_id)

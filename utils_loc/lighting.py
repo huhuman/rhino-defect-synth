@@ -188,6 +188,42 @@ def set_skylight(intensity=0.25, enabled=True):
             tex.SetParameter("multiplier", intensity)
 
 
+def enable_display_shadows(mode_name="Rendered", skylight_shadow_quality=8):
+    """Turn ON shadows + SKYLIGHT (soft, omni-directional) shadows for a display mode, so narrow
+    crevices like crack grooves SELF-SHADOW and read dark from ANY camera angle (the skylight-
+    shadow term acts like ambient occlusion). Without this the Rendered mode lights the groove
+    flatly and a recessed crack vanishes unless the camera can see its walls.
+
+    Persists to the named display mode via UpdateDisplayMode. Best-effort: each attribute is set
+    independently so a missing one on a given Rhino build doesn't abort the rest. Returns True if
+    the mode was found and updated.
+    """
+    try:
+        mode = Rhino.Display.DisplayModeDescription.FindByName(mode_name)
+        if mode is None:
+            print("enable_display_shadows: display mode '{}' not found.".format(mode_name))
+            return False
+        attrs = mode.DisplayAttributes
+        applied = []
+        for attr, val in (
+            ("ShadowsOn", True),
+            ("CastShadows", True),
+            ("SkylightShadowQuality", int(skylight_shadow_quality)),
+        ):
+            try:
+                setattr(attrs, attr, val)
+                applied.append("{}={}".format(attr, val))
+            except Exception:
+                pass
+        Rhino.Display.DisplayModeDescription.UpdateDisplayMode(mode)
+        print("enable_display_shadows: '{}' -> {} (skylight self-shadow for crack grooves).".format(
+            mode_name, ", ".join(applied) or "no settable attrs"))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print("enable_display_shadows: failed ({}).".format(exc))
+        return False
+
+
 def setup_face_lights(
     bbox_pts=None,
     faces=None,
