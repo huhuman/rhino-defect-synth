@@ -439,29 +439,39 @@ def _build_structure_occluder_mesh():
 
 
 def _make_occlusion_test(occluder_mesh):
-    """Return blocked(pos, point) -> True when the bridge structure lies between the
-    defect and the camera. Fail-open: any error -> not blocked."""
+    """Return blocked(pos, point) -> True when the camera cannot cleanly see the defect.
+
+    The ray is cast FROM the camera TOWARD the defect point. The defect's own host surface
+    is part of the structure mesh, so a clear line of sight hits structure at ~dist (the
+    defect surface). Two failures are caught by the same test:
+      - occlusion: something in front of the defect -> first hit well before dist.
+      - camera embedded in / flush against a solid (the 100%-single-surface junk frames):
+        the camera sits inside structure, so the first hit is at ~0 (a back-face right at the
+        lens) -> hit_t << dist.
+    Fail-open: any error, or no structure hit at all -> not blocked."""
     G = Rhino.Geometry
     mesh_ray = G.Intersect.Intersection.MeshRay
 
     def blocked(pos, point):
         try:
-            vx = pos[0] - point[0]
-            vy = pos[1] - point[1]
-            vz = pos[2] - point[2]
+            vx = point[0] - pos[0]
+            vy = point[1] - pos[1]
+            vz = point[2] - pos[2]
             dist = math.sqrt(vx * vx + vy * vy + vz * vz)
             if dist <= 1e-6:
                 return False
             ux, uy, uz = vx / dist, vy / dist, vz / dist
-            off = max(2.0, dist * 0.01)
-            clear = max(2.0, dist * 0.01)
-            origin = G.Point3d(point[0] + ux * off, point[1] + uy * off, point[2] + uz * off)
+            origin = G.Point3d(pos[0], pos[1], pos[2])
             ray = G.Ray3d(origin, G.Vector3d(ux, uy, uz))
             hit_t = mesh_ray(occluder_mesh, ray)
             if hit_t is None:
                 return False
             hit_t = float(hit_t)
-            return 0.0 <= hit_t < (dist - off - clear)
+            if hit_t < 0.0:
+                return False
+            # direction is unit length, so the ray parameter is a distance.
+            margin = max(2.0, dist * 0.05)
+            return hit_t < (dist - margin)
         except Exception:
             return False
 
@@ -542,6 +552,7 @@ def _generate_render_poses(context):
         framing_factor_by_type=component_cfg.get("framing_factor_by_type"),
         oblique_angle_range=component_cfg.get("oblique_angle_range"),
         head_on_fraction=float(component_cfg.get("head_on_fraction", 0.0) or 0.0),
+        head_on_fraction_by_type=component_cfg.get("head_on_fraction_by_type"),
     )
     return sort_poses_topdown_circular(poses, center=center)
 
