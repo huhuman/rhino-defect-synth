@@ -321,6 +321,7 @@ def generate_defect_camera_poses(
     framing_factor_by_type: Mapping[str, float] = None,
     oblique_angle_range: Sequence[float] = None,
     head_on_fraction: float = 0.0,
+    head_on_fraction_by_type: Mapping[str, float] = None,
 ) -> List[Mapping[str, Vec3]]:
     """
     Generate camera poses on the defect-normal hemisphere around each defect.
@@ -355,10 +356,21 @@ def generate_defect_camera_poses(
         for key, value in dict(framing_factor_by_type or {}).items()
         if str(key or "").strip()
     }
+    # Per-type head-on fraction: cracks are recessed narrow V-grooves that only read when the
+    # camera looks roughly down the opening, so they want a high head-on fraction; efflore/
+    # spalling are flat patches that keep the small global fraction (more oblique) for depth
+    # parallax. Falls back to head_on_frac when a type has no override.
+    ho_by_type = {
+        str(key or "").strip().lower(): min(1.0, max(0.0, float(value)))
+        for key, value in dict(head_on_fraction_by_type or {}).items()
+        if str(key or "").strip()
+    }
 
     poses = []
     skipped_occluded = 0
     skipped_too_small = 0
+    n_crack = 0
+    n_crack_tangent = 0
     min_vis_ratio = max(0.0, float(min_visible_size_ratio or 0.0))
     for defect_idx, defect in enumerate(defects):
         point = tuple(float(v) for v in defect["point"])
@@ -372,6 +384,21 @@ def generate_defect_camera_poses(
                 )
             )
         ff = ff_by_type.get(defect_type, framing_factor)
+        head_on_for_defect = ho_by_type.get(defect_type, head_on_frac)
+        # Cracks: aim the oblique tilt ACROSS the crack (perpendicular to its length) so the thin
+        # recess projects pixels instead of vanishing when viewed along it. tangent = crack length
+        # direction (set at placement); None for non-cracks -> random azimuth as before.
+        crack_tangent = defect.get("tangent") if defect_type == "crack" else None
+        if defect_type == "crack":
+            n_crack += 1
+            if crack_tangent:
+                n_crack_tangent += 1
+        # azimuth-aware REVERTED 2026-06-27: empirically forcing every pose ACROSS the crack
+        # LOWERED visibility (best-pose crack mask px ~15840 with random azimuth -> ~1100 when
+        # forced across; the random azimuth's variety catches better viewing angles, and the
+        # unlucky empty poses are dropped by post_filter_frames anyway). Keep tangent only for the
+        # diagnostic counter above; do NOT use it to aim.
+        crack_tangent = None
         distances = _distance_samples_for_defect(
             distance_range, count_per_defect, defect.get("size_cm"), ff
         )
@@ -391,7 +418,8 @@ def generate_defect_camera_poses(
             pos = None
             for _attempt in range(attempts):
                 cand_dir = sample_view_direction(
-                    normal, oblique, head_on_frac, jitter_deg
+                    normal, oblique, head_on_for_defect, jitter_deg,
+                    crack_tangent=crack_tangent,
                 )
                 cand_pos = tuple(point[i] + cand_dir[i] * float(radius) for i in range(3))
                 if occlusion_test is None or not occlusion_test(cand_pos, point):
@@ -439,6 +467,16 @@ def generate_defect_camera_poses(
         for _ratio, pose in defect_poses:
             poses.append(pose)
 
+    if n_crack:
+        # Diagnostic only: tangent presence proves the new placement code is loaded. Across-crack
+        # AIMING is intentionally DISABLED (random azimuth gives higher crack visibility); this just
+        # reports load status.
+        print(
+            "Component camera: crack defects={}, tangent computed={} (new code loaded={}); "
+            "azimuth aiming = RANDOM (across-crack reverted).".format(
+                n_crack, n_crack_tangent, "YES" if n_crack_tangent else "NO"
+            )
+        )
     if occlusion_test is not None and skipped_occluded:
         print(
             "Component camera: skipped {} occluded poses (no clear line of sight); kept {}.".format(

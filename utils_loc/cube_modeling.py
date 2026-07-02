@@ -59,10 +59,13 @@ def _build_mask_surfaces(crack_poly_id, hole_poly_ids=None):
         if hole_id and rs.IsPolyline(hole_id):
             input_curves.append(hole_id)
 
-    surface_ids = rs.AddPlanarSrf(input_curves) or []
+    surface_ids = [sid for sid in (rs.AddPlanarSrf(input_curves) or []) if sid and rs.IsObject(sid)]
     if surface_ids:
-        return [sid for sid in surface_ids if sid and rs.IsObject(sid)]
+        return surface_ids
 
+    if len(input_curves) > 1:
+        print("_build_mask_surfaces: annular cutter failed for {} hole(s); "
+              "carving solid (island will be removed).".format(len(input_curves) - 1))
     fallback_ids = rs.AddPlanarSrf(crack_poly_id) or []
     return [sid for sid in fallback_ids if sid and rs.IsObject(sid)]
 

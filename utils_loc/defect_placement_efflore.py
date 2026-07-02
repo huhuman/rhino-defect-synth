@@ -180,7 +180,12 @@ def model_efflore_instance(runtime, candidate, shape, transform, cfg, layer_map,
     uses_expand_polygon = bool(has_outer)
     cs_level = sampled_cs
 
-    inner_lifted_polygon = _offset_polygon_along_normal(inner_polygon, thickness)
+    # White deposit sits proud of the rust ring so the deposit always wins the depth test
+    # and stays visible, with the rust as a surrounding halo rather than covering it. Fixes
+    # "the whole efflore patch is rust" (2026-06-23): the rust was previously lifted above
+    # the deposit and hid it. The offset (~0.05 cm) is sub-pixel at render distance.
+    inner_lift = thickness + max(1e-3, 0.5 * thickness)
+    inner_lifted_polygon = _offset_polygon_along_normal(inner_polygon, inner_lift)
     inner_split = _split_extrusion_volume(_create_extrusion_volume(inner_lifted_polygon, thickness))
     inner_geometry = runtime._coerce_ids(inner_split.get("all") or [])
     inner_top_geometry = runtime._coerce_ids(inner_split.get("top") or [])
@@ -195,6 +200,10 @@ def model_efflore_instance(runtime, candidate, shape, transform, cfg, layer_map,
     outer_side_geometry = []
     outer_cut_applied = False
     if has_outer:
+        # Rust ring sits at the base height (below the proud white deposit above) so the
+        # deposit wins the overlap and the rust reads as a surrounding halo. The outer volume
+        # is cut by the inner footprint into an annulus; if that boolean fails the deposit
+        # still covers it from above.
         outer_lifted_polygon = _offset_polygon_along_normal(outer_polygon, thickness)
         outer_volume = _create_extrusion_volume(outer_lifted_polygon, thickness)
         outer_cutter = _create_extrusion_volume(inner_lifted_polygon, thickness)

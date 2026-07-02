@@ -477,7 +477,19 @@ def model_spalling_instance(runtime, candidate, shape, transform, cfg, layer_map
             rng=rng,
         )
 
-    defect_type = "spalling"
+    # Exposed-rebar cavity is its OWN class (Goldenrod/Chocolate), distinct from plain
+    # spalling (Gold/DarkOrange), so the mask preserves the difference and post-processing
+    # can merge or split the two spalling kinds. Restores the re-layering c405566 removed
+    # (user decision 2026-06-22); the has_exposed_rebar record flag below is kept too.
+    defect_type = "exposed_rebar" if rebar_ids else "spalling"
+    if rebar_ids:
+        exposed_spall_layer_name = runtime._geometry_layer_for_condition(
+            layer_map,
+            "exposed_rebar",
+            condition_state,
+            part="spalling",
+        )
+        runtime._assign_layer(spall_ids, exposed_spall_layer_name)
     geometry_ids = runtime._coerce_ids(spall_ids + rebar_ids)
     if not geometry_ids:
         runtime._delete_objects(spall_ids + rebar_ids)

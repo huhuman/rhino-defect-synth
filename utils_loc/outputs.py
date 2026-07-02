@@ -267,12 +267,12 @@ def _capture_selected_render_channels(
 
     if not want_depth:
         capture_depth_path = os.path.abspath(
-            os.path.join(IO.Path.GetTempPath(), f"rhino_depth_{IO.Path.GetRandomFileName()}.pfm")
+            os.path.join(IO.Path.GetTempPath(), f"rhino_depth_{IO.Path.GetRandomFileName()}.npz")
         )
         temp_paths.append(capture_depth_path)
     if not want_normal:
         capture_normal_path = os.path.abspath(
-            os.path.join(IO.Path.GetTempPath(), f"rhino_normal_{IO.Path.GetRandomFileName()}.pfm")
+            os.path.join(IO.Path.GetTempPath(), f"rhino_normal_{IO.Path.GetRandomFileName()}.npz")
         )
         temp_paths.append(capture_normal_path)
 
@@ -652,8 +652,8 @@ def render_all_outputs(
         "color": os.path.abspath(os.path.join(out_dir, f"color/{basename}.png")),
         "depth": os.path.abspath(os.path.join(out_dir, f"depth/{basename}.png")),
         "normal": os.path.abspath(os.path.join(out_dir, f"normal/{basename}.png")),
-        "depth_buffer": os.path.abspath(os.path.join(out_dir, f"depth_buffer/{basename}.pfm")),
-        "normal_buffer": os.path.abspath(os.path.join(out_dir, f"normal_buffer/{basename}.pfm")),
+        "depth_buffer": os.path.abspath(os.path.join(out_dir, f"depth_buffer/{basename}.npz")),
+        "normal_buffer": os.path.abspath(os.path.join(out_dir, f"normal_buffer/{basename}.npz")),
         "mask": os.path.abspath(os.path.join(out_dir, f"mask/{basename}.png")),
         "camera": os.path.abspath(os.path.join(out_dir, f"camera/{basename}.json")),
     }

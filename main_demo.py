@@ -159,7 +159,7 @@ if __name__ == "__main__":
     show_camera_placement(
         config_name="component.local.yaml",
         demo_params={
-            "camera_demo_mode": "capture",
+            "camera_demo_mode": "show",
         },
         print_timings=True,
     )

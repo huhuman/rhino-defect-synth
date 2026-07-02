@@ -182,9 +182,10 @@ def generate_efflorescence(
     thr = float(np.quantile(field, 1.0 - coverage))
     alpha = _smoothstep(thr - feather, thr + feather, field)
 
-    # Fresh powder lets substrate show through -> cap opacity below 1;
-    # hard crust approaches opaque.
-    max_opacity = 0.55 + 0.4 * float(np.clip(hardness, 0.0, 1.0))
+    # Deposit reads as a near-opaque white coating (was 0.55-0.95, which left it gray/
+    # translucent over the concrete in renders). Keep a little softness so it isn't flat
+    # paint, but high enough that the white actually reads (issue 2026-06-22).
+    max_opacity = 0.85 + 0.15 * float(np.clip(hardness, 0.0, 1.0))
     alpha = alpha * max_opacity
 
     label = (alpha >= 0.5 * max_opacity).astype(np.uint8) * 255
@@ -289,7 +290,7 @@ def build_pipeline_library(out_dir, count=24, size=(1024, 1024), seed=0, prefix=
             coverage=0.55 + 0.35 * ((i * 3 % 5) / 4.0),  # raised floor so deposit reads as white
             grain_strength=0.30 + 0.30 * ((i * 7 % 4) / 3.0),
             hardness=0.5 + 0.5 * ((i % 3) / 2.0),         # more opaque (chalky crust) on average
-            drips=(i % 2 == 0),
+            drips=True,                                    # flow/drip morphology on every sample
         )
         stem = "%s_%03d" % (prefix, i)
         Image.fromarray(s["albedo"], "RGB").save(os.path.join(out_dir, stem + "_color.png"))

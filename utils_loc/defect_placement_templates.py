@@ -385,9 +385,13 @@ def _sample_crack_profile(runtime, defect_cfg, rng):
     elif cs_level == "CS2":
         width_cm = runtime._uniform_sample(rng, t1, t2)
     else:
-        # CS3 upper bound 20*t2 -> 5*t2 (2026-06-24): with the long-crack library a wide CS3
-        # started reading like a spall; 5*t2 keeps it crack-like. t1/t2 themselves unchanged.
-        width_cm = runtime._uniform_sample(rng, t2, 5.0 * t2)
+        # CS3 upper bound: prefer the explicit config `cs3_width_cm_max` (inspection standard
+        # caps CS3 at 2.0 cm / 20 mm). Falls back to 5*t2 (the 2026-06-24 spall-avoidance cap)
+        # when unset, preserving old behaviour for configs that don't specify it.
+        cs3_max = runtime._to_optional_float((defect_cfg or {}).get("cs3_width_cm_max"))
+        if cs3_max is None or cs3_max <= t2:
+            cs3_max = 5.0 * t2
+        width_cm = runtime._uniform_sample(rng, t2, float(cs3_max))
     return {
         "condition_state": cs_level,
         "target_metric_cm": max(1e-6, float(width_cm)),
