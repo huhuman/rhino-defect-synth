@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <meta name="title" content="DefectSynth - Hsu & Golparvar-Fard">
+  <meta name="description" content="Geometry-informed synthetic data generation framework for computer vision detection and severity assessment of diverse concrete surface defects.">
+  <meta name="keywords" content="synthetic data, concrete defects, crack detection, bridge inspection, computer vision, deep learning, 3D modeling">
+  <meta name="author" content="Shun-Hsiang Hsu, Mani Golparvar-Fard">
+
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Beyond Cracks: Synthetic Image and Geometry Generation for Concrete Defect Assessment">
+  <meta property="og:description" content="Geometry-informed synthetic data generation framework for computer vision detection and severity assessment of diverse concrete surface defects.">
+  <meta property="og:url" content="https://huhuman.github.io/rhino-defect-synth/">
+
+  <meta name="citation_title" content="Beyond Cracks: Synthetic Image and Geometry Generation for Computer Vision Detection and Severity Assessment of Diverse Concrete Surface Defects">
+  <meta name="citation_author" content="Hsu, Shun-Hsiang">
+  <meta name="citation_author" content="Golparvar-Fard, Mani">
+  <meta name="citation_publication_date" content="2026">
+
+  <title>DefectSynth | Hsu & Golparvar-Fard</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="static/css/index.css">
+</head>
+<body>
+
+<!-- ===== HERO ===== -->
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column has-text-centered">
+          <h1 class="title is-2 publication-title">
+            Beyond Cracks: Synthetic Image and Geometry Generation for Computer Vision Detection and Severity Assessment of Diverse Concrete Surface Defects
+          </h1>
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">
+              <a href="https://github.com/huhuman" target="_blank">Shun-Hsiang Hsu</a><sup>a</sup>,
+            </span>
+            <span class="author-block">
+              <a href="https://reil.cs.illinois.edu/" target="_blank">Mani Golparvar-Fard</a><sup>a,b</sup>
+            </span>
+          </div>
+          <div class="is-size-6 publication-authors">
+            <span class="author-block">
+              <sup>a</sup>Department of Civil and Environmental Engineering,
+              <sup>b</sup>School of Computing and Data Science<br>
+              University of Illinois at Urbana-Champaign
+            </span>
+          </div>
+          <div class="is-size-6 publication-authors" style="margin-top: 0.5rem;">
+            <span class="author-block" style="color: var(--text-light);">Under Review, Automation in Construction, 2026</span>
+          </div>
+
+          <div class="column has-text-centered">
+            <div class="publication-links">
+              <span class="link-block">
+                <a href="#" class="button is-normal is-rounded is-dark">
+                  <span class="icon"><i class="fas fa-file-pdf"></i></span>
+                  <span>Paper</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="https://github.com/huhuman/rhino-defect-synth" target="_blank" class="button is-normal is-rounded is-dark">
+                  <span class="icon"><i class="fab fa-github"></i></span>
+                  <span>Code</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="#datasets" class="button is-normal is-rounded is-dark">
+                  <span class="icon"><i class="fas fa-database"></i></span>
+                  <span>Datasets</span>
+                </a>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== TEASER ===== -->
+<section class="hero is-small">
+  <div class="container is-max-desktop">
+    <div class="hero-body">
+      <div class="teaser-container has-text-centered">
+        <img src="static/images/overview.png" alt="Pipeline overview: 2D defect shapes to 3D parametric models to multi-pass rendered outputs">
+        <p class="teaser-caption">
+          Overview of the geometry-informed synthetic data generation pipeline. Real 2D defect shapes are transformed into parametric 3D models and rendered with domain randomization to produce aligned RGB, depth, normal, and mask outputs.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ABSTRACT ===== -->
+<section class="section hero is-light">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3 section-title">Abstract</h2>
+        <div class="content has-text-justified">
+          <p>
+            Computer vision-based concrete condition assessment has largely focused on crack detection, as existing datasets lack multi-defect coverage and geometry-grounded severity labels. A two-fold contribution is presented. First, a geometry-informed synthetic image generation pipeline is developed to convert real defect shapes into parametric 3D models, supporting scalable rendering of diverse defects with paired RGB, depth, and surface-normal modalities. The pipeline is extensible and supports future modeling needs beyond the defect classes considered in this work. Second, a large-scale synthetic dataset with automatic annotations is established, jointly encoding semantic defect categories and geometry-informed cues, facilitating severity-aware training and evaluation across cracks, spalling, corrosion, and efflorescence. Building on this data, this paper proposes a geometry-informed teacher--student framework that leverages geometric modalities during training while maintaining RGB-only inference, allowing the application to both close-range crack inspection and structural-scale assessment. To our knowledge, this represents the first scalable framework to unify real-shape-grounded synthetic generation, geometry-informed learning, and severity-oriented concrete condition assessment, while enabling systematic training and benchmarking for non-crack defects.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== METHOD ===== -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3 section-title">Method</h2>
+      </div>
+    </div>
+
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+
+        <h3 class="title is-4">Cube-based Crack Modeling</h3>
+        <p>
+          For close-range crack inspection, a six-surface cube serves as the carrier. Crack masks from a curated real-image database are placed on cube faces with parameterized scale, orientation, and position. Pixel-to-metric conversion combined with FHWA thresholds assigns crack severity (insignificant, moderate, wide), and crack geometry is modeled with configurable width, erosion depth, and overall depth for 3D realism.
+        </p>
+        <figure class="method-figure">
+          <img src="static/images/method_cube.jpg" alt="Cube-based crack modeling process">
+          <figcaption>Cube-based crack modeling: crack masks placed on cube surfaces, converted to 3D geometry with severity assignment.</figcaption>
+        </figure>
+
+        <h3 class="title is-4" style="margin-top: 2.5rem;">Component-based Bridge Defect Modeling</h3>
+        <p>
+          For structural-scale bridge inspection, parameterized bridge elements (deck, pier, girder, parapet, bearing) are generated from road centerlines and structural guidelines. Defect masks for crack, spalling, corrosion, and efflorescence are instantiated on component surfaces. Category-specific 3D operations model surface erosion (spalling), exposed reinforcement (corrosion), and extruded deposits (efflorescence), integrating defect and structural geometry in a unified process.
+        </p>
+        <figure class="method-figure">
+          <img src="static/images/method_component.jpg" alt="Component-based bridge defect modeling">
+          <figcaption>Component-based bridge modeling with defect placement and domain randomization for rendering.</figcaption>
+        </figure>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== DATASETS ===== -->
+<section class="section hero is-light" id="datasets">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3 section-title">Datasets</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+          All synthetic datasets and a curated real-image evaluation set are prepared for public release.
+        </p>
+      </div>
+    </div>
+
+    <div class="columns is-centered">
+      <div class="column">
+        <table class="dataset-table">
+          <thead>
+            <tr>
+              <th>Dataset</th>
+              <th>Images</th>
+              <th>RGB</th>
+              <th>Depth</th>
+              <th>Normal</th>
+              <th>Mask</th>
+              <th>Description</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="dataset-name">SynthCrack-42k</td>
+              <td>42,165</td>
+              <td class="checkmark">&#10003;</td>
+              <td></td>
+              <td></td>
+              <td class="checkmark">&#10003;</td>
+              <td>Baseline cube-based crack dataset (Unreal Engine)</td>
+              <td><a href="https://drive.google.com/file/d/1GFyQyNLw3Y7Qob-9uSbFTI0EfKJnBjpp/view?usp=sharing" target="_blank" class="btn-download">Download</a></td>
+            </tr>
+            <tr>
+              <td class="dataset-name">SynthCrack-72k</td>
+              <td>71,860</td>
+              <td class="checkmark">&#10003;</td>
+              <td></td>
+              <td></td>
+              <td class="checkmark">&#10003;</td>
+              <td>Extended crack shapes + updated geometric parameterization</td>
+              <td><a href="https://drive.google.com/file/d/1Rcjdk8jVy-8KQ1VIYXatUmWe_ZfOTx_3/view?usp=sharing" target="_blank" class="btn-download">Download</a></td>
+            </tr>
+            <tr>
+              <td class="dataset-name">SynthCrack-ONE</td>
+              <td>23,485</td>
+              <td class="checkmark">&#10003;</td>
+              <td class="checkmark">&#10003;</td>
+              <td class="checkmark">&#10003;</td>
+              <td class="checkmark">&#10003;</td>
+              <td>Rhino-generated with refined crack-shape library</td>
+              <td><a href="https://drive.google.com/file/d/1_HUhw3TwORQEO-hbxrYxrBlWnlyGBpYs/view?usp=sharing" target="_blank" class="btn-download">Download</a></td>
+            </tr>
+            <tr>
+              <td class="dataset-name">SynthDefect-Bridge</td>
+              <td>2,291</td>
+              <td class="checkmark">&#10003;</td>
+              <td class="checkmark">&#10003;</td>
+              <td class="checkmark">&#10003;</td>
+              <td class="checkmark">&#10003;</td>
+              <td>Bridge-scale multi-defect: crack, spalling, corrosion, efflorescence</td>
+              <td><a href="https://drive.google.com/file/d/1umZxzBGUBRo36vlRug52WZgzZxE9gegZ/view?usp=sharing" target="_blank" class="btn-download">Download</a></td>
+            </tr>
+            <tr>
+              <td class="dataset-name">RealDefect-Bridge</td>
+              <td>2,420</td>
+              <td class="checkmark">&#10003;</td>
+              <td></td>
+              <td></td>
+              <td class="checkmark">&#10003;</td>
+              <td>Real bridge inspection images for evaluation</td>
+              <td><a href="https://drive.google.com/file/d/1yGId3XvFaqOXPe1tdY0n-V00tv_6aGYW/view?usp=sharing" target="_blank" class="btn-download">Download</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== RESULTS ===== -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3 section-title">Results</h2>
+      </div>
+    </div>
+
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+
+        <h3 class="title is-4">Multi-pass Outputs</h3>
+        <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+          Each scene produces aligned color, depth, surface normal, and defect mask outputs from the same camera pose.
+        </p>
+        <div class="gallery-row">
+          <div style="flex:1; text-align:center;">
+            <img src="static/gifs/color.gif" alt="Color output">
+            <p class="gallery-label">Color</p>
+          </div>
+          <div style="flex:1; text-align:center;">
+            <img src="static/gifs/depth.gif" alt="Depth output">
+            <p class="gallery-label">Depth</p>
+          </div>
+          <div style="flex:1; text-align:center;">
+            <img src="static/gifs/normal.gif" alt="Normal output">
+            <p class="gallery-label">Normal</p>
+          </div>
+          <div style="flex:1; text-align:center;">
+            <img src="static/gifs/mask.gif" alt="Mask output">
+            <p class="gallery-label">Mask</p>
+          </div>
+        </div>
+
+        <h3 class="title is-4" style="margin-top: 2.5rem;">Realism Enhancement</h3>
+        <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+          Unpaired image-to-image translation (CycleGAN, CycleGAN-Turbo, CUT) reduces the appearance gap between synthetic and real inspection imagery.
+        </p>
+        <figure class="method-figure">
+          <img src="static/images/results_realism_crack.jpg" alt="Qualitative comparison of realism enhancement methods for close-range crack imagery">
+          <figcaption>Realism enhancement comparison for close-range crack imagery.</figcaption>
+        </figure>
+        <figure class="method-figure">
+          <img src="static/images/results_realism_bridge.jpg" alt="Qualitative comparison of realism enhancement methods for structural-scale defect scenes">
+          <figcaption>Realism enhancement comparison for structural-scale bridge defect scenes.</figcaption>
+        </figure>
+
+        <h3 class="title is-4" style="margin-top: 2.5rem;">Defect Predictions on Real Images</h3>
+        <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+          Models trained on synthetic data transfer to real inspection imagery for crack severity prediction and multi-defect semantic segmentation.
+        </p>
+        <figure class="method-figure">
+          <img src="static/images/results_preds_crack.jpg" alt="Crack severity predictions on real images">
+          <figcaption>Crack segmentation with class-conditioned severity prediction on real images.</figcaption>
+        </figure>
+        <figure class="method-figure">
+          <img src="static/images/results_preds_bridge.jpg" alt="Bridge defect semantic segmentation predictions on real images">
+          <figcaption>Multi-defect semantic segmentation on real bridge inspection images.</figcaption>
+        </figure>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== BIBTEX ===== -->
+<section class="section" id="BibTeX">
+  <div class="container is-max-desktop content">
+    <div class="bibtex-header">
+      <h2 class="title is-3 section-title" style="margin-bottom: 0; padding-bottom: 0;">BibTeX</h2>
+      <button class="copy-btn" onclick="copyBibTeX()" title="Copy to clipboard">
+        <i class="fas fa-copy"></i>
+        <span id="copy-text">Copy</span>
+      </button>
+    </div>
+    <pre id="bibtex-code"><code>@article{hsu2026defectsynth,
+  title={Beyond Cracks: Synthetic Image and Geometry Generation for Computer Vision Detection and Severity Assessment of Diverse Concrete Surface Defects},
+  author={Hsu, Shun-Hsiang and Golparvar-Fard, Mani},
+  journal={Automation in Construction},
+  year={2026},
+  note={Under Review},
+  url={https://huhuman.github.io/rhino-defect-synth/}
+}</code></pre>
+  </div>
+</section>
+
+<!-- ===== ACKNOWLEDGEMENTS ===== -->
+<section class="section hero is-light">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-4">Acknowledgements</h2>
+        <div class="content" style="color: var(--text-secondary);">
+          <p>
+            This material is based upon work supported by the National Science Foundation (NSF) under Grant No. CMMI-2053935. This work used the Delta advanced computing resource, supported by the NSF (OAC 2005572) and the State of Illinois, a joint effort of the University of Illinois and the National Center for Supercomputing Applications (NCSA). Any findings, and conclusions or recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of the NSF or NCSA.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer class="footer">
+  <div class="container">
+    <div class="columns is-centered">
+      <div class="column is-8">
+        <div class="content has-text-centered" style="color: var(--text-light); font-size: 0.9rem;">
+          <p>
+            This page was built using the <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank">Academic Project Page Template</a>,
+            adopted from the <a href="https://nerfies.github.io" target="_blank">Nerfies</a> project page.
+            Licensed under <a href="http://creativecommons.org/licenses/by-sa/4.0/" target="_blank">CC BY-SA 4.0</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+function copyBibTeX() {
+  const code = document.getElementById('bibtex-code').innerText;
+  navigator.clipboard.writeText(code).then(function() {
+    const btn = document.querySelector('.copy-btn');
+    const text = document.getElementById('copy-text');
+    btn.classList.add('copied');
+    text.textContent = 'Copied!';
+    setTimeout(function() {
+      btn.classList.remove('copied');
+      text.textContent = 'Copy';
+    }, 2000);
+  });
+}
+</script>
+
+</body>
+</html>

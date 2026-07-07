@@ -1,0 +1,292 @@
+# rhino-defect-synth
+
+[English](PIPELINE.md) | [繁體中文](PIPELINE.zh-TW.md)
+
+這是一套在 Rhino Python 中執行的合成損害建模與多通道渲染流程。
+
+## 目前狀態
+已實作並串接到主流程的功能：
+- `cube` 建模：由 contour JSON 建立立方體面與裂縫幾何。
+- `component`（橋梁）建模：可參數化生成 slab/parapet/beam/bearing/pier。
+- 統一 defect 放置流程：`crack`、`efflore`、`exposed_rebar`（spall + rebar）。
+- 兩種相機策略：`cube` 與 `component`。
+- 多通道輸出：color、depth、normal、mask，以及線性 `.pfm`（depth/normal）。
+
+## Batch 穩定化重點
+目前 `main_cube_batch.py` 這條 batch 路徑，已針對長時間 Rhino session 做過一輪加固：
+- 重度的非 render document 操作現在會先暫停 redraw，並切到較輕量的工作 display mode，再於 capture 前切回 `Rendered`
+- batch 執行時可暫時關閉 Rhino autosave 與 undo recording，結束時再恢復
+- 每個 timestamped batch 輸出資料夾都會額外寫入 `batch_log.txt` 與 `batch_state.json`
+- `batch_state.json` 會記錄目前進度，以及完成 model 邊界上的安全 resume 點
+- stability guard 可在記憶體、材質表大小或 render pass 次數超過門檻時提早受控停止，而不是讓 Rhino 直接硬 crash
+- 長 capture 序列現在可做逐幀 cleanup/GC 節流，channel plugin 也會重用大型 buffer，避免每幀反覆重配造成 session drift
+- nested-loop 的 `seed` 現在會一致地作用在該次 Rhino run 的 batch 隨機流程
+
+Warning：
+- 長時間的 `cube` batch run 仍然可能讓 Rhino 非預期 crash。現在這些 guard 主要是降低 session drift、讓 resume/restart 比較可控，還沒有把這個 crash 問題徹底解掉。
+
+TODO：
+- 找出 `main_cube_batch.py` 長時間執行 crash 的根因，做真正的永久修復，而不是只依賴 guarded early-stop / restart 這類緩解手段。
+
+## 需求
+- Rhino 8 (Windows) 並啟用 Python scripting。
+- Rhino 內可用 Python 模組：
+  - `PyYAML`（`utils_loc/config.py` 使用）
+  - `numpy`（cube 建模工具使用）
+- 若要輸出線性深度/法向通道，需使用此 repo 的 `rhino_channels_plugin`：
+  - `depth_buffer/*.pfm`
+  - `normal_buffer/*.pfm`
+
+外掛說明請見：`rhino_channels_plugin/README.md`。
+
+## 入口腳本
+### `main.py`
+以 stage 為單位執行流程：
+
+```python
+import main
+main.run(
+    config_name="cube_render.yaml",
+    stages=["load_config", "preparation", "view_setup", "modeling", "rendering"],
+    skip=[],
+    start_face_index=0,
+    show_cameras=False,
+    print_timings=True,
+)
+```
+
+### `main_cube_batch.py`
+資料集用巢狀迴圈（`model loop x render loop`）。
+目前限制：只支援 `modeling.strategy: cube`。
+
+```python
+import main_cube_batch
+main_cube_batch.run(
+    config_name="cube_render.yaml",
+    renders_per_model=4,
+    max_iter=3,
+    start_face_index=0,
+    faces_per_model=6,
+    seed=42,
+    show_cameras=False,
+    print_timings=True,
+)
+```
+
+### `main_demo.py`
+只跑 demo：材質、光照、相機佈局可視化。
+
+## Pipeline Stages（`main.py`）
+執行順序：
+- `reset`
+- `load_config`
+- `preparation`
+- `view_setup`
+- `modeling`
+- `rendering`
+
+相依性：
+- `preparation`、`view_setup`、`modeling`、`rendering` 都需要 `load_config`。
+
+## 設定系統
+設定檔位於 `configs/`，由 `utils_loc.config.load_config(config_name)` 載入。
+
+`extends` 支援字串或清單：
+- `extends: cube_base.yaml`
+- `extends: [cube_defaults.yaml, cube_defect_defaults.yaml, cube_render.yaml]`
+
+合併規則：
+- `extends` 會做遞迴（deep-merge）合併。
+- 衝突優先順序：目前設定檔 > `extends` 後面的項目 > `extends` 前面的項目。
+- `load_config()` 不會自動注入 defaults；所有 defaults 由 `extends` 明確組合。
+
+## 主要設定區塊
+### 1) `preparation`
+由 `utils_loc/pipeline.py::prepare()` 使用：
+- 匯入渲染材質
+- 可選：從 texture 目錄建立材質
+- 重建圖層並套用圖層材質/顏色
+- 長時間重跑 `main_cube_batch.py` 時，可透過 `preparation.autosave.disable_during_batch` 與 `preparation.undo.disable_during_batch` 暫時關閉 Rhino autosave 與 undo recording
+
+### 2) `modeling`
+由 `utils_loc/pipeline.py::create_model()` 使用。
+
+支援策略：
+- `strategy: cube`
+  - 必要：`cube.cube_map_dir`
+  - 可選：`start_face_index`（由 `main.run` 注入）
+  - crack 幾何直接由六個面 map 生成（不走第二段 defect placement）
+- `strategy: component`
+  - 使用 `component` 區塊（`utils_loc/component_modeling.py`）
+  - 可選：`defect`（統一 defect 放置）
+  - 可選：`debug`（debug 繪製控制）
+
+#### Component 建模重點
+`utils_loc/component_modeling.py::create_bridge_component()` 支援：
+- 中心線控制（`span`、`theta`、`use_curve` 等）
+- slab/parapet 參數
+- beam section library 與梁數
+- bearing 與 pier（`hammerhead` 或 `m_column`）
+- 將生成 polygon 轉為 surface
+
+常用 component 鍵：
+- `pier.anchor_indices`：手動指定要放置 pier 的 station index（支援負索引）
+
+回傳結果包含：
+- `surfaces`、`polylines`、`solids`
+- `objects_by_component`
+
+`modeling.debug` 負責 debug 繪製控制：
+- `surface_normals`：component 表面法向箭頭（`debug::normal::component::*`）
+- `defect_normals`：defect 建模法向箭頭（`debug::normal::*`）
+- `defect_seeds`：defect seed marker（`debug::seed::*`）
+
+#### 統一 defect 建模（`modeling.defect`，component 分支）
+`utils_loc/defect_placement.py::apply_defect_pipeline()` 支援：
+- defect 型別：
+  - `crack`
+  - `efflore`
+  - `exposed_rebar`（以 `spall + rebar` 方式建模）
+- condition-state 補充：
+  - `crack`：CS1/CS2/CS3
+  - `efflore` 與 `spalling`：只有 CS2/CS3
+- 共用 shape library 讀取（cube contour JSON 與一般 polygon JSON）
+- 以以下工具建立候選點：
+  - `utils_loc.defect_modeling.get_surfaces`
+  - `utils_loc.defect_modeling.get_reference_points`
+- 可選上限：`reference.max_num_surfaces`（`0` 代表不限制）
+- 依邊界條件限制 random scale/orientation
+- 實例紀錄與可選 JSON 輸出（`record_output_path`）
+  - `records`/`summary` 只統計「成功生成幾何」的損害實例
+- 萃取 `camera_defects` 作為 component 相機 seed
+  - 每筆包含 `point`、`normal`、`defect_type`、`instance_index`
+- debug 繪製由 `modeling.debug` 控制（不在 `modeling.defect`）
+- 使用區域 RNG（`seed`）抽樣，不會污染 Python 全域 random 狀態
+- shape library 解析行為：
+  - `file_format=auto` 會先判斷 cube/simple JSON 再解析
+  - cube contour 各陣列長度必須一致；不一致會明確報錯
+  - 共用 point-set 解析已集中到 `utils_loc.defect_shapes.extract_point_sets()`（`utils_loc.defect_modeling.py` 也使用）
+
+`crack` 幾何透過 `utils_loc/crack_modeling.py::create_crack()` 共用，並可配置深度範圍、圖層與清理行為。有提供 `offset_poly` 時會先建立外層侵蝕殼；未提供時則改由 crack polygon 直接從表面往內擠出。`cleanup_inputs=True` 時失敗路徑仍會清理輸入物件。
+
+### 3) `rendering`
+由 `utils_loc/pipeline.py::run_render()` 與 `utils_loc/render.py` 使用。
+
+必要欄位：
+- `output_dir`
+- `camera`
+
+常用欄位：
+- `width` / `height`
+- `max_length`（未明確指定 width/height 時使用）
+- `background_wallpaper_dir`
+- `lighting.sun` / `lighting.skylight`
+- `camera.strategy`: `cube` 或 `component`
+- `camera.lens`
+- `camera.smooth_path`
+- `camera.transition_frames`
+
+#### 相機策略：`cube`
+- `camera.cube.arrangement`: `grid` 或 `spherical`
+- `distance_multiplier_min` / `distance_multiplier_max`
+- jitter 參數：
+  - `direction_jitter_degrees`
+  - `position_jitter` 或 `position_jitter_scale`
+- 各排列專屬：
+  - grid：`points_per_side`
+  - spherical：`sample_count`、`sphere_angle_jitter_degrees`
+
+#### 相機策略：`component`
+- 可直接提供 seed：
+  - `camera.component.defects: [{point: [x,y,z], normal: [nx,ny,nz]}, ...]`
+- 或自動讀 Rhino 文件 metadata：
+  - 可選 `camera.component.defect_types`
+- 抽樣參數：
+  - `cameras_per_defect`
+  - `radius_min` / `radius_max`
+  - 舊版別名：`distance_min` / `distance_max`
+  - `target_jitter`
+  - 最後額外 jitter：`direction_jitter_degrees`、`position_jitter`、`position_jitter_scale`
+- 打燈參數：
+  - `lighting.defect_lights.enabled`
+  - `lighting.defect_lights.light_type`
+  - `lighting.defect_lights.intensity`
+
+流程行為：
+- 若 `camera.strategy=component` 且 config 未提供 inline `defects`，render 會直接讀 Rhino 文件 metadata 中快取的缺陷點。
+
+#### Mask 圖層控制
+`rendering.outputs.mask` 支援：
+- `only_layers`：只顯示指定圖層來輸出 mask
+- `hide_layers`：輸出 mask 時隱藏指定圖層
+
+### 4) `nested_loop`（`main_cube_batch.py`）
+可選區塊，用於控制 batch iteration 與每個模型的多組渲染：
+- `renders_per_model`
+- `camera_arrangements`（`grid` / `spherical`，可設 list；每個 arrangement 都會完整重跑 prep+render）
+- `max_iter`（限制模型 iteration 上限；實際次數 = `min(max_iter, available_iters)`）
+- `output_index_start`（`view_XXX` 命名起始編號）
+- `seed`
+- `rendering_sampler`
+- `stability.*`（等待/重試/GC/undo/memory guard）
+- `stability.gc_every_capture_frames` / `stability.wait_after_capture_frame_ms`（用於長 pose sequence capture 期間的速度漂移）
+
+`main_cube_batch.py` 目前流程：
+- 每個模型 iteration：`reset -> preparation -> modeling`，且在重度的非 render document 操作期間會暫停 redraw。
+- 每個渲染 iteration：會執行一或多次 `clear_imported_materials_from_doc -> preparation -> view_setup -> rendering`
+  （次數由 `camera_arrangements` 控制）
+- batch 輸出資料夾內除了 render 輸出，還會寫入 `batch_log.txt` 與 `batch_state.json`。
+- `batch_state.json` 會記錄目前進度與「安全可續跑」的 model-boundary resume 點；若 guard 在 model 中途觸發，resume 點會刻意回到最近一個乾淨邊界，而不是停住當下的位置。
+- nested-loop 的 seed 現在會一致地套用到該次 Rhino run 內的 batch 隨機流程，例如 camera/lighting/render sampler。
+- 透過 `output_index_offset` 讓 render view id 跨 iteration 連續，避免覆蓋檔案。
+
+## 輸出結構
+每個相機姿態的輸出在：
+
+`<output_dir>/`
+- `color/<basename>.png`
+- `depth/<basename>.png`
+- `normal/<basename>.png`
+- `mask/<basename>.png`
+- `depth_buffer/<basename>.pfm`
+- `normal_buffer/<basename>.pfm`
+
+若由 `main_cube_batch.py` 執行，timestamped run 資料夾還會包含：
+- `batch_log.txt`
+- `batch_state.json`
+
+預設 `basename` 為 `view_XXX`。batch 模式下會跨 iteration 連續編號，避免覆蓋。
+
+## 圖層管理重點
+- 支援階層式圖層路徑（例如 `defects::mask::crack`），會自動建立。
+- defect 流程分離：
+  - 幾何圖層（`defects::geometry::*`）
+  - mask 圖層（`defects::mask::*`）
+  - debug 圖層（`debug::normal::*`、`debug::seed::*`）
+- 方便透過 hide/show layer 進行 mask annotation capture。
+
+## 設定檔範例
+- Cube 本機設定（建議執行入口）：`configs/cube.local.yaml`
+- Component 本機設定（建議執行入口）：`configs/component.local.yaml`
+- Render 區塊：`configs/cube_render.yaml`、`configs/component_render.yaml`
+- 建模預設值：`configs/cube_defaults.yaml`、`configs/component_defaults.yaml`
+- defect 預設值：`configs/component_defect_defaults.yaml`
+- cube defect defaults（保留給設定組合/相容用途）：`configs/cube_defect_defaults.yaml`
+- Base 組合與 preparation：`configs/cube_base.yaml`、`configs/component_base.yaml`
+
+## 專案結構
+- `main.py`：stage runner
+- `main_cube_batch.py`：巢狀模型/渲染迴圈（cube）
+- `main_demo.py`：demo 工具
+- `configs/`：YAML 設定檔
+- `utils_loc/pipeline.py`：流程編排（`prepare`、`create_model`、`run_render`、`run_render_demo`）
+- `utils_loc/cube_modeling.py`：cube 幾何與 contour 映射
+- `utils_loc/component_modeling.py`：可配置橋梁元件建模
+- `utils_loc/defect_shapes.py`：共用 shape 解析/載入
+- `utils_loc/defect_placement.py`：統一 defect 放置與紀錄
+- `utils_loc/crack_modeling.py`：共用 crack 幾何生成
+- `utils_loc/defect_modeling.py`：surface/reference-point helper
+- `utils_loc/render.py`：相機生成與渲染流程
+- `utils_loc/outputs.py`：color/depth/normal/mask/channel 輸出
+- `utils_loc/layers.py`、`utils_loc/lighting.py`、`utils_loc/camera.py`：工具模組
+- `rhino_channels_plugin/`：線性深度/法向輸出 Rhino 外掛

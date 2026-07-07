@@ -1,0 +1,329 @@
+:root {
+  --primary-color: #2563eb;
+  --primary-hover: #1d4ed8;
+  --text-primary: #1e293b;
+  --text-secondary: #64748b;
+  --text-light: #94a3b8;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-accent: #f1f5f9;
+  --border-color: #e2e8f0;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --border-radius: 12px;
+  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Noto Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Hero */
+.publication-title {
+  font-weight: 800 !important;
+  line-height: 1.15 !important;
+  margin-bottom: 1.5rem !important;
+}
+
+.publication-authors {
+  font-weight: 500;
+  margin-bottom: 1rem;
+}
+
+.publication-authors a {
+  color: var(--primary-color) !important;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.publication-authors a:hover {
+  color: var(--primary-hover) !important;
+  text-decoration: underline;
+}
+
+.author-block {
+  display: inline-block;
+  margin-right: 0.25rem;
+}
+
+/* Buttons */
+.publication-links .button {
+  border-radius: var(--border-radius) !important;
+  font-weight: 600 !important;
+  transition: var(--transition) !important;
+  margin: 4px;
+}
+
+.button.is-dark {
+  background: var(--text-primary) !important;
+  box-shadow: var(--shadow-sm);
+}
+
+.button.is-dark:hover {
+  background: var(--primary-color) !important;
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Sections */
+.hero.is-light {
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.section-title {
+  font-weight: 700 !important;
+  margin-bottom: 1.5rem !important;
+  padding-bottom: 0.75rem;
+  position: relative;
+}
+
+.section-title::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60px;
+  height: 3px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  border-radius: 2px;
+}
+
+/* Abstract */
+.content.has-text-justified {
+  font-size: 1.05rem;
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+
+/* Teaser */
+.teaser-container img,
+.teaser-container video {
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-lg);
+  max-width: 100%;
+  height: auto;
+}
+
+.teaser-caption {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  margin-top: 1rem;
+}
+
+/* Method */
+.method-figure {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+.method-figure img {
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-md);
+  max-width: 100%;
+  height: auto;
+}
+
+.method-figure figcaption {
+  font-size: 0.9rem;
+  color: var(--text-light);
+  margin-top: 0.75rem;
+}
+
+/* Datasets table */
+.dataset-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  overflow: hidden;
+  font-size: 0.95rem;
+}
+
+.dataset-table thead {
+  background: var(--bg-accent);
+}
+
+.dataset-table th,
+.dataset-table td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dataset-table th {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dataset-table td {
+  color: var(--text-secondary);
+}
+
+.dataset-table tr:last-child td {
+  border-bottom: none;
+}
+
+.dataset-table .checkmark {
+  color: #10b981;
+  font-weight: 700;
+}
+
+.dataset-table .dataset-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dataset-table .btn-download {
+  display: inline-block;
+  padding: 0.3rem 0.75rem;
+  background: var(--primary-color);
+  color: white !important;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: var(--transition);
+}
+
+.dataset-table .btn-download:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+}
+
+/* Results gallery */
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.gallery-grid img {
+  width: 100%;
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition);
+}
+
+.gallery-grid img:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.gallery-row {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  align-items: flex-start;
+}
+
+.gallery-row img {
+  flex: 1;
+  min-width: 0;
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.gallery-label {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-light);
+  margin-top: 0.5rem;
+  font-weight: 500;
+}
+
+/* BibTeX */
+.bibtex-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.copy-btn {
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.copy-btn:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+}
+
+.copy-btn.copied {
+  background: #10b981;
+}
+
+pre {
+  background: var(--bg-accent) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--border-radius) !important;
+  padding: 1.25rem !important;
+  font-size: 0.875rem !important;
+  overflow-x: auto;
+}
+
+code {
+  font-family: 'SF Mono', 'Cascadia Code', 'Roboto Mono', monospace !important;
+}
+
+/* Footer */
+.footer {
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  padding: 2.5rem 1.5rem;
+}
+
+.footer a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+}
+
+/* Responsive */
+@media screen and (max-width: 768px) {
+  .publication-title {
+    font-size: 1.75rem !important;
+  }
+
+  .gallery-row {
+    flex-direction: column;
+  }
+
+  .dataset-table {
+    font-size: 0.85rem;
+  }
+
+  .dataset-table th,
+  .dataset-table td {
+    padding: 0.5rem;
+  }
+}
